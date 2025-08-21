@@ -1,6 +1,6 @@
-import { query } from '@anthropic-ai/claude-code';
+import { query, SDKMessage, type Options } from '@anthropic-ai/claude-code';
 
-interface ClaudeRequest {
+export interface ClaudeRequest {
   prompt: string;
   context?: unknown;
   sessionId?: string;
@@ -9,12 +9,14 @@ interface ClaudeRequest {
 }
 
 export async function handleClaudeCodeRequest(request: ClaudeRequest) {
-  const results: unknown[] = [];
+  const results: SDKMessage[] = [];
   
   try {
-    const options: Record<string, unknown> = {
+    const options: Options = {
       maxTurns: request.maxTurns || 3,
       customSystemPrompt: 'You are an assistant helping to modify code in a Next.js application. Be concise and focus on code changes.',
+
+      allowedTools: ['file', 'directory', 'git', 'http', 'https'],
     };
     
     // handle session continuation
@@ -28,43 +30,7 @@ export async function handleClaudeCodeRequest(request: ClaudeRequest) {
       prompt: request.prompt,
       options,
     })) {
-      if (message.type === 'result') {
-        results.push({
-          type: 'result',
-          subtype: message.subtype,
-          content: 'result' in message ? message.result : undefined,
-          is_error: message.is_error,
-          num_turns: message.num_turns,
-          total_cost_usd: message.total_cost_usd,
-          usage: message.usage,
-          session_id: message.session_id,
-          timestamp: new Date().toISOString(),
-        });
-      } else if (message.type === 'assistant') {
-        results.push({
-          type: 'assistant',
-          message: message.message,
-          session_id: message.session_id,
-          timestamp: new Date().toISOString(),
-        });
-      } else if (message.type === 'user') {
-        results.push({
-          type: 'user',
-          message: message.message,
-          session_id: message.session_id,
-          timestamp: new Date().toISOString(),
-        });
-      } else if (message.type === 'system') {
-        results.push({
-          type: 'system',
-          subtype: message.subtype,
-          cwd: message.cwd,
-          tools: message.tools,
-          model: message.model,
-          session_id: message.session_id,
-          timestamp: new Date().toISOString(),
-        });
-      }
+      results.push(message);
     }
     
     return {
