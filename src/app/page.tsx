@@ -2,6 +2,7 @@
 
 import { ClaudeChat } from "@/components/claude-chat";
 import { FileBrowser } from "@/components/file-browser";
+import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { useState } from "react";
 
 export default function Home() {
@@ -10,7 +11,10 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-100 p-8">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold mb-4 text-gray-800">claude os</h1>
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-4xl font-bold text-gray-800">claude os</h1>
+          <DarkModeToggle />
+        </div>
         <p className="text-gray-600 mb-8">
           click the floating chat button in the bottom-right corner to interact with claude code.
         </p>
