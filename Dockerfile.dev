@@ -1,0 +1,27 @@
+# Development Dockerfile with hot reload
+FROM oven/bun:1
+
+WORKDIR /app
+
+# Install claude-code globally
+RUN bun add -g @anthropic-ai/claude-code
+
+# Copy package files
+COPY package.json bun.lockb ./
+
+# Install dependencies
+RUN bun install
+
+# Copy application files
+COPY . .
+
+# Expose ports
+EXPOSE 3000
+
+# Set environment variables
+ENV NODE_ENV=development
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOSTNAME="0.0.0.0"
+
+# Start dev server
+CMD ["bun", "run", "dev"]
