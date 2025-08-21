@@ -2,15 +2,19 @@
 
 import { ClaudeChat } from "@/components/claude-chat";
 import { FileBrowser } from "@/components/file-browser";
+import { FileBrowserEnhanced } from "@/components/file-browser-enhanced";
+import { DownloadTinder } from "@/components/download-tinder";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { useState } from "react";
 
 export default function Home() {
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const [showDownloadTinder, setShowDownloadTinder] = useState(false);
+  const [useEnhancedBrowser, setUseEnhancedBrowser] = useState(true);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-100 p-8">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-4xl font-bold text-gray-800">claude os</h1>
           <DarkModeToggle />
@@ -19,18 +23,46 @@ export default function Home() {
           click the floating chat button in the bottom-right corner to interact with claude code.
         </p>
         
-        <div className="mb-8">
+        <div className="mb-8 flex gap-4 flex-wrap">
           <button
-            onClick={() => setShowFileBrowser(!showFileBrowser)}
+            onClick={() => {
+              setShowFileBrowser(!showFileBrowser);
+              setShowDownloadTinder(false);
+            }}
             className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
           >
             {showFileBrowser ? 'hide' : 'show'} file browser
           </button>
+          
+          <button
+            onClick={() => {
+              setShowDownloadTinder(!showDownloadTinder);
+              setShowFileBrowser(false);
+            }}
+            className="px-6 py-3 bg-gradient-to-r from-pink-500 to-red-500 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
+          >
+            {showDownloadTinder ? 'hide' : 'clean'} downloads
+          </button>
+          
+          {showFileBrowser && (
+            <button
+              onClick={() => setUseEnhancedBrowser(!useEnhancedBrowser)}
+              className="px-6 py-3 bg-gradient-to-r from-green-500 to-teal-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
+            >
+              use {useEnhancedBrowser ? 'simple' : 'enhanced'} view
+            </button>
+          )}
         </div>
 
         {showFileBrowser && (
           <div className="mb-8">
-            <FileBrowser />
+            {useEnhancedBrowser ? <FileBrowserEnhanced /> : <FileBrowser />}
+          </div>
+        )}
+        
+        {showDownloadTinder && (
+          <div className="mb-8">
+            <DownloadTinder />
           </div>
         )}
         
