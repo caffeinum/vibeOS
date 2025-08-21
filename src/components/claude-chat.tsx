@@ -246,14 +246,38 @@ export function ClaudeChat({
     <div className={`fixed z-50 ${positionConfig[position]} ${className || ""}`}>
       <AnimatePresence>
         {isOpen && (
-          <motion.div
-            ref={chatRef}
-            initial={{ opacity: 0, scale: 0.8, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.8, y: 20 }}
-            transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className={`backdrop-blur-sm bg-transparent rounded-2xl flex flex-col overflow-hidden ${sizeConfig[size]}`}
-          >
+          <>
+            {/* Gradual blur layers - creates smooth transition */}
+            {[0.5, 1, 2, 4, 8].map((blur, index) => (
+              <motion.div
+                key={index}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.3, delay: index * 0.02 }}
+                className="absolute pointer-events-none"
+                style={{
+                  inset: `-${(5 - index) * 20}px`,
+                  backdropFilter: `blur(${blur}px)`,
+                  WebkitBackdropFilter: `blur(${blur}px)`,
+                  maskImage: `radial-gradient(circle at ${position === 'bottom-right' ? 'bottom right' : 'bottom left'}, 
+                    transparent ${30 + index * 10}%, 
+                    black ${60 + index * 10}%)`,
+                  WebkitMaskImage: `radial-gradient(circle at ${position === 'bottom-right' ? 'bottom right' : 'bottom left'}, 
+                    transparent ${30 + index * 10}%, 
+                    black ${60 + index * 10}%)`,
+                }}
+              />
+            ))}
+            
+            <motion.div
+              ref={chatRef}
+              initial={{ opacity: 0, scale: 0.8, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.8, y: 20 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className={`backdrop-blur-xs rounded-2xl flex flex-col overflow-hidden relative ${sizeConfig[size]}`}
+            >
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
@@ -355,6 +379,7 @@ export function ClaudeChat({
               </motion.div>
             )}
           </motion.div>
+          </>
         )}
       </AnimatePresence>
 
