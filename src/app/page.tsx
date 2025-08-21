@@ -10,7 +10,7 @@ export default function Home() {
   const [messages, setMessages] = useState<SDKMessage[]>([]);
   const [sessionId, setSessionId] = useState<string>("");
   const [continueSession, setContinueSession] = useState(false);
-  const [maxTurns, setMaxTurns] = useState(3);
+  const [maxTurns, setMaxTurns] = useState(20);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>("");
 
@@ -171,7 +171,7 @@ export default function Home() {
                   value={maxTurns}
                   onChange={(e) => setMaxTurns(parseInt(e.target.value) || 3)}
                   min="1"
-                  max="10"
+                  max="100"
                   className="w-16 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-sm"
                 />
               </div>
