@@ -22,8 +22,7 @@ export function ClaudeChat({
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<SDKMessage[]>([]);
   const [sessionId, setSessionId] = useState<string>("");
-  const [continueSession, setContinueSession] = useState(false);
-  const [maxTurns, setMaxTurns] = useState(20);
+  const [continueSession, setContinueSession] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>("");
   const [copiedCode, setCopiedCode] = useState<string>("");
@@ -97,7 +96,7 @@ export function ClaudeChat({
     setPrompt("");
     setIsLoading(true);
 
-    const params: ClaudeRequest = { prompt, maxTurns };
+    const params: ClaudeRequest = { prompt };
 
     if (continueSession) {
       params.continueSession = true;
@@ -334,17 +333,6 @@ export function ClaudeChat({
                       />
                       <span className="text-xs text-gray-600">continue</span>
                     </label>
-                    <div className="flex items-center gap-1">
-                      <span className="text-xs text-gray-600">turns:</span>
-                      <input
-                        type="number"
-                        value={maxTurns}
-                        onChange={(e) => setMaxTurns(parseInt(e.target.value) || 20)}
-                        min="1"
-                        max="100"
-                        className="w-12 px-1 py-0.5 text-xs bg-gray-100 rounded border border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
-                    </div>
                   </div>
                   <textarea
                     value={prompt}
