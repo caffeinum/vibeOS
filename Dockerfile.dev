@@ -7,7 +7,7 @@ WORKDIR /app
 RUN bun add -g @anthropic-ai/claude-code
 
 # Copy package files
-COPY package.json bun.lockb ./
+COPY package.json bun.lock ./
 
 # Install dependencies
 RUN bun install

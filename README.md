@@ -1,36 +1,127 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# claude os
 
-## Getting Started
+a containerized next.js application with claude code integration via trpc api
 
-First, run the development server:
+## features
 
+- **next.js app** - built with bun, typescript, tailwind css
+- **trpc api** - type-safe api for communication with claude code
+- **claude code integration** - sends prompts to claude code sdk for code modification
+- **docker support** - containerized deployment with docker and docker-compose
+- **hot reload** - development environment with automatic reloading
+
+## prerequisites
+
+- bun (or npm/yarn)
+- docker & docker-compose
+- anthropic api key for claude code
+
+## quick start
+
+### local development
+
+1. install dependencies:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. set environment variable:
+```bash
+export ANTHROPIC_API_KEY="your-api-key"
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. run development server:
+```bash
+bun run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+4. open http://localhost:3000
 
-## Learn More
+### docker development
 
-To learn more about Next.js, take a look at the following resources:
+1. create `.env` file:
+```bash
+echo "ANTHROPIC_API_KEY=your-api-key" > .env
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+2. run with docker-compose:
+```bash
+docker-compose up
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+3. open http://localhost:3000
 
-## Deploy on Vercel
+### production docker
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. build production image:
+```bash
+docker build -t claude-os:prod .
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+2. run container:
+```bash
+docker run -p 3000:3000 -e ANTHROPIC_API_KEY="your-api-key" claude-os:prod
+```
+
+## api usage
+
+the app exposes a trpc endpoint at `/api/trpc/click.sendToClaudeCode` that accepts:
+
+```typescript
+{
+  prompt: string,      // the prompt to send to claude code
+  context?: any        // optional context data
+}
+```
+
+response format:
+```typescript
+{
+  success: boolean,
+  results: Array<{
+    type: 'result' | 'text' | 'tool_use',
+    content: any,
+    timestamp: string
+  }>,
+  request: object
+}
+```
+
+## project structure
+
+```
+.
+├── src/
+│   ├── app/              # next.js app router
+│   ├── server/           # trpc server & api
+│   ├── utils/            # utility functions
+│   └── claude-code-handler.ts  # claude code sdk integration
+├── public/               # static assets
+├── Dockerfile           # production docker image
+├── Dockerfile.dev       # development docker image
+└── docker-compose.yml   # docker compose configuration
+```
+
+## environment variables
+
+- `ANTHROPIC_API_KEY` - required for claude code api access
+- `NODE_ENV` - set to 'production' for production builds
+- `PORT` - server port (default: 3000)
+
+## troubleshooting
+
+### docker build fails
+- ensure bun.lock file exists (run `bun install` locally first)
+- check docker daemon is running
+
+### claude code errors
+- verify anthropic api key is set correctly
+- check api key has proper permissions
+
+### app not loading
+- ensure port 3000 is not in use
+- check docker logs: `docker logs <container-name>`
+
+## license
+
+mit
