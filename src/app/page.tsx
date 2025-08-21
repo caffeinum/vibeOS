@@ -1,8 +1,12 @@
 "use client";
 
 import { ClaudeChat } from "@/components/claude-chat";
+import { FileBrowser } from "@/components/file-browser";
+import { useState } from "react";
 
 export default function Home() {
+  const [showFileBrowser, setShowFileBrowser] = useState(false);
+
   return (
     <main className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-100 p-8">
       <div className="max-w-4xl mx-auto">
@@ -10,6 +14,21 @@ export default function Home() {
         <p className="text-gray-600 mb-8">
           click the floating chat button in the bottom-right corner to interact with claude code.
         </p>
+        
+        <div className="mb-8">
+          <button
+            onClick={() => setShowFileBrowser(!showFileBrowser)}
+            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
+          >
+            {showFileBrowser ? 'hide' : 'show'} file browser
+          </button>
+        </div>
+
+        {showFileBrowser && (
+          <div className="mb-8">
+            <FileBrowser />
+          </div>
+        )}
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <div className="space-y-4">
