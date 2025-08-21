@@ -3,7 +3,7 @@
 import type { ClaudeRequest } from "@/claude-code-handler";
 import { api } from "@/utils/api";
 import type { SDKMessage } from "@anthropic-ai/claude-code";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 export default function Home() {
   const [prompt, setPrompt] = useState("");
@@ -13,12 +13,23 @@ export default function Home() {
   const [maxTurns, setMaxTurns] = useState(20);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>("");
+  const [isOpen, setIsOpen] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   const clickMutation = api.click.sendToClaudeCode.useMutation({
     onSuccess: (data) => {
       if (data.success && data.results) {
         setMessages(data.results);
         setError("");
+        setPrompt("");
 
         // extract session id from response
         const sessionResult = data.results.find(
@@ -38,6 +49,8 @@ export default function Home() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!prompt.trim()) return;
+    
     setIsLoading(true);
 
     const params: ClaudeRequest = { prompt, maxTurns };
@@ -52,17 +65,15 @@ export default function Home() {
   };
 
   const renderMessage = (msg: SDKMessage, index: number) => {
-    const baseClasses = "p-4 rounded-lg mb-2";
-
     if (msg.type === "user") {
       return (
-        <div
-          key={index}
-          className={`${baseClasses} bg-gray-700 ml-auto max-w-3xl`}
-        >
-          <div className="text-xs text-gray-400 mb-1">user</div>
-          <div className="text-white">
-            {msg.message?.content?.[0]?.text || "no content"}
+        <div key={index} className="flex mb-3 justify-end">
+          <div className="max-w-[75%] ml-12">
+            <div className="px-4 py-2 rounded-2xl bg-blue-500 text-white rounded-br-md">
+              <p className="text-sm">
+                {msg.message?.content?.[0]?.text || "no content"}
+              </p>
+            </div>
           </div>
         </div>
       );
@@ -70,34 +81,32 @@ export default function Home() {
 
     if (msg.type === "assistant") {
       return (
-        <div
-          key={index}
-          className={`${baseClasses} bg-blue-900/30 mr-auto max-w-3xl`}
-        >
-          <div className="text-xs text-blue-400 mb-1">assistant</div>
-          <div className="text-white">
-            {msg.message?.content?.map(
-              (
-                c: { type: string; text: string; name: string; input: unknown },
-                i: number
-              ) => (
-                <div key={i}>
-                  {c.type === "text" && (
-                    <div className="whitespace-pre-wrap">{c.text}</div>
-                  )}
-                  {c.type === "tool_use" && (
-                    <div className="bg-gray-800 p-2 rounded mt-2">
-                      <div className="text-xs text-yellow-400">
-                        tool: {c.name}
+        <div key={index} className="flex mb-3 justify-start">
+          <div className="max-w-[75%] mr-12">
+            <div className="px-4 py-2 rounded-2xl bg-gray-800/80 backdrop-blur-sm text-white rounded-bl-md">
+              {msg.message?.content?.map(
+                (
+                  c: { type: string; text: string; name: string; input: unknown },
+                  i: number
+                ) => (
+                  <div key={i}>
+                    {c.type === "text" && (
+                      <p className="text-sm whitespace-pre-wrap">{c.text}</p>
+                    )}
+                    {c.type === "tool_use" && (
+                      <div className="mt-2 rounded-2xl bg-black/20 backdrop-blur-sm p-3 text-sm">
+                        <div className="mb-2 text-xs text-white/60">
+                          tool: {c.name}
+                        </div>
+                        <pre className="overflow-x-auto text-white/90 text-xs">
+                          <code>{JSON.stringify(c.input, null, 2)}</code>
+                        </pre>
                       </div>
-                      <pre className="text-xs text-gray-400 mt-1">
-                        {JSON.stringify(c.input, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              )
-            )}
+                    )}
+                  </div>
+                )
+              )}
+            </div>
           </div>
         </div>
       );
@@ -105,18 +114,11 @@ export default function Home() {
 
     if (msg.type === "result") {
       return (
-        <div
-          key={index}
-          className={`${baseClasses} bg-green-900/30 border border-green-700`}
-        >
-          <div className="text-xs text-green-400 mb-1">
-            result ({msg.subtype})
-          </div>
-
-          <div className="text-xs text-gray-400 mt-2">
-            <div>turns: {msg.num_turns}</div>
-            <div>cost: ${msg.total_cost_usd?.toFixed(4)}</div>
-            <div>session: {msg.session_id?.slice(0, 8)}...</div>
+        <div key={index} className="flex mb-3 justify-center">
+          <div className="px-3 py-1 rounded-full bg-green-500/20 backdrop-blur-sm">
+            <div className="text-xs text-green-400">
+              completed • {msg.num_turns} turns • ${msg.total_cost_usd?.toFixed(4)}
+            </div>
           </div>
         </div>
       );
@@ -124,87 +126,113 @@ export default function Home() {
 
     if (msg.type === "system") {
       return (
-        <div
-          key={index}
-          className={`${baseClasses} bg-purple-900/20 border border-purple-700`}
-        >
-          <div className="text-xs text-purple-400 mb-1">system init</div>
-          <div className="text-xs text-gray-300">
-            <div>model: {msg.model}</div>
-            <div>cwd: {msg.cwd}</div>
-            <div>tools: {msg.tools?.length} available</div>
+        <div key={index} className="flex mb-3 justify-center">
+          <div className="px-3 py-1 rounded-full bg-purple-500/20 backdrop-blur-sm">
+            <div className="text-xs text-purple-400">
+              system • {msg.model} • {msg.tools?.length} tools
+            </div>
           </div>
         </div>
       );
     }
+
+    return null;
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 text-white p-8">
+    <main className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-100 p-8">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold mb-8">claude os</h1>
+        <h1 className="text-3xl font-bold mb-8 text-gray-800">claude os</h1>
+        <p className="text-gray-600">
+          click the floating chat button in the bottom-right corner to interact with claude code.
+        </p>
+      </div>
 
-        <form onSubmit={handleSubmit} className="mb-8">
-          <div className="flex flex-col gap-4">
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="enter a prompt for claude code..."
-              className="w-full p-4 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-400 min-h-[150px]"
-            />
-
-            <div className="flex gap-4 items-center">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={continueSession}
-                  onChange={(e) => setContinueSession(e.target.checked)}
-                  className="w-4 h-4"
-                />
-                <span className="text-sm">continue last session</span>
-              </label>
-
+      <div className="fixed bottom-6 right-6 z-50">
+        {!isOpen ? (
+          <button
+            onClick={() => setIsOpen(true)}
+            className="h-14 w-14 rounded-full bg-blue-500 shadow-lg hover:bg-blue-600 transition-all duration-200 flex items-center justify-center hover:scale-105"
+          >
+            <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4z" />
+            </svg>
+          </button>
+        ) : (
+          <div className="absolute bottom-0 right-0 w-96 h-[600px] bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-white/20">
               <div className="flex items-center gap-2">
-                <label className="text-sm">max turns:</label>
-                <input
-                  type="number"
-                  value={maxTurns}
-                  onChange={(e) => setMaxTurns(parseInt(e.target.value) || 3)}
-                  min="1"
-                  max="100"
-                  className="w-16 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-sm"
-                />
+                <span className="font-semibold text-white">claude code</span>
+                {sessionId && (
+                  <span className="text-xs text-white/60">
+                    {sessionId.slice(0, 8)}...
+                  </span>
+                )}
               </div>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="h-8 w-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors"
+              >
+                <svg className="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
 
-              {sessionId && !continueSession && (
-                <div className="text-sm text-gray-400">
-                  session: {sessionId.slice(0, 8)}...
+            <div className="flex-1 overflow-y-auto p-4">
+              {error && (
+                <div className="mb-3 px-3 py-2 rounded-lg bg-red-500/20 backdrop-blur-sm">
+                  <p className="text-xs text-red-300">{error}</p>
                 </div>
               )}
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading || !prompt}
-              className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:cursor-not-allowed px-6 py-3 rounded-lg font-semibold transition-colors"
-            >
-              {isLoading ? "processing..." : "send to claude code"}
-            </button>
-          </div>
-        </form>
-
-        {error && (
-          <div className="bg-red-900/30 border border-red-700 p-4 rounded-lg mb-4">
-            <div className="text-red-400 text-sm">error: {error}</div>
-          </div>
-        )}
-
-        {messages.length > 0 && (
-          <div className="bg-gray-800 p-6 rounded-lg">
-            <h2 className="text-xl font-semibold mb-4">conversation:</h2>
-            <div className="space-y-2">
+              
               {messages.map((msg, index) => renderMessage(msg, index))}
+              <div ref={messagesEndRef} />
             </div>
+
+            <form onSubmit={handleSubmit} className="p-4 border-t border-white/20">
+              <div className="flex gap-2 items-end">
+                <div className="flex-1">
+                  <div className="flex gap-2 mb-2">
+                    <label className="flex items-center gap-1">
+                      <input
+                        type="checkbox"
+                        checked={continueSession}
+                        onChange={(e) => setContinueSession(e.target.checked)}
+                        className="w-3 h-3"
+                      />
+                      <span className="text-xs text-white/60">continue</span>
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs text-white/60">turns:</span>
+                      <input
+                        type="number"
+                        value={maxTurns}
+                        onChange={(e) => setMaxTurns(parseInt(e.target.value) || 20)}
+                        min="1"
+                        max="100"
+                        className="w-12 px-1 py-0.5 text-xs bg-white/20 backdrop-blur-sm rounded text-white focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <input
+                    type="text"
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    placeholder="message claude code..."
+                    className="w-full px-4 py-2 text-sm bg-white/20 backdrop-blur-sm rounded-full text-white placeholder-white/60 focus:outline-none"
+                    disabled={isLoading}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={isLoading || !prompt.trim()}
+                  className="px-4 py-2 bg-blue-500 text-white text-sm rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? "..." : "send"}
+                </button>
+              </div>
+            </form>
           </div>
         )}
       </div>
