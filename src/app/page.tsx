@@ -27,9 +27,17 @@ export default function Home() {
   const clickMutation = api.click.sendToClaudeCode.useMutation({
     onSuccess: (data) => {
       if (data.success && data.results) {
-        setMessages(data.results);
+        // Append new messages to existing ones (keep user message)
+        setMessages(prev => {
+          // Find the last user message we added
+          const lastUserIndex = prev.findLastIndex(m => m.type === "user");
+          if (lastUserIndex >= 0) {
+            // Keep messages up to and including the last user message, then add new results
+            return [...prev.slice(0, lastUserIndex + 1), ...data.results];
+          }
+          return data.results;
+        });
         setError("");
-        setPrompt("");
 
         // extract session id from response
         const sessionResult = data.results.find(
@@ -51,6 +59,19 @@ export default function Home() {
     e.preventDefault();
     if (!prompt.trim()) return;
     
+    // Add user message to display immediately
+    const userMessage: SDKMessage = {
+      type: "user" as const,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: prompt }]
+      },
+      session_id: sessionId || "temp",
+      parent_tool_use_id: null
+    } as any;
+    
+    setMessages(prev => [...prev, userMessage]);
+    setPrompt("");
     setIsLoading(true);
 
     const params: ClaudeRequest = { prompt, maxTurns };
