@@ -16,7 +16,7 @@ export async function handleClaudeCodeRequest(request: ClaudeRequest) {
       maxTurns: request.maxTurns || 10,
       customSystemPrompt: 'You are an assistant helping to modify code in a Next.js application. Be concise and focus on code changes.',
 
-      allowedTools: ['file', 'directory', 'git', 'http', 'https'],
+      permissionMode: "bypassPermissions",
     };
     
     // handle session continuation
