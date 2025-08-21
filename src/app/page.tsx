@@ -4,12 +4,14 @@ import { ClaudeChat } from "@/components/claude-chat";
 import { FileBrowser } from "@/components/file-browser";
 import { FileBrowserEnhanced } from "@/components/file-browser-enhanced";
 import { DownloadTinder } from "@/components/download-tinder";
+import { GCPVMList } from "@/components/gcp-vm-list";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { useState } from "react";
 
 export default function Home() {
   const [showFileBrowser, setShowFileBrowser] = useState(false);
   const [showDownloadTinder, setShowDownloadTinder] = useState(false);
+  const [showGCPVMs, setShowGCPVMs] = useState(false);
   const [useEnhancedBrowser, setUseEnhancedBrowser] = useState(true);
 
   return (
@@ -28,6 +30,7 @@ export default function Home() {
             onClick={() => {
               setShowFileBrowser(!showFileBrowser);
               setShowDownloadTinder(false);
+              setShowGCPVMs(false);
             }}
             className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
           >
@@ -38,10 +41,22 @@ export default function Home() {
             onClick={() => {
               setShowDownloadTinder(!showDownloadTinder);
               setShowFileBrowser(false);
+              setShowGCPVMs(false);
             }}
             className="px-6 py-3 bg-gradient-to-r from-pink-500 to-red-500 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
           >
             {showDownloadTinder ? 'hide' : 'clean'} downloads
+          </button>
+          
+          <button
+            onClick={() => {
+              setShowGCPVMs(!showGCPVMs);
+              setShowFileBrowser(false);
+              setShowDownloadTinder(false);
+            }}
+            className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
+          >
+            {showGCPVMs ? 'hide' : 'show'} gcp vms
           </button>
           
           {showFileBrowser && (
@@ -63,6 +78,12 @@ export default function Home() {
         {showDownloadTinder && (
           <div className="mb-8">
             <DownloadTinder />
+          </div>
+        )}
+        
+        {showGCPVMs && (
+          <div className="mb-8">
+            <GCPVMList />
           </div>
         )}
         
@@ -110,7 +131,8 @@ export default function Home() {
         </div>
       </div>
       
-      <ClaudeChat position="bottom-right" size="lg" />
+      {/* Temporarily disabled to debug click issues */}
+      {/* <ClaudeChat position="bottom-right" size="lg" /> */}
     </main>
   );
 }

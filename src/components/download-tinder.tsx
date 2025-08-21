@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { motion, useMotionValue, useTransform, AnimatePresence } from "framer-motion";
 import { api } from "@/utils/api";
 import { 
@@ -97,7 +97,7 @@ function FileCard({
   const rotate = useTransform(x, [-200, 0, 200], [-30, 0, 30]);
   const opacity = useTransform(x, [-200, -100, 0, 100, 200], [0.5, 1, 1, 1, 0.5]);
   
-  const handleDragEnd = (_: any, info: any) => {
+  const handleDragEnd = (_: unknown, info: { offset: { x: number } }) => {
     const threshold = 100;
     if (Math.abs(info.offset.x) > threshold) {
       const direction = info.offset.x > 0 ? 'right' : 'left';
