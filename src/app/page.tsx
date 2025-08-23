@@ -15,12 +15,12 @@ import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalI
 
 export default function Home() {
   const [activeApp, setActiveApp] = useState<string | null>(null);
-  const [useEnhancedBrowser, setUseEnhancedBrowser] = useState(true);
+  const [useEnhancedBrowser] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showClaude, setShowClaude] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
+  const [, setDarkMode] = useState(false);
   
     useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);

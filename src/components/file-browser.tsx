@@ -14,7 +14,7 @@ import {
   Code,
   Terminal
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { api } from "@/utils/api";
 
 interface FileItem {
@@ -99,29 +99,22 @@ export function FileBrowser() {
     }
   });
 
-  const { data: systemInfoData } = api.files.getSystemInfo.useQuery(undefined, {
-    onSuccess: (data) => {
-      if (data.success && data.systemInfo) {
-        setSystemInfo(data.systemInfo);
-        if (!currentPath) {
-          setCurrentPath(data.systemInfo.homeDir);
-          loadDirectory(data.systemInfo.homeDir);
-        }
-      }
-    }
-  });
+  const { data } = api.files.getSystemInfo.useQuery();
 
-  useEffect(() => {
-    if (systemInfo && !currentPath) {
-      setCurrentPath(systemInfo.homeDir);
-      loadDirectory(systemInfo.homeDir);
-    }
-  }, [systemInfo]);
-
-  const loadDirectory = (path: string) => {
+  const loadDirectory = useCallback((path: string) => {
     setIsLoading(true);
     listFilesMutation.mutate({ path });
-  };
+  }, [listFilesMutation]);
+
+  useEffect(() => {
+    if (data?.success && data.systemInfo) {
+      setSystemInfo(data.systemInfo);
+      if (!currentPath) {
+        setCurrentPath(data.systemInfo.homeDir);
+        loadDirectory(data.systemInfo.homeDir);
+      }
+    }
+  }, [data, currentPath, loadDirectory]);
 
   const handleNavigate = (item: FileItem) => {
     if (item.isDirectory) {
