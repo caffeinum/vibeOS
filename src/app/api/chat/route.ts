@@ -71,7 +71,13 @@ export async function POST(req: Request) {
         text: part.text,
       };
       contentBlocks.push(textBlock);
-    } else if (part.type === "file" && part.mediaType.startsWith("image/")) {
+    } else if (
+      part.type === "file" &&
+      (part.mediaType === "image/jpeg" ||
+        part.mediaType === "image/png" ||
+        part.mediaType === "image/gif" ||
+        part.mediaType === "image/webp")
+    ) {
       const imageBlock: ImageBlockParam = {
         type: "image",
         source: {
