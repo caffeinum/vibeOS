@@ -27,7 +27,7 @@ export function MacOSDock({ items, activeItem, onItemClick }: MacOSDockProps) {
       onMouseLeave={() => mouseX.set(Infinity)}
       className="fixed bottom-0 left-1/2 -translate-x-1/2 mb-4 z-50"
     >
-      <div className="flex items-end gap-2 px-3 py-2 bg-white/10 dark:bg-black/20 backdrop-blur-2xl rounded-2xl border border-white/20 dark:border-white/10 shadow-2xl">
+      <div className="flex items-end gap-2 px-3 py-2 backdrop-blur-3xl bg-gradient-to-b from-white/25 to-white/10 dark:from-black/25 dark:to-black/10 rounded-2xl border border-white/30 dark:border-white/20 shadow-2xl shadow-black/20 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-tr before:from-transparent before:via-white/10 before:to-transparent before:opacity-50">
         {items.map((item, index) => (
           <DockIcon
             key={item.id}

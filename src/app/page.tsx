@@ -11,7 +11,6 @@ import { CryptoTracker } from "@/components/crypto-tracker";
 import { Browser } from "@/components/browser";
 import { MacOSDock } from "@/components/macos-dock";
 import { FinderIcon, SafariIcon, MessagesIcon, TerminalIcon as MacTerminalIcon, SystemPreferencesIcon, DownloadsIcon, CloudIcon } from "@/components/macos-icons";
-import { LiquidGlass } from "@/components/ui/liquid-glass";
 import { Toaster } from "@/components/ui/sonner";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -68,7 +67,7 @@ export default function Home() {
       }}
     >
       {/* macOS Menu Bar */}
-      <div className="bg-black/40 backdrop-blur-2xl h-7 flex items-center justify-between px-4 text-white text-xs font-medium z-50 border-b border-white/10">
+      <div className="backdrop-blur-3xl bg-gradient-to-r from-white/20 via-white/15 to-white/20 dark:from-black/40 dark:via-black/30 dark:to-black/40 h-7 flex items-center justify-between px-4 text-white text-xs font-medium z-50 border-b border-white/20 shadow-lg relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-b before:from-white/10 before:to-transparent before:pointer-events-none">
         <div className="flex items-center gap-4">
           <Apple className="w-4 h-4" />
           <span className="font-semibold">Claude OS</span>
@@ -94,7 +93,7 @@ export default function Home() {
           initial={{ opacity: 0, x: 50 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.5, duration: 0.5 }}
-          className="absolute top-4 right-4 z-10 w-[500px]"
+          className="absolute top-4 right-4 z-10 w-[500px] backdrop-blur-2xl bg-gradient-to-br from-white/20 to-white/5 dark:from-black/20 dark:to-black/5 rounded-2xl border border-white/25 dark:border-white/15 shadow-2xl shadow-black/10 p-1"
         >
           <CryptoTracker />
         </motion.div>
@@ -108,8 +107,8 @@ export default function Home() {
               exit={{ scale: 0.8, opacity: 0 }}
               className="absolute top-10 left-10 z-20"
             >
-              <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[800px]">
-                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
+              <div className="backdrop-blur-3xl bg-gradient-to-br from-white/30 to-white/10 dark:from-black/30 dark:to-black/10 rounded-2xl shadow-2xl shadow-black/20 overflow-hidden w-[800px] border border-white/30 dark:border-white/20">
+                <div className="backdrop-blur-xl bg-gradient-to-r from-white/40 to-white/30 dark:from-black/40 dark:to-black/30 h-7 flex items-center px-3 gap-2 border-b border-white/20">
                   <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
                   <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
                   <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
@@ -129,8 +128,8 @@ export default function Home() {
               exit={{ scale: 0.8, opacity: 0 }}
               className="absolute top-10 left-10 z-20"
             >
-              <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[600px]">
-                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
+              <div className="backdrop-blur-3xl bg-gradient-to-br from-white/30 to-white/10 dark:from-black/30 dark:to-black/10 rounded-2xl shadow-2xl shadow-black/20 overflow-hidden w-[600px] border border-white/30 dark:border-white/20">
+                <div className="backdrop-blur-xl bg-gradient-to-r from-white/40 to-white/30 dark:from-black/40 dark:to-black/30 h-7 flex items-center px-3 gap-2 border-b border-white/20">
                   <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
                   <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
                   <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
@@ -150,8 +149,8 @@ export default function Home() {
               exit={{ scale: 0.8, opacity: 0 }}
               className="absolute top-10 left-10 z-20"
             >
-              <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[900px]">
-                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
+              <div className="backdrop-blur-3xl bg-gradient-to-br from-white/30 to-white/10 dark:from-black/30 dark:to-black/10 rounded-2xl shadow-2xl shadow-black/20 overflow-hidden w-[900px] border border-white/30 dark:border-white/20">
+                <div className="backdrop-blur-xl bg-gradient-to-r from-white/40 to-white/30 dark:from-black/40 dark:to-black/30 h-7 flex items-center px-3 gap-2 border-b border-white/20">
                   <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
                   <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
                   <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
@@ -205,9 +204,6 @@ export default function Home() {
       <div style={{ display: 'none' }}>
         <DarkModeToggle />
       </div>
-      
-      {/* Liquid Glass Effect */}
-      <LiquidGlass />
       
       {/* Toast Notifications */}
       <Toaster position="top-center" />
