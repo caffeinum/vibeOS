@@ -9,8 +9,9 @@ import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { Terminal } from "@/components/terminal";
 import NativeTerminal from "@/components/NativeTerminal";
 import { Browser } from "@/components/browser";
+import { DedalusChat } from "@/components/dedalus-chat";
 import { MacOSDock } from "@/components/macos-dock";
-import { FinderIcon, SafariIcon, MessagesIcon, TerminalIcon as MacTerminalIcon, SystemPreferencesIcon, DownloadsIcon, CloudIcon } from "@/components/macos-icons";
+import { FinderIcon, SafariIcon, MessagesIcon, TerminalIcon as MacTerminalIcon, SystemPreferencesIcon, DownloadsIcon, CloudIcon, DedalusIcon } from "@/components/macos-icons";
 import { GlassEffect, GlassWindow, GlassFilter } from "@/components/ui/glass-effect";
 import { Toaster } from "@/components/ui/sonner";
 import { useState, useEffect } from "react";
@@ -53,6 +54,7 @@ export default function Home() {
     { id: 'finder', name: 'Finder', icon: <FinderIcon /> },
     { id: 'browser', name: 'Safari', icon: <SafariIcon /> },
     { id: 'claude', name: 'Messages', icon: <MessagesIcon /> },
+    { id: 'dedalus', name: 'Dedalus AI', icon: <DedalusIcon /> },
     { id: 'terminal', name: 'Command Palette', icon: <MacTerminalIcon /> },
     { id: 'native-terminal', name: 'Terminal', icon: <MacTerminalIcon /> },
     { id: 'downloads', name: 'Downloads', icon: <DownloadsIcon /> },
@@ -148,6 +150,25 @@ export default function Home() {
               </GlassWindow>
             </motion.div>
           )}
+          
+          {activeApp === 'dedalus' && (
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.8, opacity: 0 }}
+              className="absolute top-10 left-10 z-20"
+            >
+              <GlassWindow 
+                title="Dedalus AI Chat" 
+                onClose={() => setActiveApp(null)}
+                className="w-[700px]"
+              >
+                <div className="h-[500px]">
+                  <DedalusChat />
+                </div>
+              </GlassWindow>
+            </motion.div>
+          )}
         </AnimatePresence>
       </div>
       
@@ -158,6 +179,8 @@ export default function Home() {
         onItemClick={(item) => {
           if (item.id === 'claude') {
             setShowClaude(prev => !prev);
+          } else if (item.id === 'dedalus') {
+            setActiveApp('dedalus');
           } else if (item.id === 'terminal') {
             setShowTerminal(true);
           } else if (item.id === 'native-terminal') {

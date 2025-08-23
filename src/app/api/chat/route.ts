@@ -114,11 +114,11 @@ export async function POST(req: Request) {
           You have access to all mcp servers via mcp binary
 
           Example:
-          mcp @modelcontextprotocol/server-puppeteer -- puppeteer_screenshot shot.png | jq -r '.content[1].data'
-          mcp @modelcontextprotocol/server-filesystem -a '~/Desktop' -- list_directory '~/Desktop'
+          bunx mcp @modelcontextprotocol/server-puppeteer -- puppeteer_screenshot shot.png | jq -r '.content[1].data'
+          bunx mcp @modelcontextprotocol/server-filesystem -a '~/Desktop' -- list_directory '~/Desktop'
 
           To read each mcp server tools, just run:
-          mcp @modelcontextprotocol/server-puppeteer help
+          bunx mcp @modelcontextprotocol/server-puppeteer help
           `,
 
         permissionMode: "bypassPermissions",
