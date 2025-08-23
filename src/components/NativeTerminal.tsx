@@ -6,14 +6,12 @@ import { api } from '@/utils/api';
 
 interface NativeTerminalProps {
   onClose?: () => void;
-  isActive?: boolean;
-  isMinimized?: boolean;
+  isOpen?: boolean;
 }
 
 export const NativeTerminal: React.FC<NativeTerminalProps> = ({ 
   onClose, 
-  isActive = false,
-  isMinimized = false 
+  isOpen = false
 }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -48,10 +46,10 @@ export const NativeTerminal: React.FC<NativeTerminalProps> = ({
   }, [terminalOutput]);
 
   useEffect(() => {
-    if (!isMinimized && inputRef.current) {
+    if (isOpen && inputRef.current) {
       inputRef.current.focus();
     }
-  }, [isMinimized]);
+  }, [isOpen]);
 
   const executeCommand = useCallback(async (command: string) => {
     const trimmedCommand = command.trim();
@@ -183,19 +181,29 @@ export const NativeTerminal: React.FC<NativeTerminalProps> = ({
     return currentDirectory.replace(pwdQuery.data?.home || '', '~');
   };
 
+  const handleWindowClick = (e: React.MouseEvent) => {
+    // focus input when clicking anywhere in the terminal window
+    // except for buttons and the input itself
+    const target = e.target as HTMLElement;
+    if (!target.closest('button') && !target.closest('input')) {
+      inputRef.current?.focus();
+    }
+  };
+
   return (
     <AnimatePresence>
-      {!isMinimized && (
+      {isOpen && (
         <motion.div 
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           exit={{ scale: 0.9, opacity: 0 }}
           transition={{ type: 'spring', damping: 20 }}
+          onClick={handleWindowClick}
           className={`
             fixed bg-black/95 backdrop-blur-2xl rounded-xl shadow-2xl
             transition-all duration-300 ease-out border border-gray-800/50
             ${isMaximized ? 'inset-4' : 'w-[740px] h-[480px] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2'}
-            ${isActive ? 'z-50 ring-2 ring-blue-500/30' : 'z-40'}
+            z-50
           `}
           style={{
             boxShadow: '0 24px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.05), inset 0 0 0 1px rgba(255,255,255,0.03)'

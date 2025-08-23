@@ -8,7 +8,6 @@ import { GCPVMList } from "@/components/gcp-vm-list";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { Terminal } from "@/components/terminal";
 import NativeTerminal from "@/components/NativeTerminal";
-import { CryptoTracker } from "@/components/crypto-tracker";
 import { Browser } from "@/components/browser";
 import { MacOSDock } from "@/components/macos-dock";
 import { FinderIcon, SafariIcon, MessagesIcon, TerminalIcon as MacTerminalIcon, SystemPreferencesIcon, DownloadsIcon, CloudIcon } from "@/components/macos-icons";
@@ -96,15 +95,6 @@ export default function Home() {
       {/* Desktop */}
       <div className="flex-1 relative overflow-hidden">
         
-        {/* Crypto Tracker Widget */}
-        <motion.div
-          initial={{ opacity: 0, x: 50 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.5, duration: 0.5 }}
-          className="absolute top-4 right-4 z-10 w-[500px]"
-        >
-          <CryptoTracker />
-        </motion.div>
         
         {/* App Windows */}
         <AnimatePresence>
@@ -195,7 +185,7 @@ export default function Home() {
         onClose={() => setShowTerminal(false)}
       />
       <NativeTerminal
-        isActive={showNativeTerminal}
+        isOpen={showNativeTerminal}
         onClose={() => setShowNativeTerminal(false)}
       />
       <Browser
