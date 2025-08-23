@@ -1,4 +1,4 @@
-import { query, type Options } from "@anthropic-ai/claude-code";
+import { query, type SDKMessage, type Options } from "@anthropic-ai/claude-code";
 
 export interface ClaudeRequest {
   prompt: string;
@@ -7,7 +7,9 @@ export interface ClaudeRequest {
   continueSession?: boolean;
 }
 
-export async function handleClaudeCodeRequest(request: ClaudeRequest) {
+export async function* handleClaudeCodeRequest(
+  request: ClaudeRequest
+): AsyncGenerator<SDKMessage> {
   const options: Options = {
     customSystemPrompt:
       "You are an assistant helping to modify code in a Next.js application. Be concise and focus on code changes.",
@@ -22,8 +24,10 @@ export async function handleClaudeCodeRequest(request: ClaudeRequest) {
     options.resume = request.sessionId;
   }
 
-  return query({
+  for await (const message of query({
     prompt: request.prompt,
     options,
-  });
+  })) {
+    yield message;
+  }
 }

@@ -9,11 +9,13 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ai-sdk/react": "^2.0.22",
     "@anthropic-ai/claude-code": "^1.0.86",
     "@tanstack/react-query": "^5.85.5",
     "@trpc/client": "^11.5.0",
     "@trpc/react-query": "^11.5.0",
     "@trpc/server": "^11.5.0",
+    "ai": "^5.0.22",
     "framer-motion": "^12.23.12",
     "lucide-react": "^0.540.0",
     "next": "15.5.0",
