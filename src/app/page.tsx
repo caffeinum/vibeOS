@@ -131,8 +131,7 @@ export default function Home() {
         </div>
       </div>
       
-      {/* Temporarily disabled to debug click issues */}
-      {/* <ClaudeChat position="bottom-right" size="lg" /> */}
+      <ClaudeChat position="bottom-right" size="lg" />
     </main>
   );
 }
