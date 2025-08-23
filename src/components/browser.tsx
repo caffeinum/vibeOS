@@ -16,6 +16,12 @@ interface KernelBrowser {
   status: 'creating' | 'running' | 'stopped';
 }
 
+interface StoredSession {
+  browserId: string;
+  timestamp: number;
+  url?: string;
+}
+
 interface KernelError {
   message: string;
   code?: string;
@@ -91,18 +97,29 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
   const [isKernelReady, setIsKernelReady] = useState(false);
   const [kernelBrowser, setKernelBrowser] = useState<KernelBrowser | null>(null);
   const [kernelError, setKernelError] = useState<KernelError | null>(null);
+  const [storedSession, setStoredSession] = useState<StoredSession | null>(null);
 
   // tRPC mutations
   const createBrowserMutation = api.kernel.createBrowser.useMutation({
     onSuccess: (data) => {
       console.log('[Browser] Created successfully:', data.id);
-      setKernelBrowser({
+      const browser = {
         id: data.id,
         cdp_ws_url: data.cdp_ws_url,
         browser_live_view_url: data.browser_live_view_url,
         status: data.status
-      });
+      };
+      setKernelBrowser(browser);
       setKernelError(null);
+      
+      // store session for reuse
+      const session: StoredSession = {
+        browserId: data.id,
+        timestamp: Date.now(),
+        url: currentUrl
+      };
+      localStorage.setItem('kernelBrowserSession', JSON.stringify(session));
+      setStoredSession(session);
     },
     onError: (error) => {
       console.error('[Browser] Creation error:', error);
@@ -118,6 +135,9 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
     onSuccess: () => {
       console.log('[Browser] Closed successfully');
       setKernelBrowser(null);
+      // clear stored session when browser is closed
+      localStorage.removeItem('kernelBrowserSession');
+      setStoredSession(null);
     },
     onError: (error) => {
       console.error('[Browser] Close error:', error);
@@ -138,6 +158,8 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
     }
 
     try {
+      // TODO: when kernel api supports session reuse, pass storedSession?.browserId here
+      // for now, we'll just create a new browser each time
       const data = await createBrowserMutation.mutateAsync({
         apiKey: kernelApiKey
       });
@@ -191,11 +213,30 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
     }
   }, [createKernelBrowser]);
 
-  // Initialize Kernel API key from environment or localStorage
+  // Initialize Kernel API key and session from environment or localStorage
   useEffect(() => {
     const apiKey = process.env.NEXT_PUBLIC_KERNEL_API_KEY || localStorage.getItem('kernelApiKey') || '';
     setKernelApiKey(apiKey);
     setIsKernelReady(!!apiKey);
+    
+    // load stored session if available
+    const sessionData = localStorage.getItem('kernelBrowserSession');
+    if (sessionData) {
+      try {
+        const session = JSON.parse(sessionData) as StoredSession;
+        // check if session is still valid (less than 24 hours old)
+        const hoursSinceCreation = (Date.now() - session.timestamp) / (1000 * 60 * 60);
+        if (hoursSinceCreation < 24) {
+          setStoredSession(session);
+        } else {
+          // clear expired session
+          localStorage.removeItem('kernelBrowserSession');
+        }
+      } catch (e) {
+        console.error('failed to parse stored session:', e);
+        localStorage.removeItem('kernelBrowserSession');
+      }
+    }
   }, []);
 
   // Initialize browser when component mounts (regardless of isOpen state)
@@ -227,16 +268,35 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
     <div className="bg-white/95 backdrop-blur-xl rounded-xl shadow-2xl overflow-hidden w-full h-full flex flex-col border border-white/20">
       {/* Browser Header */}
       <div className="bg-gray-100/80 backdrop-blur-sm border-b border-gray-200/50 px-3 py-2">
-        <div className="flex items-center gap-2">
-          {/* Window Controls */}
-          <div className="flex gap-1">
-            <button
-              onClick={onClose}
-              className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
-            />
-            <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600 transition-colors" />
-            <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600 transition-colors" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {/* Window Controls */}
+            <div className="flex gap-1">
+              <button
+                onClick={onClose}
+                className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
+              />
+              <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600 transition-colors" />
+              <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600 transition-colors" />
+            </div>
           </div>
+          {storedSession && kernelBrowser && (
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <span>session active</span>
+              <button
+                onClick={() => {
+                  localStorage.removeItem('kernelBrowserSession');
+                  setStoredSession(null);
+                  if (kernelBrowser) {
+                    closeKernelBrowser(kernelBrowser.id);
+                  }
+                }}
+                className="px-2 py-0.5 bg-gray-200 hover:bg-gray-300 rounded transition-colors"
+              >
+                clear
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -273,6 +333,20 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
                 Get API Key
               </button>
             </div>
+            {storedSession && (
+              <div className="mt-4 p-2 bg-gray-100 rounded-lg">
+                <p className="text-xs text-gray-600 mb-1">stored session found</p>
+                <button
+                  onClick={() => {
+                    localStorage.removeItem('kernelBrowserSession');
+                    setStoredSession(null);
+                  }}
+                  className="px-2 py-1 bg-red-500 text-white rounded text-xs hover:bg-red-600 transition-colors"
+                >
+                  clear session
+                </button>
+              </div>
+            )}
           </div>
         ) : currentUrl && currentUrl !== "about:blank" ? (
           kernelError || !kernelBrowser ? (
