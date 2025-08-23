@@ -6,4 +6,10 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "browser-use>=0.6.1",
+    "playwright>=1.40.0",
+]
+
+[project.optional-dependencies]
+stealth = [
+    "patchright>=1.40.0",  # Stealth version of playwright
 ]
