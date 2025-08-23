@@ -60,6 +60,11 @@ RUN bun add -g @anthropic-ai/claude-code
 # Set up environment for Claude Code
 ENV ANTHROPIC_API_KEY=""
 
+# Create a startup script to run mcp daemon in background and then start the app (before switching to nextjs user)
+RUN echo '#!/bin/sh\nmcp daemon &\nexec bun run server.js' > /app/start.sh && \
+    chmod +x /app/start.sh && \
+    chown nextjs:nodejs /app/start.sh
+
 USER nextjs
 
 EXPOSE 3000
@@ -67,5 +72,5 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# Start the application
-CMD ["bun", "run", "server.js"]
+# Start the application with mcp daemon
+CMD ["/app/start.sh"]
