@@ -9,6 +9,7 @@ import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { Terminal } from "@/components/terminal";
 import { CryptoTracker } from "@/components/crypto-tracker";
 import { Browser } from "@/components/browser";
+import { MacOSDock } from "@/components/macos-dock";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search, Globe } from "lucide-react";
@@ -163,49 +164,24 @@ export default function Home() {
       </div>
       
       {/* macOS Dock */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
-        <div className="bg-white/10 backdrop-blur-3xl rounded-2xl p-2 flex gap-1 shadow-2xl border border-white/30">
-          {dockApps.map((app) => (
-            <motion.button
-              key={app.id}
-              whileHover={{ scale: 1.3, y: -10 }}
-              whileTap={{ scale: 0.95 }}
-              transition={{ type: "spring", stiffness: 300, damping: 20 }}
-              className="relative group"
-              onClick={() => {
-                if (app.id === 'claude') {
-                  setShowClaude(prev => !prev);
-                } else if (app.id === 'terminal') {
-                  setShowTerminal(true);
-                } else if (app.id === 'browser') {
-                  setShowBrowser(true);
-                } else if (app.id === 'settings') {
-                  setDarkMode(prev => !prev);
-                } else {
-                  const newActiveApp = activeApp === app.id ? null : app.id;
-                  setActiveApp(newActiveApp);
-                  // Reset window position when opening a new app
-
-                }
-              }}
-            >
-              <div className={`w-14 h-14 bg-gradient-to-br ${app.color} rounded-xl flex items-center justify-center text-white shadow-lg`}>
-                {app.icon}
-              </div>
-              <motion.div
-                initial={{ opacity: 0, y: 0 }}
-                whileHover={{ opacity: 1, y: -5 }}
-                className="absolute -top-8 left-1/2 -translate-x-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded whitespace-nowrap"
-              >
-                {app.name}
-              </motion.div>
-              {activeApp === app.id && (
-                <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-white rounded-full" />
-              )}
-            </motion.button>
-          ))}
-        </div>
-      </div>
+      <MacOSDock
+        items={dockApps}
+        activeItem={activeApp || (showClaude ? 'claude' : showTerminal ? 'terminal' : showBrowser ? 'browser' : null)}
+        onItemClick={(item) => {
+          if (item.id === 'claude') {
+            setShowClaude(prev => !prev);
+          } else if (item.id === 'terminal') {
+            setShowTerminal(true);
+          } else if (item.id === 'browser') {
+            setShowBrowser(true);
+          } else if (item.id === 'settings') {
+            setDarkMode(prev => !prev);
+          } else {
+            const newActiveApp = activeApp === item.id ? null : item.id;
+            setActiveApp(newActiveApp);
+          }
+        }}
+      />
       
       {/* Controlled Components */}
       <ClaudeChat
