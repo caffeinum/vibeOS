@@ -73,8 +73,14 @@ const commandSnippets: Command[] = [
   { id: "git-push", title: "git push", description: "push commits", command: "git push", icon: <GitBranch className="h-4 w-4" />, category: "git" },
 ];
 
-export function Terminal() {
-  const [isOpen, setIsOpen] = useState(false);
+interface TerminalProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+}
+
+export function Terminal({ isOpen: externalIsOpen, onClose }: TerminalProps = {}) {
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -167,7 +173,8 @@ export function Terminal() {
       if (showOutput) {
         setShowOutput(null);
       } else {
-        setIsOpen(false);
+        if (onClose) onClose();
+        else setInternalIsOpen(false);
       }
     }
   };
@@ -198,22 +205,24 @@ export function Terminal() {
 
   return (
     <>
-      {/* floating button */}
-      <AnimatePresence>
-        {!isOpen && (
-          <motion.button
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            exit={{ scale: 0 }}
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => setIsOpen(true)}
-            className="fixed bottom-6 left-6 w-14 h-14 bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl flex items-center justify-center z-50 shadow-lg shadow-purple-500/25"
-          >
-            <TerminalIcon className="h-6 w-6 text-white" />
-          </motion.button>
-        )}
-      </AnimatePresence>
+      {/* floating button - only show if not controlled externally */}
+      {externalIsOpen === undefined && (
+        <AnimatePresence>
+          {!isOpen && (
+            <motion.button
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0 }}
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              onClick={() => setInternalIsOpen(true)}
+              className="fixed bottom-6 left-6 w-14 h-14 bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl flex items-center justify-center z-50 shadow-lg shadow-purple-500/25"
+            >
+              <TerminalIcon className="h-6 w-6 text-white" />
+            </motion.button>
+          )}
+        </AnimatePresence>
+      )}
 
       {/* command palette overlay */}
       <AnimatePresence>
@@ -224,7 +233,10 @@ export function Terminal() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsOpen(false)}
+              onClick={() => {
+                if (onClose) onClose();
+                else setInternalIsOpen(false);
+              }}
               className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50"
             />
 
@@ -259,7 +271,10 @@ export function Terminal() {
                     />
                   )}
                   <button
-                    onClick={() => setIsOpen(false)}
+                    onClick={() => {
+                if (onClose) onClose();
+                else setInternalIsOpen(false);
+              }}
                     className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
                   >
                     <X className="h-4 w-4 text-gray-400" />

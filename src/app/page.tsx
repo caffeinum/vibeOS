@@ -7,134 +7,195 @@ import { DownloadTinder } from "@/components/download-tinder";
 import { GCPVMList } from "@/components/gcp-vm-list";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { Terminal } from "@/components/terminal";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search } from "lucide-react";
 
 export default function Home() {
-  const [showFileBrowser, setShowFileBrowser] = useState(false);
-  const [showDownloadTinder, setShowDownloadTinder] = useState(false);
-  const [showGCPVMs, setShowGCPVMs] = useState(false);
+  const [activeApp, setActiveApp] = useState<string | null>(null);
   const [useEnhancedBrowser, setUseEnhancedBrowser] = useState(true);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [showClaude, setShowClaude] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
+  
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString('en-US', { 
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true 
+    });
+  };
+  
+  const dockApps = [
+    { id: 'finder', name: 'Finder', icon: <Folder className="w-8 h-8" />, color: 'from-blue-400 to-blue-600' },
+    { id: 'downloads', name: 'Downloads', icon: <Download className="w-8 h-8" />, color: 'from-pink-400 to-red-600' },
+    { id: 'gcp', name: 'GCP VMs', icon: <Cloud className="w-8 h-8" />, color: 'from-cyan-400 to-blue-600' },
+    { id: 'claude', name: 'Claude Chat', icon: <MessageCircle className="w-8 h-8" />, color: 'from-purple-400 to-purple-600' },
+    { id: 'terminal', name: 'Terminal', icon: <TerminalIcon className="w-8 h-8" />, color: 'from-gray-700 to-gray-900' },
+    { id: 'settings', name: 'Settings', icon: <Settings className="w-8 h-8" />, color: 'from-gray-400 to-gray-600' },
+  ];
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-100 p-8">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="text-4xl font-bold text-gray-800">claude os</h1>
-          <DarkModeToggle />
+    <main className="h-screen w-screen overflow-hidden relative flex flex-col" 
+      style={{
+        backgroundImage: `url('https://wallpapercave.com/wp/wp9269839.jpg')`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat'
+      }}
+    >
+      {/* macOS Menu Bar */}
+      <div className="bg-black/80 backdrop-blur-xl h-7 flex items-center justify-between px-4 text-white text-xs font-medium z-50">
+        <div className="flex items-center gap-4">
+          <Apple className="w-4 h-4" />
+          <span className="font-semibold">Claude OS</span>
+          <span className="text-white/70">File</span>
+          <span className="text-white/70">Edit</span>
+          <span className="text-white/70">View</span>
+          <span className="text-white/70">Window</span>
+          <span className="text-white/70">Help</span>
         </div>
-        <p className="text-gray-600 mb-8">
-          click the floating chat button in the bottom-right corner to interact with claude code,
-          or use the terminal in the bottom-left corner to execute commands.
-        </p>
-        
-        <div className="mb-8 flex gap-4 flex-wrap">
-          <button
-            onClick={() => {
-              setShowFileBrowser(!showFileBrowser);
-              setShowDownloadTinder(false);
-              setShowGCPVMs(false);
-            }}
-            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
-          >
-            {showFileBrowser ? 'hide' : 'show'} file browser
-          </button>
-          
-          <button
-            onClick={() => {
-              setShowDownloadTinder(!showDownloadTinder);
-              setShowFileBrowser(false);
-              setShowGCPVMs(false);
-            }}
-            className="px-6 py-3 bg-gradient-to-r from-pink-500 to-red-500 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
-          >
-            {showDownloadTinder ? 'hide' : 'clean'} downloads
-          </button>
-          
-          <button
-            onClick={() => {
-              setShowGCPVMs(!showGCPVMs);
-              setShowFileBrowser(false);
-              setShowDownloadTinder(false);
-            }}
-            className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
-          >
-            {showGCPVMs ? 'hide' : 'show'} gcp vms
-          </button>
-          
-          {showFileBrowser && (
-            <button
-              onClick={() => setUseEnhancedBrowser(!useEnhancedBrowser)}
-              className="px-6 py-3 bg-gradient-to-r from-green-500 to-teal-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 transform hover:scale-105"
-            >
-              use {useEnhancedBrowser ? 'simple' : 'enhanced'} view
-            </button>
-          )}
-        </div>
-
-        {showFileBrowser && (
-          <div className="mb-8">
-            {useEnhancedBrowser ? <FileBrowserEnhanced /> : <FileBrowser />}
-          </div>
-        )}
-        
-        {showDownloadTinder && (
-          <div className="mb-8">
-            <DownloadTinder />
-          </div>
-        )}
-        
-        {showGCPVMs && (
-          <div className="mb-8">
-            <GCPVMList />
-          </div>
-        )}
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className="space-y-4">
-            <h2 className="text-xl font-semibold text-gray-700">features</h2>
-            <ul className="space-y-2 text-sm text-gray-600">
-              <li>• ai-powered code assistance</li>
-              <li>• session management & continuity</li>
-              <li>• real-time code execution</li>
-              <li>• syntax highlighted responses</li>
-              <li>• copy code functionality</li>
-              <li>• smooth animations</li>
-              <li>• responsive design</li>
-            </ul>
-          </div>
-          
-          <div className="space-y-4">
-            <h2 className="text-xl font-semibold text-gray-700">usage</h2>
-            <div className="text-sm text-gray-600 space-y-2">
-              <p>the chatbox appears in the bottom right corner by default.</p>
-              <p>you can continue previous sessions or start new ones.</p>
-              <p>messages support both text and code blocks with copy functionality.</p>
-              <p>adjust max turns to control conversation length.</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-12 p-6 bg-white/50 backdrop-blur-sm rounded-2xl shadow-sm">
-          <h3 className="text-lg font-semibold text-gray-700 mb-3">quick tips</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-gray-600">
-            <div className="flex items-start gap-2">
-              <span className="text-blue-500">💡</span>
-              <p>use shift+enter for multi-line messages</p>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="text-green-500">🔄</span>
-              <p>check &quot;continue&quot; to resume last session</p>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="text-purple-500">📋</span>
-              <p>click code blocks to copy content</p>
-            </div>
-          </div>
+        <div className="flex items-center gap-3">
+          <Search className="w-3.5 h-3.5" />
+          <Wifi className="w-3.5 h-3.5" />
+          <Battery className="w-3.5 h-3.5" />
+          <span>{formatTime(currentTime)}</span>
         </div>
       </div>
       
-      <ClaudeChat position="bottom-right" size="lg" />
-      <Terminal />
+      {/* Desktop */}
+      <div className="flex-1 relative overflow-hidden">
+        
+        {/* App Windows */}
+        <AnimatePresence>
+          {activeApp === 'finder' && (
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.8, opacity: 0 }}
+              className="absolute top-10 left-10 z-20"
+            >
+              <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[800px]">
+                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
+                  <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
+                  <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
+                  <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
+                  <span className="ml-2 text-xs font-medium">Finder</span>
+                </div>
+                <div className="p-4">
+                  {useEnhancedBrowser ? <FileBrowserEnhanced /> : <FileBrowser />}
+                </div>
+              </div>
+            </motion.div>
+          )}
+          
+          {activeApp === 'downloads' && (
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.8, opacity: 0 }}
+              className="absolute top-10 left-10 z-20"
+            >
+              <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[600px]">
+                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
+                  <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
+                  <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
+                  <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
+                  <span className="ml-2 text-xs font-medium">Downloads</span>
+                </div>
+                <div className="p-4">
+                  <DownloadTinder />
+                </div>
+              </div>
+            </motion.div>
+          )}
+          
+          {activeApp === 'gcp' && (
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.8, opacity: 0 }}
+              className="absolute top-10 left-10 z-20"
+            >
+              <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[900px]">
+                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
+                  <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
+                  <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
+                  <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
+                  <span className="ml-2 text-xs font-medium">GCP VMs</span>
+                </div>
+                <div className="p-4">
+                  <GCPVMList />
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+      
+      {/* macOS Dock */}
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
+        <div className="bg-white/20 backdrop-blur-2xl rounded-2xl p-2 flex gap-1 shadow-2xl border border-white/20">
+          {dockApps.map((app) => (
+            <motion.button
+              key={app.id}
+              onClick={() => {
+                if (app.id === 'claude') {
+                  setShowClaude(true);
+                } else if (app.id === 'terminal') {
+                  setShowTerminal(true);
+                } else if (app.id === 'settings') {
+                  setDarkMode(prev => !prev);
+                } else {
+                  setActiveApp(activeApp === app.id ? null : app.id);
+                }
+              }}
+              whileHover={{ scale: 1.3, y: -10 }}
+              whileTap={{ scale: 0.95 }}
+              transition={{ type: "spring", stiffness: 300, damping: 20 }}
+              className="relative group"
+            >
+              <div className={`w-14 h-14 bg-gradient-to-br ${app.color} rounded-xl flex items-center justify-center text-white shadow-lg`}>
+                {app.icon}
+              </div>
+              <motion.div
+                initial={{ opacity: 0, y: 0 }}
+                whileHover={{ opacity: 1, y: -5 }}
+                className="absolute -top-8 left-1/2 -translate-x-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded whitespace-nowrap"
+              >
+                {app.name}
+              </motion.div>
+              {activeApp === app.id && (
+                <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-white rounded-full" />
+              )}
+            </motion.button>
+          ))}
+        </div>
+      </div>
+      
+      {/* Controlled Components */}
+      <ClaudeChat 
+        position="bottom-right" 
+        size="lg" 
+        isOpen={showClaude}
+        onClose={() => setShowClaude(false)}
+      />
+      <Terminal 
+        isOpen={showTerminal}
+        onClose={() => setShowTerminal(false)}
+      />
+      <div style={{ display: 'none' }}>
+        <DarkModeToggle />
+      </div>
     </main>
   );
 }

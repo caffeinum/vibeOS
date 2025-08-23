@@ -11,14 +11,19 @@ interface ClaudeChatProps {
   position?: "bottom-right" | "bottom-left";
   size?: "sm" | "md" | "lg";
   className?: string;
+  isOpen?: boolean;
+  onClose?: () => void;
 }
 
 export function ClaudeChat({
   position = "bottom-right",
   size = "md",
   className,
+  isOpen: externalIsOpen,
+  onClose,
 }: ClaudeChatProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
   const [prompt, setPrompt] = useState("");
   const [continueSession, setContinueSession] = useState(true);
   const [copiedCode, setCopiedCode] = useState<string>("");
@@ -448,23 +453,25 @@ export function ClaudeChat({
         )}
       </AnimatePresence>
 
-      {/* Floating Button */}
-      <AnimatePresence>
-        {!isOpen && (
-          <motion.button
-            onClick={() => setIsOpen(true)}
-            className="w-14 h-14 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center"
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            exit={{ scale: 0 }}
-            transition={{ type: "spring", stiffness: 300, damping: 20 }}
-          >
-            <MessageCircle className="h-6 w-6 text-white" />
-          </motion.button>
-        )}
-      </AnimatePresence>
+      {/* Floating Button - only show if not controlled externally */}
+      {externalIsOpen === undefined && (
+        <AnimatePresence>
+          {!isOpen && (
+            <motion.button
+              onClick={() => setInternalIsOpen(true)}
+              className="w-14 h-14 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center"
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 20 }}
+            >
+              <MessageCircle className="h-6 w-6 text-white" />
+            </motion.button>
+          )}
+        </AnimatePresence>
+      )}
     </div>
   );
 }
