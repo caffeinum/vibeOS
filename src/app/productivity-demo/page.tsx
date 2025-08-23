@@ -339,9 +339,9 @@ export default function ProductivityDemo() {
 
       {/* clean empty desktop with centered logo */}
       <div className="flex-1 flex items-center justify-center relative">
-        {/* subtle animated gradient background */}
+        {/* subtle gradient background */}
         <div className="absolute inset-0 opacity-30">
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-100 to-purple-100 animate-pulse" style={{ animationDuration: '8s' }}></div>
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-100 to-purple-100"></div>
         </div>
         
         {/* centered content */}
