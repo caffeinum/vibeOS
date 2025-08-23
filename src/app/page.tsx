@@ -7,6 +7,7 @@ import { DownloadTinder } from "@/components/download-tinder";
 import { GCPVMList } from "@/components/gcp-vm-list";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { Terminal } from "@/components/terminal";
+import { CryptoTracker } from "@/components/crypto-tracker";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search } from "lucide-react";
@@ -74,6 +75,16 @@ export default function Home() {
       
       {/* Desktop */}
       <div className="flex-1 relative overflow-hidden">
+        
+        {/* Crypto Tracker Widget */}
+        <motion.div
+          initial={{ opacity: 0, x: 50 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.5, duration: 0.5 }}
+          className="absolute top-4 right-4 z-10 w-[500px]"
+        >
+          <CryptoTracker />
+        </motion.div>
         
         {/* App Windows */}
         <AnimatePresence>
