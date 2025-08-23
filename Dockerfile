@@ -33,8 +33,11 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+RUN bun add -g @makosst/mcp
+
 # Install claude-code globally
 RUN bun add -g @anthropic-ai/claude-code
+RUN mcp daemon
 
 # Set up environment for Claude Code
 ENV ANTHROPIC_API_KEY=""
