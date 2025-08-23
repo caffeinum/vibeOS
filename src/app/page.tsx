@@ -8,37 +8,40 @@ import { GCPVMList } from "@/components/gcp-vm-list";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { Terminal } from "@/components/terminal";
 import { CryptoTracker } from "@/components/crypto-tracker";
+import { Browser } from "@/components/browser";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search } from "lucide-react";
+import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search, Globe } from "lucide-react";
 
 export default function Home() {
   const [activeApp, setActiveApp] = useState<string | null>(null);
-  const [useEnhancedBrowser, setUseEnhancedBrowser] = useState(true);
+  const [useEnhancedBrowser] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showClaude, setShowClaude] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [, setDarkMode] = useState(false);
   
-  useEffect(() => {
+    useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
-  
+
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-US', { 
+    return date.toLocaleTimeString('en-US', {
       weekday: 'short',
       month: 'short',
       day: 'numeric',
       hour: 'numeric',
       minute: '2-digit',
-      hour12: true 
+      hour12: true
     });
   };
   
   const dockApps = [
     { id: 'finder', name: 'Finder', icon: <Folder className="w-8 h-8" />, color: 'from-blue-400 to-blue-600' },
     { id: 'downloads', name: 'Downloads', icon: <Download className="w-8 h-8" />, color: 'from-pink-400 to-red-600' },
+    { id: 'browser', name: 'Browser', icon: <Globe className="w-8 h-8" />, color: 'from-orange-400 to-red-500' },
     { id: 'gcp', name: 'GCP VMs', icon: <Cloud className="w-8 h-8" />, color: 'from-cyan-400 to-blue-600' },
     { id: 'claude', name: 'Claude Chat', icon: <MessageCircle className="w-8 h-8" />, color: 'from-purple-400 to-purple-600' },
     { id: 'terminal', name: 'Terminal', icon: <TerminalIcon className="w-8 h-8" />, color: 'from-gray-700 to-gray-900' },
@@ -159,21 +162,26 @@ export default function Home() {
           {dockApps.map((app) => (
             <motion.button
               key={app.id}
-              onClick={() => {
-                if (app.id === 'claude') {
-                  setShowClaude(true);
-                } else if (app.id === 'terminal') {
-                  setShowTerminal(true);
-                } else if (app.id === 'settings') {
-                  setDarkMode(prev => !prev);
-                } else {
-                  setActiveApp(activeApp === app.id ? null : app.id);
-                }
-              }}
               whileHover={{ scale: 1.3, y: -10 }}
               whileTap={{ scale: 0.95 }}
               transition={{ type: "spring", stiffness: 300, damping: 20 }}
               className="relative group"
+              onClick={() => {
+                if (app.id === 'claude') {
+                  setShowClaude(prev => !prev);
+                } else if (app.id === 'terminal') {
+                  setShowTerminal(true);
+                } else if (app.id === 'browser') {
+                  setShowBrowser(true);
+                } else if (app.id === 'settings') {
+                  setDarkMode(prev => !prev);
+                } else {
+                  const newActiveApp = activeApp === app.id ? null : app.id;
+                  setActiveApp(newActiveApp);
+                  // Reset window position when opening a new app
+
+                }
+              }}
             >
               <div className={`w-14 h-14 bg-gradient-to-br ${app.color} rounded-xl flex items-center justify-center text-white shadow-lg`}>
                 {app.icon}
@@ -194,15 +202,19 @@ export default function Home() {
       </div>
       
       {/* Controlled Components */}
-      <ClaudeChat 
-        position="bottom-right" 
-        size="lg" 
+      <ClaudeChat
+        position="bottom-right"
+        size="lg"
         isOpen={showClaude}
         onClose={() => setShowClaude(false)}
       />
-      <Terminal 
+      <Terminal
         isOpen={showTerminal}
         onClose={() => setShowTerminal(false)}
+      />
+      <Browser
+        isOpen={showBrowser}
+        onClose={() => setShowBrowser(false)}
       />
       <div style={{ display: 'none' }}>
         <DarkModeToggle />

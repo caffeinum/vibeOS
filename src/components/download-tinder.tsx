@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion, useMotionValue, useTransform, AnimatePresence } from "framer-motion";
 import { api } from "@/utils/api";
 import { 
@@ -198,9 +198,18 @@ export function DownloadTinder() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [history, setHistory] = useState<SwipeAction[]>([]);
   const [stats, setStats] = useState({ kept: 0, trashed: 0 });
+  const [systemInfo, setSystemInfo] = useState<any>(null);
 
   const { data, isLoading, error } = api.files.getDownloads.useQuery();
-  
+
+  const { data: systemInfoData } = api.files.getSystemInfo.useQuery();
+
+  useEffect(() => {
+    if (systemInfoData?.success && systemInfoData?.systemInfo) {
+      setSystemInfo(systemInfoData.systemInfo);
+    }
+  }, [systemInfoData]);
+
   const files = data?.files || [];
 
   const moveToTrashMutation = api.files.moveToTrash.useMutation();
@@ -225,11 +234,10 @@ export function DownloadTinder() {
     } else {
       // move to documents
       setStats(prev => ({ ...prev, kept: prev.kept + 1 }));
-      const homePath = '/Users/aleks'; // client-side doesn't have access to process.env.HOME
-      const documentsPath = `${homePath}/Documents`;
-      await moveFileMutation.mutateAsync({ 
+      const documentsPath = systemInfo?.documentsPath || (systemInfo?.homeDir + (systemInfo?.platform === 'win32' ? '\\Documents' : '/Documents'));
+      await moveFileMutation.mutateAsync({
         sourcePath: currentFile.path,
-        destinationDir: documentsPath 
+        destinationDir: documentsPath
       });
     }
 

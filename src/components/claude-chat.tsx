@@ -145,10 +145,26 @@ export function ClaudeChat({
 
     setInput("");
     setSelectedImages([]);
+
+    // Reset textarea height
+    setTimeout(() => {
+      const textareas = document.querySelectorAll('textarea');
+      textareas.forEach(textarea => {
+        (textarea as HTMLTextAreaElement).style.height = '36px';
+      });
+    }, 0);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
+
+    // Auto-resize textarea
+    const textarea = e.target;
+    textarea.style.height = '36px';
+    const scrollHeight = textarea.scrollHeight;
+    if (scrollHeight > 36) {
+      textarea.style.height = Math.min(scrollHeight, 120) + 'px';
+    }
   };
 
   // handle paste event for images
@@ -457,14 +473,14 @@ export function ClaudeChat({
                 )}
 
                 <div className="flex gap-2 items-end">
-                  <div className="flex-1">
+                  <div className="flex-1 flex items-end">
                     <textarea
                       value={input}
                       onChange={handleInputChange}
                       onKeyPress={handleKeyPress}
                       onPaste={handlePaste}
                       placeholder="message claude code..."
-                      className="w-full px-4 py-2 text-sm bg-gray-50 rounded-full border border-gray-300 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                      className="w-full px-4 py-2 text-sm text-gray-900 bg-gray-50 rounded-full border border-gray-300 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none min-h-[36px] max-h-[120px] overflow-hidden"
                       disabled={isLoading}
                       rows={1}
                     />
@@ -486,7 +502,7 @@ export function ClaudeChat({
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-3 py-2 bg-gray-200 text-gray-700 text-sm rounded-full hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
+                    className="flex-shrink-0 h-9 w-9 bg-gray-200 text-gray-700 rounded-full hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                     disabled={isLoading}
                   >
                     <ImagePlus className="h-4 w-4" />
@@ -496,7 +512,7 @@ export function ClaudeChat({
                       whileHover={{ scale: 1.05 }}
                       whileTap={{ scale: 0.95 }}
                       onClick={stop}
-                      className="px-3 py-2 bg-blue-500 text-white text-sm rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
+                      className="flex-shrink-0 h-9 w-9 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                     >
                       <StopCircle className="h-4 w-4" />
                     </motion.button>
@@ -506,7 +522,7 @@ export function ClaudeChat({
                       whileHover={{ scale: 1.05 }}
                       whileTap={{ scale: 0.95 }}
                       onClick={handleSubmit}
-                      className="px-3 py-2 bg-blue-500 text-white text-sm rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
+                      className="flex-shrink-0 h-9 w-9 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                     >
                       <Send className="h-4 w-4" />
                     </motion.button>
