@@ -1,9 +1,16 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
+import { DefaultChatTransport, UIDataTypes, UIMessagePart, UITools } from "ai";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, MessageCircle, Send, StopCircle, ImagePlus, X } from "lucide-react";
+import {
+  Bot,
+  ImagePlus,
+  MessageCircle,
+  Send,
+  StopCircle,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 interface ClaudeChatProps {
@@ -49,7 +56,9 @@ export function ClaudeChat({
   });
 
   const [input, setInput] = useState("");
-  const [selectedImages, setSelectedImages] = useState<Array<{ url: string; file: File }>>([]);
+  const [selectedImages, setSelectedImages] = useState<
+    Array<{ url: string; file: File }>
+  >([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // type ChatStatus = 'submitted' | 'streaming' | 'ready' | 'error';
@@ -110,18 +119,18 @@ export function ClaudeChat({
   };
 
   const handleSendMessage = async () => {
-    const parts: Array<{ type: string; text?: string; image?: string; mimeType?: string }> = [];
-    
+    const parts: UIMessagePart<UIDataTypes, UITools>[] = [];
+
     // add images as parts
     for (const img of selectedImages) {
       const base64 = await convertImageToBase64(img.file);
       parts.push({
-        type: "image",
-        image: base64,
-        mimeType: img.file.type,
+        type: "file",
+        url: base64,
+        mediaType: img.file.type,
       });
     }
-    
+
     // add text
     if (input.trim()) {
       parts.push({ type: "text", text: input });
@@ -133,7 +142,7 @@ export function ClaudeChat({
       role: "user",
       parts,
     });
-    
+
     setInput("");
     setSelectedImages([]);
   };
@@ -190,8 +199,8 @@ export function ClaudeChat({
     setIsDragging(false);
 
     const files = Array.from(e.dataTransfer.files);
-    const imageFiles = files.filter(file => file.type.startsWith("image/"));
-    
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+
     if (imageFiles.length > 0) {
       const newImages: Array<{ url: string; file: File }> = [];
       for (const file of imageFiles) {
@@ -251,7 +260,9 @@ export function ClaudeChat({
               {isDragging && (
                 <div className="absolute inset-0 z-50 bg-blue-500/20 backdrop-blur-sm rounded-2xl flex items-center justify-center pointer-events-none">
                   <div className="bg-white/90 rounded-lg px-4 py-3 shadow-lg">
-                    <p className="text-sm font-medium text-gray-700">drop images here</p>
+                    <p className="text-sm font-medium text-gray-700">
+                      drop images here
+                    </p>
                   </div>
                 </div>
               )}
@@ -358,38 +369,57 @@ export function ClaudeChat({
                         }`}
                       >
                         <div className="text-sm">
-                          {msg.parts.map((part: { type: string; text?: string; image?: string; mimeType?: string; toolName?: string; url?: string; filename?: string }, index) => (
-                            <div key={part.type + "%%" + index}>
-                              {part.type === "text" && (
-                                <p className="whitespace-pre-wrap">{part.text}</p>
-                              )}
-                              {part.type === "image" && (
-                                <img
-                                  src={`data:${part.mimeType || "image/jpeg"};base64,${part.image}`}
-                                  alt="uploaded"
-                                  className="mt-2 rounded-lg max-w-full"
-                                />
-                              )}
-                              {part.type === "reasoning" && (
-                                <p className="whitespace-pre-wrap">{part.text}</p>
-                              )}
-                              {part.type === "dynamic-tool" && (
-                                <span>{part.toolName}</span>
-                              )}
-                              {part.type === "source-url" && (
-                                <span>{part.url}</span>
-                              )}
-                              {part.type === "source-document" && (
-                                <span>{part.filename || ""}</span>
-                              )}
-                              {part.type === "file" && (
-                                <span>{part.filename || ""}</span>
-                              )}
-                              {part.type === "step-start" && (
-                                <span>start</span>
-                              )}
-                            </div>
-                          ))}
+                          {msg.parts.map(
+                            (
+                              part: {
+                                type: string;
+                                text?: string;
+                                image?: string;
+                                mimeType?: string;
+                                toolName?: string;
+                                url?: string;
+                                filename?: string;
+                              },
+                              index
+                            ) => (
+                              <div key={part.type + "%%" + index}>
+                                {part.type === "text" && (
+                                  <p className="whitespace-pre-wrap">
+                                    {part.text}
+                                  </p>
+                                )}
+                                {part.type === "image" && (
+                                  <img
+                                    src={`data:${
+                                      part.mimeType || "image/jpeg"
+                                    };base64,${part.image}`}
+                                    alt="uploaded"
+                                    className="mt-2 rounded-lg max-w-full"
+                                  />
+                                )}
+                                {part.type === "reasoning" && (
+                                  <p className="whitespace-pre-wrap">
+                                    {part.text}
+                                  </p>
+                                )}
+                                {part.type === "dynamic-tool" && (
+                                  <span>{part.toolName}</span>
+                                )}
+                                {part.type === "source-url" && (
+                                  <span>{part.url}</span>
+                                )}
+                                {part.type === "source-document" && (
+                                  <span>{part.filename || ""}</span>
+                                )}
+                                {part.type === "file" && (
+                                  <span>{part.filename || ""}</span>
+                                )}
+                                {part.type === "step-start" && (
+                                  <span>start</span>
+                                )}
+                              </div>
+                            )
+                          )}
                         </div>
                       </div>
                     </motion.div>
@@ -425,7 +455,7 @@ export function ClaudeChat({
                     ))}
                   </div>
                 )}
-                
+
                 <div className="flex gap-2 items-end">
                   <div className="flex-1">
                     <textarea
@@ -439,7 +469,7 @@ export function ClaudeChat({
                       rows={1}
                     />
                   </div>
-                  
+
                   {/* Hidden file input */}
                   <input
                     ref={fileInputRef}
@@ -449,7 +479,7 @@ export function ClaudeChat({
                     onChange={handleImageSelect}
                     className="hidden"
                   />
-                  
+
                   {/* Image button */}
                   <motion.button
                     type="button"
