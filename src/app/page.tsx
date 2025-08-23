@@ -47,14 +47,14 @@ export default function Home() {
   return (
     <main className="h-screen w-screen overflow-hidden relative flex flex-col" 
       style={{
-        backgroundImage: `url('https://wallpapercave.com/wp/wp9269839.jpg')`,
+        backgroundImage: `linear-gradient(to bottom, rgba(147, 112, 219, 0.3), rgba(255, 192, 203, 0.3)), url('https://images.unsplash.com/photo-1512453979798-5ea266f8880c?q=80&w=2940')`,
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundRepeat: 'no-repeat'
       }}
     >
       {/* macOS Menu Bar */}
-      <div className="bg-black/80 backdrop-blur-xl h-7 flex items-center justify-between px-4 text-white text-xs font-medium z-50">
+      <div className="bg-black/40 backdrop-blur-2xl h-7 flex items-center justify-between px-4 text-white text-xs font-medium z-50 border-b border-white/10">
         <div className="flex items-center gap-4">
           <Apple className="w-4 h-4" />
           <span className="font-semibold">Claude OS</span>
@@ -144,7 +144,7 @@ export default function Home() {
       
       {/* macOS Dock */}
       <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
-        <div className="bg-white/20 backdrop-blur-2xl rounded-2xl p-2 flex gap-1 shadow-2xl border border-white/20">
+        <div className="bg-white/10 backdrop-blur-3xl rounded-2xl p-2 flex gap-1 shadow-2xl border border-white/30">
           {dockApps.map((app) => (
             <motion.button
               key={app.id}
