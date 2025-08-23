@@ -199,7 +199,7 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
           exit={{ opacity: 0, scale: 0.8 }}
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
           className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50"
-          style={{ width: '956px', height: '720px' }}
+          style={{ width: '956px', height: '706px' }}
         >
           <div className="bg-white/95 backdrop-blur-xl rounded-xl shadow-2xl overflow-hidden w-full h-full flex flex-col border border-white/20">
             {/* Browser Header */}
@@ -213,13 +213,6 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
                   />
                   <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600 transition-colors" />
                   <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600 transition-colors" />
-                </div>
-
-                {/* Browser Title */}
-                <div className="flex-1 text-center">
-                  <span className="text-xs font-medium text-gray-700 truncate">
-                    {getPageTitle(currentUrl)}
-                  </span>
                 </div>
               </div>
             </div>
@@ -287,8 +280,8 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
                       src={kernelBrowser?.browser_live_view_url}
                       className="w-full border-0"
                       style={{ 
-                        height: 'calc(100% + 52px)', 
-                        marginTop: '-45px' 
+                        height: 'calc(100% + 66px)', 
+                        marginTop: '-53px' 
                       }}
                       scrolling="no"
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
