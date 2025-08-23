@@ -182,3 +182,39 @@ export const CloudIcon = () => (
     </svg>
   </div>
 );
+
+export const DedalusIcon = () => (
+  <div className="w-full h-full relative">
+    <svg viewBox="0 0 100 100" className="w-full h-full">
+      <defs>
+        <linearGradient id="dedalusGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#9333EA" />
+          <stop offset="50%" stopColor="#7C3AED" />
+          <stop offset="100%" stopColor="#6366F1" />
+        </linearGradient>
+        <linearGradient id="dedalusShine" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <rect x="10" y="10" width="80" height="80" rx="18" fill="url(#dedalusGradient)" />
+      <rect x="10" y="10" width="80" height="40" rx="18" fill="url(#dedalusShine)" />
+      
+      {/* sparkles/ai effect */}
+      <g transform="translate(50,50)">
+        {/* center star */}
+        <path d="M 0,-20 L 4,-4 L 20,0 L 4,4 L 0,20 L -4,4 L -20,0 L -4,-4 Z" 
+              fill="white" opacity="0.9" />
+        {/* smaller stars */}
+        <g transform="translate(-15,-10)">
+          <path d="M 0,-8 L 2,-2 L 8,0 L 2,2 L 0,8 L -2,2 L -8,0 L -2,-2 Z" 
+                fill="white" opacity="0.7" />
+        </g>
+        <g transform="translate(18,12)">
+          <path d="M 0,-6 L 1.5,-1.5 L 6,0 L 1.5,1.5 L 0,6 L -1.5,1.5 L -6,0 L -1.5,-1.5 Z" 
+                fill="white" opacity="0.6" />
+        </g>
+      </g>
+    </svg>
+  </div>
+);
