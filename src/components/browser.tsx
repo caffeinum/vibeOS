@@ -456,9 +456,10 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.8 }}
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
-          className="fixed inset-4 z-50"
+          className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50"
+          style={{ width: '735px', height: '645px' }}
         >
-          <div className="bg-white/95 backdrop-blur-xl rounded-xl shadow-2xl overflow-hidden h-full flex flex-col border border-white/20">
+          <div className="bg-white/95 backdrop-blur-xl rounded-xl shadow-2xl overflow-hidden w-full h-full flex flex-col border border-white/20">
             {/* Browser Header */}
             <div className="bg-gray-100/80 backdrop-blur-sm border-b border-gray-200/50 px-3 py-2">
               <div className="flex items-center gap-2">
@@ -634,8 +635,8 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
               )}
             </AnimatePresence>
 
-            {/* Browser Content */}
-            <div className="flex-1 relative bg-white">
+                         {/* Browser Content */}
+             <div className="flex-1 relative bg-white overflow-hidden">
               {!isKernelReady ? (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500">
                   <Shield className="w-16 h-16 mb-4 opacity-50" />
@@ -691,14 +692,21 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
                       </button>
                     </div>
                   </div>
-                ) : (
-                  <iframe
-                    src={activeTab.kernelBrowser?.browser_live_view_url}
-                    className="w-full h-full border-0"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
-                    allow="camera; microphone; geolocation"
-                  />
-                )
+                                                   ) : (
+                    <div className="w-full h-full overflow-hidden">
+                      <iframe
+                        src={activeTab.kernelBrowser?.browser_live_view_url}
+                        className="w-full border-0"
+                        style={{ 
+                          height: 'calc(100% + 60px)', 
+                          marginTop: '-80px' 
+                        }}
+                        scrolling="no"
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
+                        allow="camera; microphone; geolocation"
+                      />
+                    </div>
+                  )
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500">
                   <Globe className="w-16 h-16 mb-4 opacity-50" />
