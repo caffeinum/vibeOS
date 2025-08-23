@@ -172,7 +172,10 @@ export function ClaudeChat({
                   </div>
                 )}
 
-                {isLoading && messages.length === 0 && (
+                {/* Show loading dots when waiting for first response */}
+                {((isLoading && messages.length === 0) ||
+                  status === "submitted" ||
+                  status === "streaming") && (
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
