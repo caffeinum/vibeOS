@@ -50,20 +50,27 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Copy Python runner for Dedalus
 COPY --from=builder --chown=nextjs:nodejs /app/src/server/dedalus-runner.py ./src/server/dedalus-runner.py
 
+# Install global packages as root
 RUN bun add -g @makosst/mcp
-
-# Install claude-code globally
 RUN bun add -g @anthropic-ai/claude-code
-# Don't run mcp daemon during build - it should be started at runtime if needed
-# RUN mcp daemon
 
 # Set up environment for Claude Code
 ENV ANTHROPIC_API_KEY=""
 
-# Create a startup script to run mcp daemon in background and then start the app (before switching to nextjs user)
-RUN echo '#!/bin/sh\nmcp daemon &\nexec bun run server.js' > /app/start.sh && \
+# Make sure global bun binaries are accessible to all users
+RUN chmod -R 755 /root/.bun/install/global
+
+# Create a startup script that checks for mcp before running it
+RUN echo '#!/bin/sh\n\
+if command -v mcp >/dev/null 2>&1; then\n\
+    mcp daemon &\n\
+fi\n\
+exec bun run server.js' > /app/start.sh && \
     chmod +x /app/start.sh && \
     chown nextjs:nodejs /app/start.sh
+
+# Add bun global bin to PATH for all users
+ENV PATH="/root/.bun/install/global/node_modules/.bin:${PATH}"
 
 USER nextjs
 
