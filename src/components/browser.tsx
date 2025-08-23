@@ -286,7 +286,7 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
             <Globe className="w-16 h-16 mb-4 opacity-50" />
             <h2 className="text-lg font-medium mb-2">Welcome to Kernel Browser</h2>
             <p className="text-sm text-center max-w-md mb-4">
-              Start browsing by entering a URL or search term in the address bar above. Powered by Kernel's isolated browser infrastructure!
+              Start browsing by entering a URL or search term in the address bar above. Powered by Kernel&apos;s isolated browser infrastructure!
             </p>
             <button
               onClick={() => window.open("https://www.wikipedia.org", '_blank')}
