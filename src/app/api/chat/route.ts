@@ -100,25 +100,6 @@ export async function POST(req: Request) {
         }
       }
 
-      // mock response for testing
-      const mockResponse = `i got your message: "${prompt}". the chat is working! meow 🐱`;
-
-      writer.write({
-        type: "text-start",
-        id: "0",
-      });
-
-      writer.write({
-        type: "text-delta",
-        delta: mockResponse,
-        id: "0",
-      });
-
-      writer.write({
-        type: "text-end",
-        id: "0",
-      });
-
       console.log("[chat/route] mock stream complete");
     },
   });
