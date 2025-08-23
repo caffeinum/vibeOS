@@ -349,8 +349,22 @@ export function ClaudeChat({
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
               className={`backdrop-blur-xs rounded-2xl flex flex-col overflow-hidden relative ${sizeConfig[size]}`}
             >
+              {/* Close button */}
+              <div className="absolute top-2 right-2 z-10">
+                <button
+                  onClick={() => {
+                    if (onClose) onClose();
+                    else setInternalIsOpen(false);
+                  }}
+                  className="p-1.5 rounded-full bg-black/20 hover:bg-black/30 backdrop-blur-sm transition-colors"
+                >
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-hide [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              <div className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-hide [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col-reverse">
                 {error && (
                   <motion.div
                     initial={{ opacity: 0, y: -10 }}
@@ -370,7 +384,9 @@ export function ClaudeChat({
                   </div>
                 )}
 
-                {messages.map((msg, index) => renderMessage(msg, index))}
+                <div ref={messagesEndRef} />
+                
+                {[...messages].reverse().map((msg, index) => renderMessage(msg, index))}
 
                 {isLoading && (
                   <motion.div
@@ -395,7 +411,6 @@ export function ClaudeChat({
                   </motion.div>
                 )}
 
-                <div ref={messagesEndRef} />
               </div>
 
               {/* Input */}
