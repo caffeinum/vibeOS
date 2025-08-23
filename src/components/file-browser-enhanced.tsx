@@ -20,7 +20,8 @@ import {
   FolderOpen,
   ChevronLeft,
   Grid,
-  List
+  List,
+  EyeOff
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@/utils/api";
@@ -127,6 +128,7 @@ export function FileBrowserEnhanced() {
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [systemInfo, setSystemInfo] = useState<any>(null);
+  const [showHidden, setShowHidden] = useState(false);
 
   const listFilesMutation = api.files.listDirectory.useMutation({
     onSuccess: (data) => {
@@ -197,7 +199,7 @@ export function FileBrowserEnhanced() {
     setIsLoading(true);
     setSelectedFile(null);
     setShowPreview(false);
-    listFilesMutation.mutate({ path });
+    listFilesMutation.mutate({ path, showHidden: true });
   }, []);
 
   const handleNavigate = (item: FileItem) => {
@@ -266,6 +268,7 @@ export function FileBrowserEnhanced() {
       searchFilesMutation.mutate({
         path: currentPath,
         query: searchQuery,
+        showHidden: true,
       });
     }
   };
@@ -276,6 +279,9 @@ export function FileBrowserEnhanced() {
   };
 
   const pathSegments = currentPath.split(systemInfo?.platform === 'win32' ? '\\' : '/').filter(Boolean);
+  
+  // Filter files based on showHidden state
+  const filteredFiles = showHidden ? files : files.filter(file => !file.name.startsWith('.'));
 
   return (
     <div className="w-full h-[600px] bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col">
@@ -312,6 +318,15 @@ export function FileBrowserEnhanced() {
           </div>
           
           <div className="flex items-center gap-2">
+            <Button
+              onClick={() => setShowHidden(!showHidden)}
+              size="icon"
+              variant="ghost"
+              className="text-white hover:bg-white/20"
+              title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+            >
+              {showHidden ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+            </Button>
             <Button
               onClick={() => setViewMode(viewMode === 'list' ? 'grid' : 'list')}
               size="icon"
@@ -411,7 +426,7 @@ export function FileBrowserEnhanced() {
 
               {/* files */}
               <AnimatePresence mode="popLayout">
-                {files
+                {filteredFiles
                   .sort((a, b) => {
                     if (a.isDirectory && !b.isDirectory) return -1;
                     if (!a.isDirectory && b.isDirectory) return 1;
@@ -451,7 +466,7 @@ export function FileBrowserEnhanced() {
           ) : (
             // grid view
             <div className="p-4 grid grid-cols-4 gap-4">
-              {files
+              {filteredFiles
                 .sort((a, b) => {
                   if (a.isDirectory && !b.isDirectory) return -1;
                   if (!a.isDirectory && b.isDirectory) return 1;
@@ -486,7 +501,7 @@ export function FileBrowserEnhanced() {
             </div>
           )}
 
-          {files.length === 0 && !isLoading && (
+          {filteredFiles.length === 0 && !isLoading && (
             <div className="p-8 text-center text-gray-400 text-sm">
               {searchQuery ? 'no files found' : 'empty directory'}
             </div>
@@ -582,7 +597,7 @@ export function FileBrowserEnhanced() {
       {/* footer */}
       <div className="border-t border-gray-200 dark:border-gray-700 px-4 py-2 bg-gray-50 dark:bg-gray-800">
         <p className="text-xs text-gray-500">
-          {files.length} items • {files.filter(f => f.isDirectory).length} folders • {files.filter(f => !f.isDirectory).length} files
+          {filteredFiles.length} items • {filteredFiles.filter(f => f.isDirectory).length} folders • {filteredFiles.filter(f => !f.isDirectory).length} files
         </p>
       </div>
     </div>

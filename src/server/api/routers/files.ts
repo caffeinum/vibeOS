@@ -10,6 +10,7 @@ export const filesRouter = createTRPCRouter({
     .input(
       z.object({
         path: z.string(),
+        showHidden: z.boolean().optional().default(false),
       })
     )
     .mutation(async ({ input }) => {
@@ -19,9 +20,14 @@ export const filesRouter = createTRPCRouter({
         // read directory contents
         const items = await fs.readdir(dirPath, { withFileTypes: true });
         
+        // filter hidden files if not requested
+        const filteredItems = input.showHidden 
+          ? items 
+          : items.filter(item => !item.name.startsWith('.'));
+        
         // get file details
         const files = await Promise.all(
-          items.map(async (item) => {
+          filteredItems.map(async (item) => {
             const fullPath = path.join(dirPath, item.name);
             let stats = null;
             
@@ -251,6 +257,7 @@ export const filesRouter = createTRPCRouter({
       z.object({
         path: z.string(),
         query: z.string(),
+        showHidden: z.boolean().optional().default(false),
       })
     )
     .mutation(async () => {

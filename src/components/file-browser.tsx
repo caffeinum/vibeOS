@@ -12,10 +12,13 @@ import {
   Music,
   Archive,
   Code,
-  Terminal
+  Terminal,
+  Eye,
+  EyeOff
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@/utils/api";
+import { Button } from "@/components/ui/button";
 
 interface FileItem {
   name: string;
@@ -84,6 +87,7 @@ export function FileBrowser() {
   const [error, setError] = useState<string>("");
   const [systemInfo, setSystemInfo] = useState<any>(null);
   const [selectedFile, setSelectedFile] = useState<string>("");
+  const [showHidden, setShowHidden] = useState(false);
 
   const listFilesMutation = api.files.listDirectory.useMutation({
     onSuccess: (data) => {
@@ -103,7 +107,7 @@ export function FileBrowser() {
 
   const loadDirectory = useCallback((path: string) => {
     setIsLoading(true);
-    listFilesMutation.mutate({ path });
+    listFilesMutation.mutate({ path, showHidden: true });
   }, [listFilesMutation]);
 
   useEffect(() => {
@@ -146,6 +150,9 @@ export function FileBrowser() {
   };
 
   const pathSegments = currentPath.split(systemInfo?.platform === 'win32' ? '\\' : '/').filter(Boolean);
+  
+  // Filter files based on showHidden state
+  const filteredFiles = showHidden ? files : files.filter(file => !file.name.startsWith('.'));
 
   return (
     <div className="w-full max-w-4xl mx-auto p-6">
@@ -158,12 +165,25 @@ export function FileBrowser() {
         <div className="bg-gradient-to-r from-blue-500 to-purple-600 p-4">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-white text-lg font-medium">file browser</h2>
-            <button
-              onClick={handleGoHome}
-              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-            >
-              <Home className="h-4 w-4 text-white" />
-            </button>
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => setShowHidden(!showHidden)}
+                size="icon"
+                variant="ghost"
+                className="text-white hover:bg-white/20"
+                title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+              >
+                {showHidden ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+              </Button>
+              <Button
+                onClick={handleGoHome}
+                size="icon"
+                variant="ghost"
+                className="text-white hover:bg-white/20"
+              >
+                <Home className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
           
           {/* breadcrumb */}
@@ -228,7 +248,7 @@ export function FileBrowser() {
 
               {/* directories first, then files */}
               <AnimatePresence mode="popLayout">
-                {files
+                {filteredFiles
                   .sort((a, b) => {
                     if (a.isDirectory && !b.isDirectory) return -1;
                     if (!a.isDirectory && b.isDirectory) return 1;
@@ -271,7 +291,7 @@ export function FileBrowser() {
                   ))}
               </AnimatePresence>
 
-              {files.length === 0 && !isLoading && (
+              {filteredFiles.length === 0 && !isLoading && (
                 <div className="p-8 text-center text-gray-400 text-sm">
                   empty directory
                 </div>
@@ -283,7 +303,7 @@ export function FileBrowser() {
         {/* footer */}
         <div className="border-t border-gray-200 px-4 py-2 bg-gray-50">
           <p className="text-xs text-gray-500">
-            {files.length} items • {files.filter(f => f.isDirectory).length} folders
+            {filteredFiles.length} items • {filteredFiles.filter(f => f.isDirectory).length} folders
           </p>
         </div>
       </motion.div>
