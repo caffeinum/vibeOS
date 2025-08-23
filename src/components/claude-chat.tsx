@@ -46,6 +46,11 @@ export function ClaudeChat({
         setCurrentStreamId(data.streamId);
       }
     },
+    onError: (error) => {
+      console.error("[claude-chat] mutation error:", error);
+      // remove the user message if request failed
+      setMessages(prev => prev.slice(0, -1));
+    },
   });
 
   const { error, isPending: isLoading } = clickMutation;
@@ -64,8 +69,27 @@ export function ClaudeChat({
   // update messages when stream data changes
   useEffect(() => {
     if (stream.data?.messages && stream.data.messages.length > 0) {
-      console.log("[claude-chat] updating messages:", stream.data.messages.length);
-      setMessages(stream.data.messages);
+      console.log("[claude-chat] stream has", stream.data.messages.length, "messages");
+      
+      // append new messages to existing conversation
+      setMessages(prev => {
+        // if this is a new stream, append to existing messages
+        if (currentStreamId && prev.length > 0) {
+          // check if the first message in stream is a user message we already have
+          const streamUserMsg = stream.data.messages[0];
+          const lastPrevMsg = prev[prev.length - 1];
+          
+          if (streamUserMsg?.type === "user" && lastPrevMsg?.type === "user" && 
+              streamUserMsg.message?.content?.[0]?.text === lastPrevMsg.message?.content?.[0]?.text) {
+            // skip duplicate user message, append rest
+            return [...prev, ...stream.data.messages.slice(1)];
+          }
+          // append all new messages
+          return [...prev, ...stream.data.messages];
+        }
+        // first message batch, just set them
+        return stream.data.messages;
+      });
       
       // extract session id from messages if available
       const sessionMsg = stream.data.messages.find((m: SDKMessage) => m.session_id);
@@ -79,7 +103,7 @@ export function ClaudeChat({
       console.log("[claude-chat] stream complete, clearing stream id");
       setTimeout(() => setCurrentStreamId(null), 500);
     }
-  }, [stream.data, sessionId]);
+  }, [stream.data, currentStreamId]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -98,9 +122,24 @@ export function ClaudeChat({
     const currentPrompt = prompt;
     setPrompt("");
     
-    // clear old messages if starting new conversation
-    if (!continueSession || !sessionId) {
-      setMessages([]);
+    // add user message immediately to UI
+    const userMessage: SDKMessage = {
+      type: "user" as const,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: currentPrompt }]
+      },
+      session_id: sessionId || "temp",
+      parent_tool_use_id: null
+    } as SDKMessage;
+    
+    // append user message or start fresh
+    if (continueSession && sessionId && messages.length > 0) {
+      setMessages(prev => [...prev, userMessage]);
+    } else {
+      // new conversation
+      setMessages([userMessage]);
+      setSessionId("");
     }
 
     // generate unique stream id
