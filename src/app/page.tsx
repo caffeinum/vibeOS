@@ -10,6 +10,7 @@ import { Terminal } from "@/components/terminal";
 import { CryptoTracker } from "@/components/crypto-tracker";
 import { Browser } from "@/components/browser";
 import { MacOSDock } from "@/components/macos-dock";
+import { FinderIcon, SafariIcon, MessagesIcon, TerminalIcon as MacTerminalIcon, SystemPreferencesIcon, DownloadsIcon, CloudIcon } from "@/components/macos-icons";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search, Globe } from "lucide-react";
@@ -46,13 +47,13 @@ export default function Home() {
   };
   
   const dockApps = [
-    { id: 'finder', name: 'Finder', icon: <Folder className="w-8 h-8" />, color: 'from-blue-400 to-blue-600' },
-    { id: 'downloads', name: 'Downloads', icon: <Download className="w-8 h-8" />, color: 'from-pink-400 to-red-600' },
-    { id: 'browser', name: 'Browser', icon: <Globe className="w-8 h-8" />, color: 'from-orange-400 to-red-500' },
-    { id: 'gcp', name: 'GCP VMs', icon: <Cloud className="w-8 h-8" />, color: 'from-cyan-400 to-blue-600' },
-    { id: 'claude', name: 'Claude Chat', icon: <MessageCircle className="w-8 h-8" />, color: 'from-purple-400 to-purple-600' },
-    { id: 'terminal', name: 'Terminal', icon: <TerminalIcon className="w-8 h-8" />, color: 'from-gray-700 to-gray-900' },
-    { id: 'settings', name: 'Settings', icon: <Settings className="w-8 h-8" />, color: 'from-gray-400 to-gray-600' },
+    { id: 'finder', name: 'Finder', icon: <FinderIcon /> },
+    { id: 'browser', name: 'Safari', icon: <SafariIcon /> },
+    { id: 'claude', name: 'Messages', icon: <MessagesIcon /> },
+    { id: 'terminal', name: 'Terminal', icon: <MacTerminalIcon /> },
+    { id: 'downloads', name: 'Downloads', icon: <DownloadsIcon /> },
+    { id: 'gcp', name: 'Cloud', icon: <CloudIcon /> },
+    { id: 'settings', name: 'System Preferences', icon: <SystemPreferencesIcon /> },
   ];
 
   return (

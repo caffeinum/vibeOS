@@ -106,28 +106,13 @@ function DockIcon({
     >
       {/* Icon Container */}
       <motion.div
-        className={cn(
-          "w-full h-full rounded-xl flex items-center justify-center relative overflow-hidden",
-          "bg-gradient-to-br shadow-lg transition-all",
-          item.color || "from-gray-400 to-gray-600"
-        )}
+        className="w-full h-full flex items-center justify-center relative"
         whileTap={{ scale: 0.95 }}
       >
-        {/* Glass effect overlay */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-white/20" />
-        
         {/* Icon */}
-        <div className="relative z-10 text-white">
+        <div className="relative w-full h-full">
           {item.icon}
         </div>
-
-        {/* Shine effect */}
-        <motion.div
-          className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/20 to-transparent"
-          initial={{ x: "-100%", y: "-100%" }}
-          animate={isHovered ? { x: "100%", y: "100%" } : { x: "-100%", y: "-100%" }}
-          transition={{ duration: 0.6 }}
-        />
       </motion.div>
 
       {/* Tooltip */}
