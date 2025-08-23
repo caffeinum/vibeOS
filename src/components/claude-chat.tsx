@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, MessageCircle, Send, StopCircle } from "lucide-react";
+import { Bot, MessageCircle, Send, StopCircle, ImagePlus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 interface ClaudeChatProps {
@@ -25,6 +25,7 @@ export function ClaudeChat({
   const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const sizeConfig = {
     sm: "w-80 h-96",
@@ -48,6 +49,8 @@ export function ClaudeChat({
   });
 
   const [input, setInput] = useState("");
+  const [selectedImages, setSelectedImages] = useState<Array<{ url: string; file: File }>>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // type ChatStatus = 'submitted' | 'streaming' | 'ready' | 'error';
   const isLoading = status === "streaming";
@@ -60,28 +63,143 @@ export function ClaudeChat({
     scrollToBottom();
   }, [messages]);
 
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    const newImages: Array<{ url: string; file: File }> = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.type.startsWith("image/")) {
+        const url = URL.createObjectURL(file);
+        newImages.push({ url, file });
+      }
+    }
+    setSelectedImages([...selectedImages, ...newImages]);
+  };
+
+  const removeImage = (index: number) => {
+    const newImages = [...selectedImages];
+    URL.revokeObjectURL(newImages[index].url);
+    newImages.splice(index, 1);
+    setSelectedImages(newImages);
+  };
+
+  const convertImageToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result as string;
+        resolve(base64.split(",")[1]); // remove data:image/...;base64, prefix
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      sendMessage({
-        role: "user",
-        parts: [{ type: "text", text: input }],
-      });
-      setInput("");
+      handleSendMessage();
     }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    handleSendMessage();
+  };
+
+  const handleSendMessage = async () => {
+    const parts: Array<{ type: string; text?: string; image?: string; mimeType?: string }> = [];
+    
+    // add images as parts
+    for (const img of selectedImages) {
+      const base64 = await convertImageToBase64(img.file);
+      parts.push({
+        type: "image",
+        image: base64,
+        mimeType: img.file.type,
+      });
+    }
+    
+    // add text
+    if (input.trim()) {
+      parts.push({ type: "text", text: input });
+    }
+
+    if (parts.length === 0) return;
+
     sendMessage({
       role: "user",
-      parts: [{ type: "text", text: input }],
+      parts,
     });
+    
     setInput("");
+    setSelectedImages([]);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
+  };
+
+  // handle paste event for images
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const imageItems: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          imageItems.push(file);
+        }
+      }
+    }
+
+    if (imageItems.length > 0) {
+      e.preventDefault();
+      const newImages: Array<{ url: string; file: File }> = [];
+      for (const file of imageItems) {
+        const url = URL.createObjectURL(file);
+        newImages.push({ url, file });
+      }
+      setSelectedImages([...selectedImages, ...newImages]);
+    }
+  };
+
+  // handle drag and drop
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget === e.target) {
+      setIsDragging(false);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const imageFiles = files.filter(file => file.type.startsWith("image/"));
+    
+    if (imageFiles.length > 0) {
+      const newImages: Array<{ url: string; file: File }> = [];
+      for (const file of imageFiles) {
+        const url = URL.createObjectURL(file);
+        newImages.push({ url, file });
+      }
+      setSelectedImages([...selectedImages, ...newImages]);
+    }
   };
 
   return (
@@ -125,7 +243,19 @@ export function ClaudeChat({
               exit={{ opacity: 0, scale: 0.8, y: 20 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
               className={`backdrop-blur-xs rounded-2xl flex flex-col overflow-hidden relative ${sizeConfig[size]}`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
             >
+              {/* Drag overlay */}
+              {isDragging && (
+                <div className="absolute inset-0 z-50 bg-blue-500/20 backdrop-blur-sm rounded-2xl flex items-center justify-center pointer-events-none">
+                  <div className="bg-white/90 rounded-lg px-4 py-3 shadow-lg">
+                    <p className="text-sm font-medium text-gray-700">drop images here</p>
+                  </div>
+                </div>
+              )}
+
               {/* Close button */}
               <div className="absolute top-2 right-2 z-10">
                 <button
@@ -227,23 +357,40 @@ export function ClaudeChat({
                             : "bg-gray-200 text-gray-900 rounded-bl-md"
                         }`}
                       >
-                        <p className="text-sm whitespace-pre-wrap">
-                          {msg.parts.map((part, index) => (
-                            <span key={part.type + "%%" + index}>
-                              {part.type === "text" ? part.text : ""}
-                              {part.type === "reasoning" ? part.text : ""}
-                              {part.type === "dynamic-tool"
-                                ? part.toolName
-                                : ""}
-                              {part.type === "source-url" ? part.url : ""}
-                              {part.type === "source-document"
-                                ? part.filename || ""
-                                : ""}
-                              {part.type === "file" ? part.filename || "" : ""}
-                              {part.type === "step-start" ? "start" : ""}
-                            </span>
+                        <div className="text-sm">
+                          {msg.parts.map((part: { type: string; text?: string; image?: string; mimeType?: string; toolName?: string; url?: string; filename?: string }, index) => (
+                            <div key={part.type + "%%" + index}>
+                              {part.type === "text" && (
+                                <p className="whitespace-pre-wrap">{part.text}</p>
+                              )}
+                              {part.type === "image" && (
+                                <img
+                                  src={`data:${part.mimeType || "image/jpeg"};base64,${part.image}`}
+                                  alt="uploaded"
+                                  className="mt-2 rounded-lg max-w-full"
+                                />
+                              )}
+                              {part.type === "reasoning" && (
+                                <p className="whitespace-pre-wrap">{part.text}</p>
+                              )}
+                              {part.type === "dynamic-tool" && (
+                                <span>{part.toolName}</span>
+                              )}
+                              {part.type === "source-url" && (
+                                <span>{part.url}</span>
+                              )}
+                              {part.type === "source-document" && (
+                                <span>{part.filename || ""}</span>
+                              )}
+                              {part.type === "file" && (
+                                <span>{part.filename || ""}</span>
+                              )}
+                              {part.type === "step-start" && (
+                                <span>start</span>
+                              )}
+                            </div>
                           ))}
-                        </p>
+                        </div>
                       </div>
                     </motion.div>
                   </motion.div>
@@ -257,18 +404,63 @@ export function ClaudeChat({
                 onSubmit={handleSubmit}
                 className="p-4 border-t border-gray-200 bg-white/50"
               >
+                {/* Image preview */}
+                {selectedImages.length > 0 && (
+                  <div className="flex gap-2 mb-2 overflow-x-auto">
+                    {selectedImages.map((img, index) => (
+                      <div key={index} className="relative group">
+                        <img
+                          src={img.url}
+                          alt={`preview ${index}`}
+                          className="h-16 w-16 object-cover rounded-lg border border-gray-300"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeImage(index)}
+                          className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                
                 <div className="flex gap-2 items-end">
                   <div className="flex-1">
                     <textarea
                       value={input}
                       onChange={handleInputChange}
                       onKeyPress={handleKeyPress}
+                      onPaste={handlePaste}
                       placeholder="message claude code..."
                       className="w-full px-4 py-2 text-sm bg-gray-50 rounded-full border border-gray-300 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                       disabled={isLoading}
                       rows={1}
                     />
                   </div>
+                  
+                  {/* Hidden file input */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    onChange={handleImageSelect}
+                    className="hidden"
+                  />
+                  
+                  {/* Image button */}
+                  <motion.button
+                    type="button"
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3 py-2 bg-gray-200 text-gray-700 text-sm rounded-full hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
+                    disabled={isLoading}
+                  >
+                    <ImagePlus className="h-4 w-4" />
+                  </motion.button>
                   {isLoading && (
                     <motion.button
                       whileHover={{ scale: 1.05 }}
