@@ -103,7 +103,7 @@ export const NativeTerminal: React.FC<NativeTerminalProps> = ({
       // display stdout
       if (result.stdout) {
         const lines = result.stdout.split('\n');
-        lines.forEach(line => {
+        lines.forEach((line: string) => {
           if (line.trim()) {
             setTerminalOutput(prev => [...prev, { type: 'output', text: line }]);
           }
@@ -113,7 +113,7 @@ export const NativeTerminal: React.FC<NativeTerminalProps> = ({
       // display stderr
       if (result.stderr) {
         const lines = result.stderr.split('\n');
-        lines.forEach(line => {
+        lines.forEach((line: string) => {
           if (line.trim()) {
             setTerminalOutput(prev => [...prev, { type: 'error', text: line }]);
           }
