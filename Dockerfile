@@ -38,9 +38,9 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh || \
      pip3 install uv)
 ENV PATH="/root/.local/bin:/root/.cargo/bin:${PATH}"
 
-# Create a non-root user
+# Create a non-root user with a proper home directory
 RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN useradd --system --uid 1001 --gid nodejs --home /home/nextjs --create-home --shell /bin/sh nextjs
 
 # Copy built application
 COPY --from=builder /app/public ./public
@@ -50,15 +50,23 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Copy Python runner for Dedalus
 COPY --from=builder --chown=nextjs:nodejs /app/src/server/dedalus-runner.py ./src/server/dedalus-runner.py
 
-# Install global packages as root
+# Install global packages in a shared location
+RUN mkdir -p /usr/local/share/bun-global && \
+    chmod 755 /usr/local/share/bun-global
+
+# Set BUN_INSTALL to shared location before installing global packages
+ENV BUN_INSTALL="/usr/local/share/bun-global"
+ENV PATH="/usr/local/share/bun-global/bin:${PATH}"
+
+# Install global packages
 RUN bun add -g @makosst/mcp
 RUN bun add -g @anthropic-ai/claude-code
 
+# Make sure the binaries are executable by all users
+RUN chmod -R 755 /usr/local/share/bun-global
+
 # Set up environment for Claude Code
 ENV ANTHROPIC_API_KEY=""
-
-# Make sure global bun binaries are accessible to all users
-RUN chmod -R 755 /root/.bun/install/global
 
 # Create a startup script that checks for mcp before running it
 RUN echo '#!/bin/sh\n\
@@ -68,9 +76,6 @@ fi\n\
 exec bun run server.js' > /app/start.sh && \
     chmod +x /app/start.sh && \
     chown nextjs:nodejs /app/start.sh
-
-# Add bun global bin to PATH for all users
-ENV PATH="/root/.bun/install/global/node_modules/.bin:${PATH}"
 
 USER nextjs
 
