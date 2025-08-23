@@ -384,10 +384,6 @@ export function ClaudeChat({
                   </div>
                 )}
 
-                <div ref={messagesEndRef} />
-                
-                {[...messages].reverse().map((msg, index) => renderMessage(msg, index))}
-
                 {isLoading && (
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}
@@ -410,6 +406,10 @@ export function ClaudeChat({
                     </div>
                   </motion.div>
                 )}
+                
+                {[...messages].reverse().map((msg, index) => renderMessage(msg, index))}
+                
+                <div ref={messagesEndRef} />
 
               </div>
 
