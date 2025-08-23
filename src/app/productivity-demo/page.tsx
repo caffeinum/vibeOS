@@ -321,246 +321,91 @@ export default function ProductivityDemo() {
   );
 
   const AfterSection = () => (
-    <div className="h-full flex flex-col">
-      {/* clean smart tab bar */}
-      <div className="border-b border-green-500/20 p-2 bg-gradient-to-r from-green-500/5 to-blue-500/5">
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            {["project docs", "code editor", "local server", "team chat", "calendar"].map((tab, i) => (
-              <div
-                key={i}
-                className={`px-3 py-1.5 text-xs rounded-t border ${
-                  i === 0
-                    ? "bg-white border-green-500 text-green-600 font-medium"
-                    : "bg-green-50 border-green-200 text-gray-600"
-                }`}
-              >
-                {tab}
-              </div>
-            ))}
-          </div>
-          <span className="text-xs text-green-600 font-medium px-2">
-            only 5 focused tabs
-          </span>
-        </div>
-        <div className="flex items-center justify-between px-4 py-2">
-          <div className="flex items-center gap-4">
-            <span className="text-lg font-bold text-green-600">
-              anti-procrastination os
-            </span>
-            
-            {/* work/relax mode toggle */}
-            <div className="flex items-center gap-1 bg-white/70 rounded-full p-0.5">
-              <button
-                onClick={() => setWorkMode("work")}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
-                  workMode === "work" 
-                    ? "bg-blue-500 text-white shadow-sm" 
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                <Zap className="w-3 h-3 inline mr-1" />
-                work mode
-              </button>
-              <button
-                onClick={() => setWorkMode("relax")}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
-                  workMode === "relax" 
-                    ? "bg-green-500 text-white shadow-sm" 
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                <Coffee className="w-3 h-3 inline mr-1" />
-                relax mode
-              </button>
-            </div>
-          </div>
+    <div className="h-full flex flex-col bg-gradient-to-br from-indigo-50 via-white to-purple-50">
+      {/* minimal header */}
+      <div className="h-8 bg-white/50 backdrop-blur-sm border-b border-gray-100">
+        <div className="h-full flex items-center justify-between px-4">
           <div className="flex items-center gap-3">
-            <span className="text-sm text-green-600 font-medium">
-              deep focus: {Math.floor(focusedTime / 60)}m {focusedTime % 60}s
-            </span>
-            <span className="text-sm text-gray-500">
-              {formatTime(currentTime)}
-            </span>
+            <div className="w-2 h-2 rounded-full bg-green-400"></div>
+            <span className="text-xs text-gray-400">{formatTime(currentTime)}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-2 h-2 rounded-full bg-gray-300"></div>
+            <div className="w-2 h-2 rounded-full bg-gray-300"></div>
+            <div className="w-2 h-2 rounded-full bg-gray-300"></div>
           </div>
         </div>
       </div>
 
-      {/* clean focused workspace */}
-      <div className="flex-1 p-6 space-y-4 overflow-auto bg-gradient-to-br from-white to-green-50/30">
-        <div className="text-center mb-6">
-          <h2 className="text-3xl font-bold text-gray-800 mb-2">
-            the os that beats procrastination
-          </h2>
-          <p className="text-lg text-gray-600">
-            browsers need to evolve - vibe os is the answer
-          </p>
-          <p className="text-sm text-green-600 mt-2 font-medium">
-            focus is currency. people will pay for this.
-          </p>
+      {/* clean empty desktop with centered logo */}
+      <div className="flex-1 flex items-center justify-center relative">
+        {/* subtle animated gradient background */}
+        <div className="absolute inset-0 opacity-30">
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-100 to-purple-100 animate-pulse" style={{ animationDuration: '8s' }}></div>
         </div>
-
-        {/* hero feature */}
-        <GlassEffect className="p-6 bg-gradient-to-br from-green-50/50 to-blue-50/50 border-2 border-green-500/30">
-          <div className="text-center mb-4">
-            <h3 className="font-bold text-xl text-green-600">intelligent tab management</h3>
-            <p className="text-sm text-gray-600 mt-1">vibe os knows what you need, when you need it</p>
-          </div>
-          
-          <div className="grid grid-cols-3 gap-4 mt-4">
-            <div className="text-center">
-              <Brain className="w-8 h-8 text-blue-500 mx-auto mb-2" />
-              <p className="text-xs font-semibold">smart grouping</p>
-              <p className="text-xs text-gray-500">auto-organizes by project</p>
-            </div>
-            <div className="text-center">
-              <Focus className="w-8 h-8 text-green-500 mx-auto mb-2" />
-              <p className="text-xs font-semibold">focus mode</p>
-              <p className="text-xs text-gray-500">hides irrelevant tabs</p>
-            </div>
-            <div className="text-center">
-              <Sparkles className="w-8 h-8 text-purple-500 mx-auto mb-2" />
-              <p className="text-xs font-semibold">ai-powered</p>
-              <p className="text-xs text-gray-500">learns your patterns</p>
-            </div>
-          </div>
-        </GlassEffect>
-
-        {/* anti-procrastination features */}
-        <div className="grid grid-cols-2 gap-4">
-          <GlassEffect className="p-4 border-green-500/30 bg-white">
-            <div className="flex items-center gap-2 mb-3">
-              <Target className="w-5 h-5 text-green-500" />
-              <span className="font-semibold">procrastination blocker</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-green-500" />
-                <span className="text-xs">blocks time-wasting sites in work mode</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-green-500" />
-                <span className="text-xs">gentle nudges when off-track</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-green-500" />
-                <span className="text-xs">rewards focus streaks</span>
-              </div>
-            </div>
-          </GlassEffect>
-
-          <GlassEffect className="p-4 border-blue-500/30 bg-white">
-            <div className="flex items-center gap-2 mb-3">
-              <Clock className="w-5 h-5 text-blue-500" />
-              <span className="font-semibold">smart scheduling</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-blue-500" />
-                <span className="text-xs">auto-opens tabs for meetings</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-blue-500" />
-                <span className="text-xs">prepares workspace by time of day</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-blue-500" />
-                <span className="text-xs">closes work tabs after hours</span>
-              </div>
-            </div>
-          </GlassEffect>
-
-          <GlassEffect className="p-4 border-purple-500/30 bg-white">
-            <div className="flex items-center gap-2 mb-3">
-              <Zap className="w-5 h-5 text-purple-500" />
-              <span className="font-semibold">instant context</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-purple-500" />
-                <span className="text-xs">remembers where you left off</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-purple-500" />
-                <span className="text-xs">saves tab states between sessions</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-purple-500" />
-                <span className="text-xs">one-click workspace restore</span>
-              </div>
-            </div>
-          </GlassEffect>
-
-          <GlassEffect className="p-4 border-yellow-500/30 bg-white">
-            <div className="flex items-center gap-2 mb-3">
-              <TrendingUp className="w-5 h-5 text-yellow-500" />
-              <span className="font-semibold">productivity analytics</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-yellow-500" />
-                <span className="text-xs">tracks focus time vs distraction</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-yellow-500" />
-                <span className="text-xs">shows productivity patterns</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-yellow-500" />
-                <span className="text-xs">suggests optimal work times</span>
-              </div>
-            </div>
-          </GlassEffect>
-        </div>
-
-        {/* the value proposition */}
-        <GlassEffect className="p-6 bg-gradient-to-r from-green-50 to-blue-50 border-2 border-green-500/30">
-          <h3 className="font-bold text-lg mb-4 text-center text-green-600">
-            your daily wins with vibe os
-          </h3>
-          <div className="grid grid-cols-3 gap-4 text-center">
-            <div>
-              <div className="text-2xl font-bold text-green-600">5 tabs</div>
-              <div className="text-xs text-gray-600">instead of 300+</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-blue-600">2.5h</div>
-              <div className="text-xs text-gray-600">saved daily</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-purple-600">0</div>
-              <div className="text-xs text-gray-600">procrastination loops</div>
-            </div>
-          </div>
-          <div className="mt-4 text-center">
-            <p className="text-sm font-medium text-gray-700">
-              "the browser that actually helps you get shit done"
-            </p>
-            <p className="text-xs text-green-600 mt-2">
-              join 50k+ users who beat procrastination daily
-            </p>
-          </div>
-        </GlassEffect>
-
-        {/* call to action */}
-        {!autoPilotActive && (
+        
+        {/* centered content */}
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+          className="text-center z-10"
+        >
+          {/* logo */}
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="text-center"
+            initial={{ y: -20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            transition={{ delay: 0.2, duration: 0.5 }}
+            className="mb-8"
           >
-            <Button
-              onClick={() => setAutoPilotActive(true)}
-              className="bg-gradient-to-r from-green-500 to-blue-500 text-white px-8 py-3 text-lg font-semibold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
-            >
-              <Play className="w-5 h-5 mr-2" />
-              try vibe os now
-            </Button>
-            <p className="text-xs text-gray-500 mt-2">
-              no credit card required • 14-day free trial
+            <div className="w-24 h-24 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-2xl flex items-center justify-center">
+              <span className="text-white text-3xl font-bold">V</span>
+            </div>
+          </motion.div>
+          
+          {/* welcome text */}
+          <motion.div
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            transition={{ delay: 0.4, duration: 0.5 }}
+          >
+            <h1 className="text-5xl font-light text-gray-800 mb-3">
+              welcome to <span className="font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">vibeOS</span>
+            </h1>
+            <p className="text-xl text-gray-500">
+              you're in control
             </p>
           </motion.div>
-        )}
+
+          {/* subtle cta */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.8, duration: 0.5 }}
+            className="mt-12"
+          >
+            <button
+              onClick={() => setAutoPilotActive(true)}
+              className="px-6 py-2 text-sm text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              press space to begin
+            </button>
+          </motion.div>
+        </motion.div>
+
+        {/* minimalist dock at bottom */}
+        <motion.div
+          initial={{ y: 100, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.6, duration: 0.5 }}
+          className="absolute bottom-4 left-1/2 transform -translate-x-1/2"
+        >
+          <div className="flex items-center gap-2 px-4 py-2 bg-white/80 backdrop-blur-md rounded-full shadow-lg">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="w-8 h-8 rounded-lg bg-gradient-to-br from-gray-100 to-gray-200"></div>
+            ))}
+          </div>
+        </motion.div>
       </div>
     </div>
   );
