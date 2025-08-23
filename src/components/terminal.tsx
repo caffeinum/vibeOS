@@ -301,7 +301,7 @@ export function Terminal() {
                       <Clock className="h-3 w-3" />
                       recent
                     </div>
-                    {recentCommands.map((item, index) => (
+                    {recentCommands.map((item) => (
                       <button
                         key={item.id}
                         onClick={() => handleExecute(item.command)}
@@ -373,7 +373,7 @@ export function Terminal() {
                   {filteredCommands.length === 0 && (
                     <div className="px-3 py-8 text-center text-gray-500 dark:text-gray-400">
                       <div className="text-sm">no matching commands</div>
-                      <div className="text-xs mt-1">press enter to run "{input}"</div>
+                      <div className="text-xs mt-1">press enter to run &quot;{input}&quot;</div>
                     </div>
                   )}
                 </div>
