@@ -22,6 +22,19 @@ import {
   Wifi
 } from "lucide-react";
 
+// Kernel browser types
+interface KernelBrowser {
+  id: string;
+  cdp_ws_url: string;
+  browser_live_view_url: string;
+  status: 'creating' | 'running' | 'stopped';
+}
+
+interface KernelError {
+  message: string;
+  code?: string;
+}
+
 interface BrowserProps {
   isOpen?: boolean;
   onClose?: () => void;
@@ -33,6 +46,8 @@ interface Tab {
   url: string;
   favicon?: string;
   isLoading?: boolean;
+  kernelBrowser?: KernelBrowser;
+  kernelError?: KernelError;
 }
 
 interface Bookmark {
@@ -113,6 +128,10 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
   const [canGoForward, setCanGoForward] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+
+  // Kernel-specific state
+  const [kernelApiKey, setKernelApiKey] = useState<string>("");
+  const [isKernelReady, setIsKernelReady] = useState(false);
   const [tabs, setTabs] = useState<Tab[]>([
     {
       id: "1",
@@ -124,11 +143,9 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
   const [activeTabId, setActiveTabId] = useState("1");
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [iframeError, setIframeError] = useState(false);
-  const [iframeTimeout, setIframeTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [kernelError, setKernelError] = useState<KernelError | null>(null);
 
   const addressInputRef = useRef<HTMLInputElement>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const bookmarks: Bookmark[] = [
     { id: "1", title: "Wikipedia", url: "https://www.wikipedia.org", favicon: "📚" },
@@ -138,6 +155,81 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
     { id: "5", title: "JSONPlaceholder", url: "https://jsonplaceholder.typicode.com", favicon: "📋" }
   ];
 
+  // Kernel API functions
+  const createKernelBrowser = useCallback(async (): Promise<KernelBrowser | undefined> => {
+    if (!kernelApiKey) {
+      console.warn("Kernel API key not set");
+      return undefined;
+    }
+
+    try {
+      const response = await fetch('/api/kernel/browsers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${kernelApiKey}`
+        },
+        body: JSON.stringify({
+          // Browser configuration options can be added here
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Failed to create browser: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      return {
+        id: data.id,
+        cdp_ws_url: data.cdp_ws_url,
+        browser_live_view_url: data.browser_live_view_url,
+        status: 'running'
+      };
+    } catch (error) {
+      console.error("Error creating Kernel browser:", error);
+      return undefined;
+    }
+  }, [kernelApiKey]);
+
+  const closeKernelBrowser = useCallback(async (browserId: string): Promise<boolean> => {
+    if (!kernelApiKey || !browserId) return false;
+
+    try {
+      const response = await fetch(`/api/kernel/browsers?browserId=${encodeURIComponent(browserId)}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${kernelApiKey}`
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Error closing Kernel browser:", errorData.error);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error("Error closing Kernel browser:", error);
+      return false;
+    }
+  }, [kernelApiKey]);
+
+  const navigateKernelBrowser = useCallback(async (browser: KernelBrowser, url: string): Promise<boolean> => {
+    if (!browser?.cdp_ws_url) return false;
+
+    try {
+      // For now, we'll use the live view URL for navigation
+      // In a production implementation, you'd use CDP to navigate
+      console.log(`Navigating Kernel browser ${browser.id} to ${url}`);
+      return true;
+    } catch (error) {
+      console.error("Error navigating Kernel browser:", error);
+      return false;
+    }
+  }, []);
+
   const quickActions = [
     { icon: <Star className="w-4 h-4" />, label: "Bookmarks", action: () => setShowBookmarks(!showBookmarks) },
     { icon: <History className="w-4 h-4" />, label: "History", action: () => setShowHistory(!showHistory) },
@@ -146,87 +238,44 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
 
   const activeTab = tabs.find(tab => tab.id === activeTabId);
 
-  // Cleanup timeouts on unmount
+  // Initialize Kernel API key from environment or localStorage
   useEffect(() => {
-    return () => {
-      if (iframeTimeout) {
-        clearTimeout(iframeTimeout);
-      }
-    };
-  }, [iframeTimeout]);
-
-  const checkIframeCompatibility = useCallback(async (url: string): Promise<boolean> => {
-    try {
-      // For common blocked sites, return false immediately
-      const blockedDomains = [
-        'google.com', 'youtube.com', 'facebook.com', 'twitter.com',
-        'instagram.com', 'linkedin.com', 'github.com', 'stackoverflow.com',
-        'reddit.com', 'amazon.com', 'netflix.com', 'discord.com'
-      ];
-
-      const urlObj = new URL(url);
-      const isBlockedDomain = blockedDomains.some(domain =>
-        urlObj.hostname.includes(domain) || urlObj.hostname === domain
-      );
-
-      if (isBlockedDomain) {
-        return false;
-      }
-
-      // Try to fetch the page with HEAD request to check headers
-      const response = await fetch(url, {
-        method: 'HEAD',
-        mode: 'no-cors'
-      });
-
-      // If we get here, the site is likely accessible
-      return true;
-    } catch (error) {
-      // If fetch fails, assume the site might be blocked
-      return false;
-    }
+    const apiKey = process.env.NEXT_PUBLIC_KERNEL_API_KEY || localStorage.getItem('kernelApiKey') || '';
+    setKernelApiKey(apiKey);
+    setIsKernelReady(!!apiKey);
   }, []);
 
-  const handleIframeError = useCallback(() => {
-    if (iframeTimeout) {
-      clearTimeout(iframeTimeout);
-      setIframeTimeout(null);
-    }
-    setIframeError(true);
-    setIsLoading(false);
-    if (activeTab) {
-      updateTab(activeTab.id, { isLoading: false });
-    }
-  }, [iframeTimeout, activeTab]);
-
-  const handleIframeLoad = useCallback(() => {
-    if (iframeTimeout) {
-      clearTimeout(iframeTimeout);
-      setIframeTimeout(null);
-    }
-    setIframeError(false);
-    setIsLoading(false);
-    if (activeTab) {
-      updateTab(activeTab.id, { isLoading: false });
-    }
-  }, [iframeTimeout, activeTab]);
+  // Cleanup Kernel browsers on unmount
+  useEffect(() => {
+    return () => {
+      // Close all active Kernel browsers
+      tabs.forEach(tab => {
+        if (tab.kernelBrowser) {
+          closeKernelBrowser(tab.kernelBrowser.id);
+        }
+      });
+    };
+  }, [tabs, closeKernelBrowser]);
 
   const updateNavigationButtons = useCallback(() => {
     setCanGoBack(historyIndex > 0);
     setCanGoForward(historyIndex < history.length - 1);
   }, [historyIndex, history.length]);
 
-  const startIframeTimeout = useCallback(() => {
-    const timeout = setTimeout(() => {
-      setIframeError(true);
-      setIsLoading(false);
-      if (activeTab) {
-        updateTab(activeTab.id, { isLoading: false });
-      }
-    }, 8000); // 8 second timeout
-
-    setIframeTimeout(timeout);
-  }, [activeTab]);
+  const initializeKernelBrowser = useCallback(async (tabId: string): Promise<KernelBrowser | undefined> => {
+    const browser = await createKernelBrowser();
+    if (browser) {
+      updateTab(tabId, { kernelBrowser: browser, kernelError: undefined });
+      return browser;
+    } else {
+      const error: KernelError = {
+        message: "Failed to create Kernel browser. Please check your API key.",
+        code: "BROWSER_CREATION_FAILED"
+      };
+      updateTab(tabId, { kernelError: error });
+      return undefined;
+    }
+  }, [createKernelBrowser]);
 
   const navigateToUrl = useCallback(async (url: string) => {
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -237,25 +286,42 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
       }
     }
 
+    if (!activeTab) return;
+
     setIsLoading(true);
-    setIframeError(false);
+    setKernelError(null);
     setCurrentUrl(url);
     setInputUrl(url);
 
-    // Check if the URL can be loaded in an iframe
-    const isCompatible = await checkIframeCompatibility(url);
-
-    if (!isCompatible) {
-      setIframeError(true);
-      setIsLoading(false);
-      if (activeTab) {
-        updateTab(activeTab.id, { isLoading: false });
+    // Ensure we have a Kernel browser for this tab
+    let browser = activeTab.kernelBrowser;
+    if (!browser) {
+      browser = await initializeKernelBrowser(activeTab.id);
+      if (!browser) {
+        setIsLoading(false);
+        return;
       }
+    }
+
+    // Type assertion to ensure browser is not null at this point
+    if (!browser) {
+      setIsLoading(false);
       return;
     }
 
-    // Start timeout for iframe loading
-    startIframeTimeout();
+    // Navigate the Kernel browser
+    const success = await navigateKernelBrowser(browser, url);
+
+    if (!success) {
+      const error: KernelError = {
+        message: "Failed to navigate to URL",
+        code: "NAVIGATION_FAILED"
+      };
+      setKernelError(error);
+      updateTab(activeTab.id, { kernelError: error, isLoading: false });
+      setIsLoading(false);
+      return;
+    }
 
     // Add to history
     const newHistory = history.slice(0, historyIndex + 1);
@@ -264,14 +330,16 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
     setHistoryIndex(newHistory.length - 1);
     updateNavigationButtons();
 
-    // Simulate loading
-    setTimeout(() => {
-      setIsLoading(false);
-      if (activeTab) {
-        updateTab(activeTab.id, { title: getPageTitle(url), url, isLoading: false });
-      }
-    }, 1500);
-  }, [activeTab, checkIframeCompatibility, startIframeTimeout, history, historyIndex, updateNavigationButtons]);
+    // Update tab with new information
+    updateTab(activeTab.id, {
+      title: getPageTitle(url),
+      url,
+      isLoading: false,
+      kernelError: undefined
+    });
+
+    setIsLoading(false);
+  }, [activeTab, initializeKernelBrowser, navigateKernelBrowser, history, historyIndex, updateNavigationButtons]);
 
 
 
@@ -332,34 +400,46 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
     ));
   };
 
-  const addNewTab = () => {
+  const addNewTab = useCallback(async () => {
     const newTab: Tab = {
       id: Date.now().toString(),
       title: "New Tab",
       url: "about:blank",
       isLoading: false
     };
+
     setTabs(prev => [...prev, newTab]);
     setActiveTabId(newTab.id);
     setCurrentUrl("");
     setInputUrl("");
-    setIframeError(false);
-  };
+    setKernelError(null);
 
-  const closeTab = (tabId: string) => {
+    // Initialize Kernel browser for the new tab
+    if (isKernelReady) {
+      await initializeKernelBrowser(newTab.id);
+    }
+  }, [isKernelReady, initializeKernelBrowser]);
+
+  const closeTab = useCallback(async (tabId: string) => {
     if (tabs.length === 1) return; // Don't close the last tab
+
+    const tabToClose = tabs.find(tab => tab.id === tabId);
+    if (tabToClose?.kernelBrowser) {
+      await closeKernelBrowser(tabToClose.kernelBrowser.id);
+    }
 
     setTabs(prev => prev.filter(tab => tab.id !== tabId));
 
     // If we're closing the active tab, switch to another tab
     if (activeTabId === tabId) {
       const remainingTabs = tabs.filter(tab => tab.id !== tabId);
-      setActiveTabId(remainingTabs[0].id);
-      setCurrentUrl(remainingTabs[0].url);
-      setInputUrl(remainingTabs[0].url);
-      setIframeError(false);
+      const newActiveTab = remainingTabs[0];
+      setActiveTabId(newActiveTab.id);
+      setCurrentUrl(newActiveTab.url);
+      setInputUrl(newActiveTab.url);
+      setKernelError(newActiveTab.kernelError || null);
     }
-  };
+  }, [tabs, activeTabId, closeKernelBrowser]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -416,7 +496,7 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
                     setActiveTabId(tab.id);
                     setCurrentUrl(tab.url);
                     setInputUrl(tab.url);
-                    setIframeError(false);
+                    setKernelError(tab.kernelError || null);
                   }}
                 >
                   <div className="flex-1 flex items-center gap-2 truncate">
@@ -556,44 +636,75 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
 
             {/* Browser Content */}
             <div className="flex-1 relative bg-white">
-              {currentUrl && currentUrl !== "about:blank" ? (
-                iframeError ? (
+              {!isKernelReady ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                  <Shield className="w-16 h-16 mb-4 opacity-50" />
+                  <h2 className="text-lg font-medium mb-2">Kernel API Required</h2>
+                  <p className="text-sm text-center max-w-md mb-4">
+                    To use this browser, you need a Kernel API key. Set NEXT_PUBLIC_KERNEL_API_KEY environment variable or add your API key to localStorage.
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      placeholder="Enter Kernel API Key"
+                      className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          const input = e.target as HTMLInputElement;
+                          const apiKey = input.value.trim();
+                          if (apiKey) {
+                            localStorage.setItem('kernelApiKey', apiKey);
+                            setKernelApiKey(apiKey);
+                            setIsKernelReady(true);
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => window.open('https://docs.onkernel.com', '_blank')}
+                      className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
+                    >
+                      Get API Key
+                    </button>
+                  </div>
+                </div>
+              ) : currentUrl && currentUrl !== "about:blank" ? (
+                kernelError || !activeTab?.kernelBrowser ? (
                   <div className="flex flex-col items-center justify-center h-full text-gray-500">
                     <Shield className="w-16 h-16 mb-4 opacity-50" />
-                    <h2 className="text-lg font-medium mb-2">Site Not Compatible</h2>
+                    <h2 className="text-lg font-medium mb-2">Browser Error</h2>
                     <p className="text-sm text-center max-w-md mb-4">
-                      This website blocks iframe embedding for security. Try sites like Wikipedia, MDN Web Docs, or Example.com instead.
+                      {kernelError?.message || "Failed to create Kernel browser session. Please check your connection and API key."}
                     </p>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => navigateToUrl("https://www.wikipedia.org")}
-                        className="px-3 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm"
-                      >
-                        Try Wikipedia
-                      </button>
-                      <button
-                        onClick={() => window.open(currentUrl, '_blank')}
+                        onClick={() => navigateToUrl(currentUrl)}
                         className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
                       >
-                        Open Externally
+                        Retry
+                      </button>
+                      <button
+                        onClick={() => window.open('https://docs.onkernel.com', '_blank')}
+                        className="px-3 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm"
+                      >
+                        Documentation
                       </button>
                     </div>
                   </div>
                 ) : (
                   <iframe
-                    ref={iframeRef}
-                    src={currentUrl}
+                    src={activeTab.kernelBrowser?.browser_live_view_url}
                     className="w-full h-full border-0"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                    onLoad={handleIframeLoad}
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
+                    allow="camera; microphone; geolocation"
                   />
                 )
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500">
                   <Globe className="w-16 h-16 mb-4 opacity-50" />
-                  <h2 className="text-lg font-medium mb-2">Welcome to Claude Browser</h2>
+                  <h2 className="text-lg font-medium mb-2">Welcome to Kernel Browser</h2>
                   <p className="text-sm text-center max-w-md mb-4">
-                    Start browsing by entering a URL or search term in the address bar above. Great for sites like Wikipedia, MDN Web Docs, and Example.com!
+                    Start browsing by entering a URL or search term in the address bar above. Powered by Kernel's isolated browser infrastructure!
                   </p>
                   <button
                     onClick={() => navigateToUrl("https://www.wikipedia.org")}
