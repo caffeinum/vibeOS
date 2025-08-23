@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
   Globe
 } from "lucide-react";
+import { api } from "@/utils/api";
 
 // Kernel browser types
 interface KernelBrowser {
@@ -91,6 +92,38 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
   const [kernelBrowser, setKernelBrowser] = useState<KernelBrowser | null>(null);
   const [kernelError, setKernelError] = useState<KernelError | null>(null);
 
+  // tRPC mutations
+  const createBrowserMutation = api.kernel.createBrowser.useMutation({
+    onSuccess: (data) => {
+      console.log('[Browser] Created successfully:', data.id);
+      setKernelBrowser({
+        id: data.id,
+        cdp_ws_url: data.cdp_ws_url,
+        browser_live_view_url: data.browser_live_view_url,
+        status: data.status
+      });
+      setKernelError(null);
+    },
+    onError: (error) => {
+      console.error('[Browser] Creation error:', error);
+      const kernelErr: KernelError = {
+        message: error.message || "Failed to create Kernel browser. Please check your API key.",
+        code: "BROWSER_CREATION_FAILED"
+      };
+      setKernelError(kernelErr);
+    }
+  });
+
+  const closeBrowserMutation = api.kernel.closeBrowser.useMutation({
+    onSuccess: () => {
+      console.log('[Browser] Closed successfully');
+      setKernelBrowser(null);
+    },
+    onError: (error) => {
+      console.error('[Browser] Close error:', error);
+    }
+  });
+
   // Kernel API functions
   const createKernelBrowser = useCallback(async (): Promise<KernelBrowser | undefined> => {
     if (!kernelApiKey) {
@@ -98,65 +131,55 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
       return undefined;
     }
 
+    // Don't create if already creating or exists
+    if (createBrowserMutation.isPending || kernelBrowser) {
+      console.log('[Browser] Skipping creation - already pending or exists');
+      return kernelBrowser || undefined;
+    }
+
     try {
-      const response = await fetch('/api/kernel/browsers', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${kernelApiKey}`
-        },
-        body: JSON.stringify({
-          // Browser configuration options can be added here
-        })
+      const data = await createBrowserMutation.mutateAsync({
+        apiKey: kernelApiKey
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Failed to create browser: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      return {
+      const browser = {
         id: data.id,
         cdp_ws_url: data.cdp_ws_url,
         browser_live_view_url: data.browser_live_view_url,
-        status: 'running'
+        status: data.status as 'creating' | 'running' | 'stopped'
       };
+      
+      return browser;
     } catch (error) {
       console.error("Error creating Kernel browser:", error);
       return undefined;
     }
-  }, [kernelApiKey]);
+  }, [kernelApiKey, createBrowserMutation, kernelBrowser]);
 
   const closeKernelBrowser = useCallback(async (browserId: string): Promise<boolean> => {
     if (!kernelApiKey || !browserId) return false;
 
+    // Don't close if already closing
+    if (closeBrowserMutation.isPending) {
+      console.log('[Browser] Skipping close - already pending');
+      return false;
+    }
+
     try {
-      const response = await fetch(`/api/kernel/browsers?browserId=${encodeURIComponent(browserId)}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${kernelApiKey}`
-        }
+      await closeBrowserMutation.mutateAsync({
+        apiKey: kernelApiKey,
+        browserId
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Error closing Kernel browser:", errorData.error);
-        return false;
-      }
-
       return true;
     } catch (error) {
       console.error("Error closing Kernel browser:", error);
       return false;
     }
-  }, [kernelApiKey]);
+  }, [kernelApiKey, closeBrowserMutation]);
 
   const initializeKernelBrowser = useCallback(async (): Promise<KernelBrowser | undefined> => {
     const browser = await createKernelBrowser();
     if (browser) {
-      setKernelBrowser(browser);
-      setKernelError(null);
       return browser;
     } else {
       const error: KernelError = {
@@ -176,11 +199,19 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
   }, []);
 
   // Initialize browser when component mounts (regardless of isOpen state)
+  // Use a ref to track initialization state to prevent multiple calls
+  const initializingRef = useRef(false);
+  const initializedRef = useRef(false);
+  
   useEffect(() => {
-    if (isKernelReady && !kernelBrowser && initialized) {
-      initializeKernelBrowser();
+    if (isKernelReady && !kernelBrowser && initialized && !initializingRef.current && !initializedRef.current) {
+      initializingRef.current = true;
+      initializeKernelBrowser().then(() => {
+        initializedRef.current = true;
+        initializingRef.current = false;
+      });
     }
-  }, [isKernelReady, kernelBrowser, initializeKernelBrowser, initialized]);
+  }, [isKernelReady, kernelBrowser, initialized, initializeKernelBrowser]);
 
   // Cleanup Kernel browser on unmount
   useEffect(() => {
