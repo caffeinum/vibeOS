@@ -42,12 +42,72 @@ interface Bookmark {
   favicon?: string;
 }
 
+// Utility function to get page title from URL
+const getPageTitle = (url: string): string => {
+  try {
+    if (url === "about:blank" || !url) {
+      return "New Tab";
+    }
+
+    const urlObj = new URL(url);
+    const domain = urlObj.hostname.toLowerCase();
+
+    // Common website titles
+    const titleMap: Record<string, string> = {
+      'google.com': 'Google',
+      'www.google.com': 'Google',
+      'wikipedia.org': 'Wikipedia',
+      'www.wikipedia.org': 'Wikipedia',
+      'github.com': 'GitHub',
+      'www.github.com': 'GitHub',
+      'youtube.com': 'YouTube',
+      'www.youtube.com': 'YouTube',
+      'facebook.com': 'Facebook',
+      'www.facebook.com': 'Facebook',
+      'twitter.com': 'Twitter',
+      'www.twitter.com': 'Twitter',
+      'reddit.com': 'Reddit',
+      'www.reddit.com': 'Reddit',
+      'stackoverflow.com': 'Stack Overflow',
+      'developer.mozilla.org': 'MDN Web Docs',
+      'example.com': 'Example Domain',
+      'httpbin.org': 'HTTPBin',
+      'jsonplaceholder.typicode.com': 'JSONPlaceholder',
+      'dedaluslabs.ai': 'Dedalus Labs',
+      'www.dedaluslabs.ai': 'Dedalus Labs'
+    };
+
+    // Return mapped title if available
+    if (titleMap[domain]) {
+      return titleMap[domain];
+    }
+
+    // For other domains, create a readable title from the domain
+    const cleanDomain = domain.replace(/^www\./, '');
+    const parts = cleanDomain.split('.');
+    const mainPart = parts.length > 1 ? parts[parts.length - 2] : parts[0];
+
+    // Capitalize first letter
+    return mainPart.charAt(0).toUpperCase() + mainPart.slice(1);
+
+  } catch {
+    return "New Tab";
+  }
+};
+
+// Test function for title generation (can be removed in production)
+// console.log("Title tests:");
+// console.log("https://www.google.com ->", getPageTitle("https://www.google.com"));
+// console.log("https://wikipedia.org ->", getPageTitle("https://wikipedia.org"));
+// console.log("https://github.com ->", getPageTitle("https://github.com"));
+// console.log("https://example.com ->", getPageTitle("https://example.com"));
+
 export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) {
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
-  const [currentUrl, setCurrentUrl] = useState("https://www.google.com");
+  const [currentUrl, setCurrentUrl] = useState("https://www.dedaluslabs.ai/");
   const [searchQuery, setSearchQuery] = useState("");
-  const [inputUrl, setInputUrl] = useState("https://www.google.com");
+  const [inputUrl, setInputUrl] = useState("https://www.dedaluslabs.ai/");
   const [isLoading, setIsLoading] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -56,8 +116,8 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
   const [tabs, setTabs] = useState<Tab[]>([
     {
       id: "1",
-      title: "New Tab",
-      url: "about:blank",
+      title: getPageTitle("https://www.dedaluslabs.ai/"),
+      url: "https://www.dedaluslabs.ai/",
       isLoading: false
     }
   ]);
@@ -213,14 +273,7 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
     }, 1500);
   }, [activeTab, checkIframeCompatibility, startIframeTimeout, history, historyIndex, updateNavigationButtons]);
 
-  const getPageTitle = (url: string): string => {
-    try {
-      const domain = new URL(url).hostname;
-      return domain.charAt(0).toUpperCase() + domain.slice(1);
-    } catch {
-      return "New Tab";
-    }
-  };
+
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -268,7 +321,7 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
   };
 
   const goHome = () => {
-    navigateToUrl("https://www.google.com");
+    navigateToUrl("https://www.dedaluslabs.ai/");
   };
 
 
@@ -341,7 +394,7 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
 
                 {/* Browser Title */}
                 <div className="flex-1 text-center">
-                  <span className="text-xs font-medium text-gray-700">
+                  <span className="text-xs font-medium text-gray-700 truncate">
                     {activeTab?.title || "Browser"}
                   </span>
                 </div>
@@ -354,7 +407,7 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
                 <motion.div
                   key={tab.id}
                   layoutId={tab.id}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-all min-w-[120px] max-w-[200px] ${
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-all min-w-[120px] max-w-[200px] group ${
                     activeTabId === tab.id
                       ? 'bg-white shadow-sm border border-gray-200'
                       : 'hover:bg-white/50'
@@ -372,7 +425,7 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
                     ) : (
                       <Globe className="w-3 h-3 text-gray-400" />
                     )}
-                    <span className="text-xs font-medium truncate">
+                    <span className="text-xs font-medium truncate text-gray-700">
                       {tab.title}
                     </span>
                   </div>
@@ -382,9 +435,9 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
                         e.stopPropagation();
                         closeTab(tab.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 hover:bg-gray-200 rounded p-0.5"
+                      className="opacity-0 group-hover:opacity-100 hover:bg-gray-200 rounded p-0.5 transition-opacity"
                     >
-                      <X className="w-3 h-3" />
+                      <X className="w-3 h-3 text-gray-400" />
                     </button>
                   )}
                 </motion.div>
@@ -395,7 +448,7 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
                 onClick={addNewTab}
                 className="px-2 py-1.5 rounded-lg hover:bg-white/50 transition-colors"
               >
-                <span className="text-lg font-light">+</span>
+                <span className="text-lg font-light text-gray-500">+</span>
               </button>
             </div>
 
