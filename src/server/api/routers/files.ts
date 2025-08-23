@@ -124,7 +124,32 @@ export const filesRouter = createTRPCRouter({
   getDownloads: publicProcedure
     .query(async () => {
       try {
-        const downloadsPath = path.join(process.env.HOME || '', 'Downloads');
+        const homeDir = os.homedir();
+        const platform = os.platform();
+
+        // Determine downloads path based on platform
+        let downloadsPath = '';
+        switch (platform) {
+          case 'win32':
+            downloadsPath = path.join(homeDir, 'Downloads');
+            break;
+          case 'darwin':
+            downloadsPath = path.join(homeDir, 'Downloads');
+            break;
+          case 'linux':
+            downloadsPath = path.join(homeDir, 'Downloads');
+            break;
+          default:
+            downloadsPath = path.join(homeDir, 'Downloads');
+        }
+
+        // Check if downloads directory exists, fallback to home
+        try {
+          await fs.access(downloadsPath);
+        } catch {
+          downloadsPath = homeDir;
+        }
+
         const items = await fs.readdir(downloadsPath, { withFileTypes: true });
         
         // get file details and filter out directories
@@ -240,6 +265,84 @@ export const filesRouter = createTRPCRouter({
         return {
           success: false,
           error: error instanceof Error ? error.message : "Search failed",
+        };
+      }
+    }),
+
+  getSystemInfo: publicProcedure
+    .query(async () => {
+      try {
+        const homeDir = os.homedir();
+        const platform = os.platform();
+
+        // Determine downloads path based on platform
+        let downloadsPath = '';
+        let documentsPath = '';
+
+        switch (platform) {
+          case 'win32':
+            // Windows: C:\Users\Username\Downloads
+            downloadsPath = path.join(homeDir, 'Downloads');
+            documentsPath = path.join(homeDir, 'Documents');
+            break;
+          case 'darwin':
+            // macOS: /Users/Username/Downloads
+            downloadsPath = path.join(homeDir, 'Downloads');
+            documentsPath = path.join(homeDir, 'Documents');
+            break;
+          case 'linux':
+            // Linux: /home/username/Downloads (most common)
+            downloadsPath = path.join(homeDir, 'Downloads');
+            documentsPath = path.join(homeDir, 'Documents');
+            break;
+          default:
+            // Fallback
+            downloadsPath = path.join(homeDir, 'Downloads');
+            documentsPath = path.join(homeDir, 'Documents');
+        }
+
+        // Check if paths exist, use home directory as fallback
+        let downloadsExists = false;
+        let documentsExists = false;
+
+        try {
+          await fs.access(downloadsPath);
+          downloadsExists = true;
+        } catch {
+          downloadsPath = homeDir; // fallback to home directory
+        }
+
+        try {
+          await fs.access(documentsPath);
+          documentsExists = true;
+        } catch {
+          documentsPath = homeDir; // fallback to home directory
+        }
+
+        return {
+          success: true,
+          systemInfo: {
+            homeDir,
+            downloadsPath,
+            documentsPath,
+            platform,
+            downloadsExists,
+            documentsExists,
+          },
+        };
+      } catch (error) {
+        console.error("error getting system info:", error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "failed to get system info",
+          systemInfo: {
+            homeDir: os.homedir(),
+            downloadsPath: os.homedir(),
+            documentsPath: os.homedir(),
+            platform: os.platform(),
+            downloadsExists: false,
+            documentsExists: false,
+          },
         };
       }
     }),

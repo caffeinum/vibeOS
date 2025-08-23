@@ -114,9 +114,9 @@ const formatDate = (dateString?: string) => {
 };
 
 export function FileBrowserEnhanced() {
-  const [currentPath, setCurrentPath] = useState("/Users/aleks");
+  const [currentPath, setCurrentPath] = useState("");
   const [files, setFiles] = useState<FileItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>("");
   const [selectedFile, setSelectedFile] = useState<FileItem | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
@@ -124,8 +124,9 @@ export function FileBrowserEnhanced() {
   const [isSearching, setIsSearching] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [previewContent, setPreviewContent] = useState("");
-  const [history, setHistory] = useState<string[]>(["/Users/aleks"]);
+  const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(0);
+  const [systemInfo, setSystemInfo] = useState<any>(null);
 
   const listFilesMutation = api.files.listDirectory.useMutation({
     onSuccess: (data) => {
@@ -142,6 +143,19 @@ export function FileBrowserEnhanced() {
       setIsLoading(false);
     }
   });
+
+  const { data: systemInfoData } = api.files.getSystemInfo.useQuery();
+
+  useEffect(() => {
+    if (systemInfoData?.success && systemInfoData?.systemInfo) {
+      setSystemInfo(systemInfoData.systemInfo);
+      if (!currentPath) {
+        setCurrentPath(systemInfoData.systemInfo.homeDir);
+        setHistory([systemInfoData.systemInfo.homeDir]);
+        loadDirectory(systemInfoData.systemInfo.homeDir);
+      }
+    }
+  }, [systemInfoData, currentPath]);
 
   const searchFilesMutation = api.files.searchFiles.useMutation({
     onSuccess: (data) => {
@@ -220,23 +234,30 @@ export function FileBrowserEnhanced() {
   };
 
   const handleGoHome = () => {
-    const homePath = "/Users/aleks";
-    setCurrentPath(homePath);
-    loadDirectory(homePath);
-    
-    const newHistory = [...history.slice(0, historyIndex + 1), homePath];
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
+    if (systemInfo) {
+      setCurrentPath(systemInfo.homeDir);
+      loadDirectory(systemInfo.homeDir);
+
+      const newHistory = [...history.slice(0, historyIndex + 1), systemInfo.homeDir];
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+    }
   };
 
   const handleGoUp = () => {
-    const parentPath = currentPath.split('/').slice(0, -1).join('/') || '/';
-    setCurrentPath(parentPath);
-    loadDirectory(parentPath);
-    
-    const newHistory = [...history.slice(0, historyIndex + 1), parentPath];
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
+    if (systemInfo) {
+      const separator = systemInfo.platform === 'win32' ? '\\' : '/';
+      const segments = currentPath.split(separator).filter(Boolean);
+      const parentPath = segments.length > 1
+        ? segments.slice(0, -1).join(separator)
+        : (systemInfo.platform === 'win32' ? 'C:\\' : '/');
+      setCurrentPath(parentPath);
+      loadDirectory(parentPath);
+
+      const newHistory = [...history.slice(0, historyIndex + 1), parentPath];
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+    }
   };
 
   const handleSearch = () => {
@@ -254,7 +275,7 @@ export function FileBrowserEnhanced() {
     loadDirectory(currentPath);
   };
 
-  const pathSegments = currentPath.split('/').filter(Boolean);
+  const pathSegments = currentPath.split(systemInfo?.platform === 'win32' ? '\\' : '/').filter(Boolean);
 
   return (
     <div className="w-full h-[600px] bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col">
@@ -305,13 +326,16 @@ export function FileBrowserEnhanced() {
         {/* breadcrumb */}
         <div className="flex items-center gap-1 text-white/90 text-sm mb-3">
           <span className="hover:text-white cursor-pointer" onClick={handleGoHome}>~</span>
-          {pathSegments.slice(2).map((segment, index) => (
+          {pathSegments.slice(systemInfo?.platform === 'win32' ? 1 : 2).map((segment, index) => (
             <div key={index} className="flex items-center gap-1">
               <ChevronRight className="h-3 w-3" />
-              <span 
+              <span
                 className="hover:text-white cursor-pointer"
                 onClick={() => {
-                  const path = '/' + pathSegments.slice(0, index + 3).join('/');
+                  const separator = systemInfo?.platform === 'win32' ? '\\' : '/';
+                  const root = systemInfo?.platform === 'win32' ? '' : '/';
+                  const sliceStart = systemInfo?.platform === 'win32' ? 0 : 1;
+                  const path = root + pathSegments.slice(sliceStart, index + (systemInfo?.platform === 'win32' ? 2 : 3)).join(separator);
                   setCurrentPath(path);
                   loadDirectory(path);
                 }}

@@ -78,10 +78,11 @@ const formatSize = (bytes?: number) => {
 };
 
 export function FileBrowser() {
-  const [currentPath, setCurrentPath] = useState("/Users/aleks");
+  const [currentPath, setCurrentPath] = useState("");
   const [files, setFiles] = useState<FileItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>("");
+  const [systemInfo, setSystemInfo] = useState<any>(null);
   const [selectedFile, setSelectedFile] = useState<string>("");
 
   const listFilesMutation = api.files.listDirectory.useMutation({
@@ -98,9 +99,24 @@ export function FileBrowser() {
     }
   });
 
+  const { data: systemInfoData } = api.files.getSystemInfo.useQuery(undefined, {
+    onSuccess: (data) => {
+      if (data.success && data.systemInfo) {
+        setSystemInfo(data.systemInfo);
+        if (!currentPath) {
+          setCurrentPath(data.systemInfo.homeDir);
+          loadDirectory(data.systemInfo.homeDir);
+        }
+      }
+    }
+  });
+
   useEffect(() => {
-    loadDirectory(currentPath);
-  }, []);
+    if (systemInfo && !currentPath) {
+      setCurrentPath(systemInfo.homeDir);
+      loadDirectory(systemInfo.homeDir);
+    }
+  }, [systemInfo]);
 
   const loadDirectory = (path: string) => {
     setIsLoading(true);
@@ -118,20 +134,25 @@ export function FileBrowser() {
   };
 
   const handleGoHome = () => {
-    const homePath = "/Users/aleks";
-    setCurrentPath(homePath);
-    loadDirectory(homePath);
-    setSelectedFile("");
+    if (systemInfo) {
+      setCurrentPath(systemInfo.homeDir);
+      loadDirectory(systemInfo.homeDir);
+      setSelectedFile("");
+    }
   };
 
   const handleGoUp = () => {
-    const parentPath = currentPath.split('/').slice(0, -1).join('/') || '/';
+    const separator = systemInfo?.platform === 'win32' ? '\\' : '/';
+    const segments = currentPath.split(separator).filter(Boolean);
+    const parentPath = segments.length > 1
+      ? segments.slice(0, -1).join(separator)
+      : (systemInfo?.platform === 'win32' ? 'C:\\' : '/');
     setCurrentPath(parentPath);
     loadDirectory(parentPath);
     setSelectedFile("");
   };
 
-  const pathSegments = currentPath.split('/').filter(Boolean);
+  const pathSegments = currentPath.split(systemInfo?.platform === 'win32' ? '\\' : '/').filter(Boolean);
 
   return (
     <div className="w-full max-w-4xl mx-auto p-6">
@@ -155,27 +176,30 @@ export function FileBrowser() {
           {/* breadcrumb */}
           <div className="flex items-center gap-1 text-white/80 text-sm">
             <span className="hover:text-white cursor-pointer" onClick={handleGoHome}>~</span>
-            {pathSegments.slice(2).map((segment, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.05 }}
-                className="flex items-center gap-1"
+                      {pathSegments.slice(systemInfo?.platform === 'win32' ? 1 : 2).map((segment, index) => (
+            <motion.div
+              key={index}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: index * 0.05 }}
+              className="flex items-center gap-1"
+            >
+              <ChevronRight className="h-3 w-3" />
+              <span
+                className="hover:text-white cursor-pointer"
+                onClick={() => {
+                  const separator = systemInfo?.platform === 'win32' ? '\\' : '/';
+                  const root = systemInfo?.platform === 'win32' ? '' : '/';
+                  const sliceStart = systemInfo?.platform === 'win32' ? 0 : 1;
+                  const path = root + pathSegments.slice(sliceStart, index + (systemInfo?.platform === 'win32' ? 2 : 3)).join(separator);
+                  setCurrentPath(path);
+                  loadDirectory(path);
+                }}
               >
-                <ChevronRight className="h-3 w-3" />
-                <span 
-                  className="hover:text-white cursor-pointer"
-                  onClick={() => {
-                    const path = '/' + pathSegments.slice(0, index + 3).join('/');
-                    setCurrentPath(path);
-                    loadDirectory(path);
-                  }}
-                >
-                  {segment}
-                </span>
-              </motion.div>
-            ))}
+                {segment}
+              </span>
+            </motion.div>
+          ))}
           </div>
         </div>
 
