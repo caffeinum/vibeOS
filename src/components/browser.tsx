@@ -28,57 +28,57 @@ interface BrowserProps {
 }
 
 // Utility function to get page title from URL
-const getPageTitle = (url: string): string => {
-  try {
-    if (url === "about:blank" || !url) {
-      return "New Tab";
-    }
+// const getPageTitle = (url: string): string => {
+//   try {
+//     if (url === "about:blank" || !url) {
+//       return "New Tab";
+//     }
 
-    const urlObj = new URL(url);
-    const domain = urlObj.hostname.toLowerCase();
+//     const urlObj = new URL(url);
+//     const domain = urlObj.hostname.toLowerCase();
 
-    // Common website titles
-    const titleMap: Record<string, string> = {
-      'google.com': 'Google',
-      'www.google.com': 'Google',
-      'wikipedia.org': 'Wikipedia',
-      'www.wikipedia.org': 'Wikipedia',
-      'github.com': 'GitHub',
-      'www.github.com': 'GitHub',
-      'youtube.com': 'YouTube',
-      'www.youtube.com': 'YouTube',
-      'facebook.com': 'Facebook',
-      'www.facebook.com': 'Facebook',
-      'twitter.com': 'Twitter',
-      'www.twitter.com': 'Twitter',
-      'reddit.com': 'Reddit',
-      'www.reddit.com': 'Reddit',
-      'stackoverflow.com': 'Stack Overflow',
-      'developer.mozilla.org': 'MDN Web Docs',
-      'example.com': 'Example Domain',
-      'httpbin.org': 'HTTPBin',
-      'jsonplaceholder.typicode.com': 'JSONPlaceholder',
-      'dedaluslabs.ai': 'Dedalus Labs',
-      'www.dedaluslabs.ai': 'Dedalus Labs'
-    };
+//     // Common website titles
+//     const titleMap: Record<string, string> = {
+//       'google.com': 'Google',
+//       'www.google.com': 'Google',
+//       'wikipedia.org': 'Wikipedia',
+//       'www.wikipedia.org': 'Wikipedia',
+//       'github.com': 'GitHub',
+//       'www.github.com': 'GitHub',
+//       'youtube.com': 'YouTube',
+//       'www.youtube.com': 'YouTube',
+//       'facebook.com': 'Facebook',
+//       'www.facebook.com': 'Facebook',
+//       'twitter.com': 'Twitter',
+//       'www.twitter.com': 'Twitter',
+//       'reddit.com': 'Reddit',
+//       'www.reddit.com': 'Reddit',
+//       'stackoverflow.com': 'Stack Overflow',
+//       'developer.mozilla.org': 'MDN Web Docs',
+//       'example.com': 'Example Domain',
+//       'httpbin.org': 'HTTPBin',
+//       'jsonplaceholder.typicode.com': 'JSONPlaceholder',
+//       'dedaluslabs.ai': 'Dedalus Labs',
+//       'www.dedaluslabs.ai': 'Dedalus Labs'
+//     };
 
-    // Return mapped title if available
-    if (titleMap[domain]) {
-      return titleMap[domain];
-    }
+//     // Return mapped title if available
+//     if (titleMap[domain]) {
+//       return titleMap[domain];
+//     }
 
-    // For other domains, create a readable title from the domain
-    const cleanDomain = domain.replace(/^www\./, '');
-    const parts = cleanDomain.split('.');
-    const mainPart = parts.length > 1 ? parts[parts.length - 2] : parts[0];
+//     // For other domains, create a readable title from the domain
+//     const cleanDomain = domain.replace(/^www\./, '');
+//     const parts = cleanDomain.split('.');
+//     const mainPart = parts.length > 1 ? parts[parts.length - 2] : parts[0];
 
-    // Capitalize first letter
-    return mainPart.charAt(0).toUpperCase() + mainPart.slice(1);
+//     // Capitalize first letter
+//     return mainPart.charAt(0).toUpperCase() + mainPart.slice(1);
 
-  } catch {
-    return "New Tab";
-  }
-};
+//   } catch {
+//     return "New Tab";
+//   }
+// };
 
 export function Browser({ isOpen: externalIsOpen, onClose, initialized }: BrowserProps = {}) {
   const [internalIsOpen, setInternalIsOpen] = useState(false);

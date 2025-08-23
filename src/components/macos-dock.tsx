@@ -2,7 +2,6 @@
 
 import { motion, useMotionValue, useSpring, useTransform } from "framer-motion";
 import { useRef, useState } from "react";
-import { cn } from "@/lib/utils";
 import { GlassEffect } from "@/components/ui/glass-effect";
 
 interface DockItem {
@@ -34,7 +33,6 @@ export function MacOSDock({ items, activeItem, onItemClick }: MacOSDockProps) {
             <DockIcon
               key={item.id}
               item={item}
-              index={index}
               mouseX={mouseX}
               isActive={activeItem === item.id}
               onHoverStart={() => setHoveredIndex(index)}
@@ -51,7 +49,6 @@ export function MacOSDock({ items, activeItem, onItemClick }: MacOSDockProps) {
 
 interface DockIconProps {
   item: DockItem;
-  index: number;
   mouseX: any;
   isActive: boolean;
   isHovered: boolean;
@@ -62,7 +59,6 @@ interface DockIconProps {
 
 function DockIcon({
   item,
-  index,
   mouseX,
   isActive,
   isHovered,
@@ -72,7 +68,7 @@ function DockIcon({
 }: DockIconProps) {
   const ref = useRef<HTMLButtonElement>(null);
 
-  const distance = useTransform(mouseX, (val) => {
+  const distance = useTransform(mouseX, (val: number) => {
     const bounds = ref.current?.getBoundingClientRect() ?? { x: 0, width: 0 };
     return val - bounds.x - bounds.width / 2;
   });
