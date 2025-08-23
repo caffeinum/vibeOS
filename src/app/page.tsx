@@ -206,8 +206,8 @@ export default function Home() {
         <DarkModeToggle />
       </div>
       
-      {/* Liquid Glass Effect */}
-      <LiquidGlass />
+      {/* Liquid Glass Effect - Hidden */}
+      {/* <LiquidGlass /> */}
       
       {/* Toast Notifications */}
       <Toaster position="top-center" />
