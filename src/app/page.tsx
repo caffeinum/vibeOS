@@ -6,6 +6,7 @@ import { FileBrowserEnhanced } from "@/components/file-browser-enhanced";
 import { DownloadTinder } from "@/components/download-tinder";
 import { GCPVMList } from "@/components/gcp-vm-list";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
+import { Terminal } from "@/components/terminal";
 import { useState } from "react";
 
 export default function Home() {
@@ -22,7 +23,8 @@ export default function Home() {
           <DarkModeToggle />
         </div>
         <p className="text-gray-600 mb-8">
-          click the floating chat button in the bottom-right corner to interact with claude code.
+          click the floating chat button in the bottom-right corner to interact with claude code,
+          or use the terminal in the bottom-left corner to execute commands.
         </p>
         
         <div className="mb-8 flex gap-4 flex-wrap">
@@ -132,6 +134,7 @@ export default function Home() {
       </div>
       
       <ClaudeChat position="bottom-right" size="lg" />
+      <Terminal />
     </main>
   );
 }
