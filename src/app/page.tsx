@@ -21,10 +21,16 @@ export default function Home() {
   const [showTerminal, setShowTerminal] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
   const [, setDarkMode] = useState(false);
+  const [browserInitialized, setBrowserInitialized] = useState(false);
   
-    useEffect(() => {
+  useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // Initialize browser immediately when page loads
+  useEffect(() => {
+    setBrowserInitialized(true);
   }, []);
 
   const formatTime = (date: Date) => {
@@ -215,6 +221,7 @@ export default function Home() {
       <Browser
         isOpen={showBrowser}
         onClose={() => setShowBrowser(false)}
+        initialized={browserInitialized}
       />
       <div style={{ display: 'none' }}>
         <DarkModeToggle />

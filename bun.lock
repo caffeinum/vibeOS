@@ -7,6 +7,7 @@
         "@ai-sdk/react": "^2.0.22",
         "@ai-sdk/ui-utils": "^1.2.11",
         "@anthropic-ai/claude-code": "^1.0.86",
+        "@onkernel/sdk": "^0.9.1",
         "@tanstack/react-query": "^5.85.5",
         "@trpc/client": "^11.5.0",
         "@trpc/react-query": "^11.5.0",
@@ -168,6 +169,8 @@
     "@nodelib/fs.walk": ["@nodelib/fs.walk@1.2.8", "", { "dependencies": { "@nodelib/fs.scandir": "2.1.5", "fastq": "^1.6.0" } }, "sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg=="],
 
     "@nolyfill/is-core-module": ["@nolyfill/is-core-module@1.0.39", "", {}, "sha512-nn5ozdjYQpUCZlWGuxcJY/KpxkWQs4DcbMCmKojjyrYDEAGy4Ce19NN4v5MduafTwJlbKc99UA8YhSVqq9yPZA=="],
+
+    "@onkernel/sdk": ["@onkernel/sdk@0.9.1", "", {}, "sha512-97kf2zZ1mFENG9YVmWcmF/M3J0DR8m5wraKsmrL3Njmm4vcJXfdMk7wSbxzHa8GwracbXBggo/Xf67o32rgtwg=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.0", "", {}, "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="],
 
