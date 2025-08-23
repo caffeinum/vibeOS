@@ -7,6 +7,7 @@ import { DownloadTinder } from "@/components/download-tinder";
 import { GCPVMList } from "@/components/gcp-vm-list";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { Terminal } from "@/components/terminal";
+import NativeTerminal from "@/components/NativeTerminal";
 import { CryptoTracker } from "@/components/crypto-tracker";
 import { Browser } from "@/components/browser";
 import { MacOSDock } from "@/components/macos-dock";
@@ -23,6 +24,7 @@ export default function Home() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showClaude, setShowClaude] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
+  const [showNativeTerminal, setShowNativeTerminal] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
   const [, setDarkMode] = useState(false);
   const [browserInitialized, setBrowserInitialized] = useState(false);
@@ -52,7 +54,8 @@ export default function Home() {
     { id: 'finder', name: 'Finder', icon: <FinderIcon /> },
     { id: 'browser', name: 'Safari', icon: <SafariIcon /> },
     { id: 'claude', name: 'Messages', icon: <MessagesIcon /> },
-    { id: 'terminal', name: 'Terminal', icon: <MacTerminalIcon /> },
+    { id: 'terminal', name: 'Command Palette', icon: <MacTerminalIcon /> },
+    { id: 'native-terminal', name: 'Terminal', icon: <MacTerminalIcon /> },
     { id: 'downloads', name: 'Downloads', icon: <DownloadsIcon /> },
     { id: 'gcp', name: 'Cloud', icon: <CloudIcon /> },
     { id: 'settings', name: 'System Preferences', icon: <SystemPreferencesIcon /> },
@@ -161,12 +164,14 @@ export default function Home() {
       {/* macOS Dock */}
       <MacOSDock
         items={dockApps}
-        activeItem={activeApp || (showClaude ? 'claude' : showTerminal ? 'terminal' : showBrowser ? 'browser' : null)}
+        activeItem={activeApp || (showClaude ? 'claude' : showTerminal ? 'terminal' : showNativeTerminal ? 'native-terminal' : showBrowser ? 'browser' : null)}
         onItemClick={(item) => {
           if (item.id === 'claude') {
             setShowClaude(prev => !prev);
           } else if (item.id === 'terminal') {
             setShowTerminal(true);
+          } else if (item.id === 'native-terminal') {
+            setShowNativeTerminal(true);
           } else if (item.id === 'browser') {
             setShowBrowser(true);
           } else if (item.id === 'settings') {
@@ -188,6 +193,10 @@ export default function Home() {
       <Terminal
         isOpen={showTerminal}
         onClose={() => setShowTerminal(false)}
+      />
+      <NativeTerminal
+        isActive={showNativeTerminal}
+        onClose={() => setShowNativeTerminal(false)}
       />
       <Browser
         isOpen={showBrowser}
