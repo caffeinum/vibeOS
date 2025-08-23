@@ -27,7 +27,7 @@ export const filesRouter = createTRPCRouter({
             
             try {
               stats = await fs.stat(fullPath);
-            } catch (err) {
+            } catch {
               // ignore files we can't access
               return null;
             }
@@ -253,7 +253,7 @@ export const filesRouter = createTRPCRouter({
         query: z.string(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async () => {
       try {
         // For now, just return empty results
         // TODO: Implement actual file search

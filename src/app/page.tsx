@@ -11,11 +11,11 @@ import { CryptoTracker } from "@/components/crypto-tracker";
 import { Browser } from "@/components/browser";
 import { MacOSDock } from "@/components/macos-dock";
 import { FinderIcon, SafariIcon, MessagesIcon, TerminalIcon as MacTerminalIcon, SystemPreferencesIcon, DownloadsIcon, CloudIcon } from "@/components/macos-icons";
-import { GlassEffect, GlassWindow, GlassDock, GlassButton, GlassFilter } from "@/components/ui/glass-effect";
+import { GlassEffect, GlassWindow, GlassFilter } from "@/components/ui/glass-effect";
 import { Toaster } from "@/components/ui/sonner";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search, Globe } from "lucide-react";
+import { Apple, Wifi, Battery, Search } from "lucide-react";
 
 export default function Home() {
   const [activeApp, setActiveApp] = useState<string | null>(null);
