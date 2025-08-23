@@ -24,6 +24,7 @@ export function ClaudeChat({
   const [copiedCode, setCopiedCode] = useState<string>("");
   const [sessionId, setSessionId] = useState<string>("");
   const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<SDKMessage[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
 
@@ -60,22 +61,24 @@ export function ClaudeChat({
     }
   );
 
-  const messages = useMemo(() => {
-    const streamMessages = stream.data?.messages ?? [];
-
-    // extract session id from messages if available
-    const sessionMsg = streamMessages.find((m: SDKMessage) => m.session_id);
-    if (sessionMsg && sessionMsg.session_id !== sessionId) {
-      setSessionId(sessionMsg.session_id);
+  // update messages when stream data changes
+  useEffect(() => {
+    if (stream.data?.messages && stream.data.messages.length > 0) {
+      console.log("[claude-chat] updating messages:", stream.data.messages.length);
+      setMessages(stream.data.messages);
+      
+      // extract session id from messages if available
+      const sessionMsg = stream.data.messages.find((m: SDKMessage) => m.session_id);
+      if (sessionMsg && sessionMsg.session_id !== sessionId) {
+        setSessionId(sessionMsg.session_id);
+      }
     }
-
-    // clear stream when complete
+    
+    // clear stream id when complete but keep messages
     if (stream.data?.complete) {
-      console.log("[claude-chat] stream complete");
+      console.log("[claude-chat] stream complete, clearing stream id");
       setTimeout(() => setCurrentStreamId(null), 500);
     }
-
-    return streamMessages;
   }, [stream.data, sessionId]);
 
   const scrollToBottom = () => {
@@ -94,6 +97,11 @@ export function ClaudeChat({
 
     const currentPrompt = prompt;
     setPrompt("");
+    
+    // clear old messages if starting new conversation
+    if (!continueSession || !sessionId) {
+      setMessages([]);
+    }
 
     // generate unique stream id
     const streamId = `stream-${Date.now()}-${Math.random()
