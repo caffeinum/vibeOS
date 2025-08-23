@@ -25,6 +25,7 @@ export function ClaudeChat({
   const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const sizeConfig = {
     sm: "w-80 h-96",
@@ -141,6 +142,66 @@ export function ClaudeChat({
     setInput(e.target.value);
   };
 
+  // handle paste event for images
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const imageItems: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          imageItems.push(file);
+        }
+      }
+    }
+
+    if (imageItems.length > 0) {
+      e.preventDefault();
+      const newImages: Array<{ url: string; file: File }> = [];
+      for (const file of imageItems) {
+        const url = URL.createObjectURL(file);
+        newImages.push({ url, file });
+      }
+      setSelectedImages([...selectedImages, ...newImages]);
+    }
+  };
+
+  // handle drag and drop
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget === e.target) {
+      setIsDragging(false);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const imageFiles = files.filter(file => file.type.startsWith("image/"));
+    
+    if (imageFiles.length > 0) {
+      const newImages: Array<{ url: string; file: File }> = [];
+      for (const file of imageFiles) {
+        const url = URL.createObjectURL(file);
+        newImages.push({ url, file });
+      }
+      setSelectedImages([...selectedImages, ...newImages]);
+    }
+  };
+
   return (
     <div
       className={`fixed z-50 ${positionConfig[position]} ${className || ""}`}
@@ -182,7 +243,19 @@ export function ClaudeChat({
               exit={{ opacity: 0, scale: 0.8, y: 20 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
               className={`backdrop-blur-xs rounded-2xl flex flex-col overflow-hidden relative ${sizeConfig[size]}`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
             >
+              {/* Drag overlay */}
+              {isDragging && (
+                <div className="absolute inset-0 z-50 bg-blue-500/20 backdrop-blur-sm rounded-2xl flex items-center justify-center pointer-events-none">
+                  <div className="bg-white/90 rounded-lg px-4 py-3 shadow-lg">
+                    <p className="text-sm font-medium text-gray-700">drop images here</p>
+                  </div>
+                </div>
+              )}
+
               {/* Close button */}
               <div className="absolute top-2 right-2 z-10">
                 <button
@@ -359,6 +432,7 @@ export function ClaudeChat({
                       value={input}
                       onChange={handleInputChange}
                       onKeyPress={handleKeyPress}
+                      onPaste={handlePaste}
                       placeholder="message claude code..."
                       className="w-full px-4 py-2 text-sm bg-gray-50 rounded-full border border-gray-300 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                       disabled={isLoading}

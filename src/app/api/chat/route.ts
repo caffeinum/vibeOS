@@ -1,4 +1,5 @@
 import { query, type Options } from "@anthropic-ai/claude-code";
+import type { ContentBlockParam, ImageBlockParam, TextBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
 import {
   createUIMessageStream,
   createUIMessageStreamResponse,
@@ -16,27 +17,36 @@ export async function POST(req: Request) {
   console.log("[chat/route] received message:", lastMessage);
 
   // Build prompt with support for images and text
-  const parts: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> = [];
+  const contentBlocks: ContentBlockParam[] = [];
   
   for (const part of lastMessage.parts) {
+    console.log("[chat/route] processing part:", part.type);
+    
     if (part.type === "text") {
-      parts.push({ type: "text", text: part.text });
+      const textBlock: TextBlockParam = {
+        type: "text",
+        text: part.text
+      };
+      contentBlocks.push(textBlock);
     } else if (part.type === "image") {
-      parts.push({
+      const imageBlock: ImageBlockParam = {
         type: "image",
         source: {
           type: "base64",
           media_type: part.mimeType || "image/jpeg",
           data: part.image,
         },
-      });
+      };
+      contentBlocks.push(imageBlock);
     }
   }
 
+  console.log("[chat/route] content blocks to send:", JSON.stringify(contentBlocks).slice(0, 200));
+
   // For backward compatibility, if only text parts exist, use a simple string
-  const prompt = parts.length === 1 && parts[0].type === "text" 
-    ? parts[0].text
-    : parts;
+  const prompt = contentBlocks.length === 1 && contentBlocks[0].type === "text" 
+    ? contentBlocks[0].text
+    : contentBlocks;
 
   // Track session for conversation continuity
   const sessionId = messages.length > 1 ? "chat-session" : undefined;
