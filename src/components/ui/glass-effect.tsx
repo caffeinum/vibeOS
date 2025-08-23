@@ -32,17 +32,21 @@ export const GlassEffect: React.FC<GlassEffectProps> = ({
     ...style,
   };
 
+  // Check if rounded-none is in the className to override default rounding
+  const isRoundedNone = className.includes("rounded-none");
+  const roundedClass = isRoundedNone ? "" : "rounded-3xl";
+
   const content = (
     <div
       className={cn(
-        "relative flex font-semibold overflow-hidden text-black cursor-pointer transition-all duration-700",
+        "relative font-semibold overflow-hidden text-black cursor-pointer transition-all duration-700",
         className
       )}
       style={glassStyle}
     >
       {/* Glass Layers */}
       <div
-        className="absolute inset-0 z-0 overflow-hidden rounded-inherit rounded-3xl"
+        className={cn("absolute inset-0 z-0 overflow-hidden rounded-inherit", roundedClass)}
         style={{
           backdropFilter: "blur(3px)",
           filter: "url(#glass-distortion)",
@@ -54,7 +58,7 @@ export const GlassEffect: React.FC<GlassEffectProps> = ({
         style={{ background: "rgba(255, 255, 255, 0.25)" }}
       />
       <div
-        className="absolute inset-0 z-20 rounded-inherit rounded-3xl overflow-hidden"
+        className={cn("absolute inset-0 z-20 rounded-inherit overflow-hidden", roundedClass)}
         style={{
           boxShadow:
             "inset 2px 2px 1px 0 rgba(255, 255, 255, 0.5), inset -1px -1px 1px 1px rgba(255, 255, 255, 0.5)",
@@ -62,7 +66,7 @@ export const GlassEffect: React.FC<GlassEffectProps> = ({
       />
 
       {/* Content */}
-      <div className="relative z-30">{children}</div>
+      <div className="relative z-30 w-full h-full">{children}</div>
     </div>
   );
 

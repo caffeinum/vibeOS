@@ -70,27 +70,25 @@ export default function Home() {
       <GlassFilter />
       
       {/* macOS Menu Bar */}
-      <div className="fixed top-0 left-0 right-0 h-7 z-50">
-        <GlassEffect className="h-full rounded-none">
-          <div className="h-full flex items-center justify-between px-4 text-white text-xs font-medium">
-            <div className="flex items-center gap-4">
-              <Apple className="w-4 h-4" />
-              <span className="font-semibold">Claude OS</span>
-              <span className="text-white/70">File</span>
-              <span className="text-white/70">Edit</span>
-              <span className="text-white/70">View</span>
-              <span className="text-white/70">Window</span>
-              <span className="text-white/70">Help</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <Search className="w-3.5 h-3.5" />
-              <Wifi className="w-3.5 h-3.5" />
-              <Battery className="w-3.5 h-3.5" />
-              <span>{formatTime(currentTime)}</span>
-            </div>
+      <GlassEffect className="fixed top-0 left-0 right-0 h-7 z-50 rounded-none">
+        <div className="h-full w-full flex items-center justify-between px-4 text-white text-xs font-medium">
+          <div className="flex items-center gap-4">
+            <Apple className="w-4 h-4" />
+            <span className="font-semibold">Claude OS</span>
+            <span className="text-white/70">File</span>
+            <span className="text-white/70">Edit</span>
+            <span className="text-white/70">View</span>
+            <span className="text-white/70">Window</span>
+            <span className="text-white/70">Help</span>
           </div>
-        </GlassEffect>
-      </div>
+          <div className="flex items-center gap-3">
+            <Search className="w-3.5 h-3.5" />
+            <Wifi className="w-3.5 h-3.5" />
+            <Battery className="w-3.5 h-3.5" />
+            <span>{formatTime(currentTime)}</span>
+          </div>
+        </div>
+      </GlassEffect>
       
       {/* Desktop */}
       <div className="flex-1 relative overflow-hidden">
