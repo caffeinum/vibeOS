@@ -23,6 +23,7 @@ interface KernelError {
 interface BrowserProps {
   isOpen?: boolean;
   onClose?: () => void;
+  initialized?: boolean;
 }
 
 // Utility function to get page title from URL
@@ -78,7 +79,7 @@ const getPageTitle = (url: string): string => {
   }
 };
 
-export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) {
+export function Browser({ isOpen: externalIsOpen, onClose, initialized }: BrowserProps = {}) {
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
   const [currentUrl, setCurrentUrl] = useState("https://www.dedaluslabs.ai/");
@@ -174,12 +175,12 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
     setIsKernelReady(!!apiKey);
   }, []);
 
-  // Initialize browser when component mounts
+  // Initialize browser when component mounts (regardless of isOpen state)
   useEffect(() => {
-    if (isKernelReady && !kernelBrowser) {
+    if (isKernelReady && !kernelBrowser && initialized) {
       initializeKernelBrowser();
     }
-  }, [isKernelReady, kernelBrowser, initializeKernelBrowser]);
+  }, [isKernelReady, kernelBrowser, initializeKernelBrowser, initialized]);
 
   // Cleanup Kernel browser on unmount
   useEffect(() => {
@@ -190,141 +191,142 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
     };
   }, [kernelBrowser, closeKernelBrowser]);
 
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.8 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.8 }}
-          transition={{ type: "spring", stiffness: 300, damping: 30 }}
-          className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50"
-          style={{ width: '956px', height: '706px' }}
-        >
-          <div className="bg-white/95 backdrop-blur-xl rounded-xl shadow-2xl overflow-hidden w-full h-full flex flex-col border border-white/20">
-            {/* Browser Header */}
-            <div className="bg-gray-100/80 backdrop-blur-sm border-b border-gray-200/50 px-3 py-2">
-              <div className="flex items-center gap-2">
-                {/* Window Controls */}
-                <div className="flex gap-1">
-                  <button
-                    onClick={onClose}
-                    className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
-                  />
-                  <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600 transition-colors" />
-                  <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600 transition-colors" />
-                </div>
-              </div>
-            </div>
+  // Render the browser content always, but hide it when not open
+  const browserContent = (
+    <div className="bg-white/95 backdrop-blur-xl rounded-xl shadow-2xl overflow-hidden w-full h-full flex flex-col border border-white/20">
+      {/* Browser Header */}
+      <div className="bg-gray-100/80 backdrop-blur-sm border-b border-gray-200/50 px-3 py-2">
+        <div className="flex items-center gap-2">
+          {/* Window Controls */}
+          <div className="flex gap-1">
+            <button
+              onClick={onClose}
+              className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
+            />
+            <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600 transition-colors" />
+            <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600 transition-colors" />
+          </div>
+        </div>
+      </div>
 
-            {/* Browser Content */}
-            <div className="flex-1 relative bg-white overflow-hidden">
-              {!isKernelReady ? (
-                <div className="flex flex-col items-center justify-center h-full text-gray-500">
-                  <Shield className="w-16 h-16 mb-4 opacity-50" />
-                  <h2 className="text-lg font-medium mb-2">Kernel API Required</h2>
-                  <p className="text-sm text-center max-w-md mb-4">
-                    To use this browser, you need a Kernel API key. Set NEXT_PUBLIC_KERNEL_API_KEY environment variable or add your API key to localStorage.
-                  </p>
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      placeholder="Enter Kernel API Key"
-                      className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                      onKeyPress={(e) => {
-                        if (e.key === 'Enter') {
-                          const input = e.target as HTMLInputElement;
-                          const apiKey = input.value.trim();
-                          if (apiKey) {
-                            localStorage.setItem('kernelApiKey', apiKey);
-                            setKernelApiKey(apiKey);
-                            setIsKernelReady(true);
-                          }
-                        }
-                      }}
-                    />
-                    <button
-                      onClick={() => window.open('https://docs.onkernel.com', '_blank')}
-                      className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
-                    >
-                      Get API Key
-                    </button>
-                  </div>
-                </div>
-              ) : currentUrl && currentUrl !== "about:blank" ? (
-                kernelError || !kernelBrowser ? (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-500">
-                    <Shield className="w-16 h-16 mb-4 opacity-50" />
-                    <h2 className="text-lg font-medium mb-2">Browser Error</h2>
-                    <p className="text-sm text-center max-w-md mb-4">
-                      {kernelError?.message || "Failed to create Kernel browser session. Please check your connection and API key."}
-                    </p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => initializeKernelBrowser()}
-                        className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
-                      >
-                        Retry
-                      </button>
-                      <button
-                        onClick={() => window.open('https://docs.onkernel.com', '_blank')}
-                        className="px-3 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm"
-                      >
-                        Documentation
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="w-full h-full overflow-hidden">
-                    <iframe
-                      src={kernelBrowser?.browser_live_view_url}
-                      className="w-full border-0"
-                      style={{ 
-                        height: 'calc(100% + 66px)', 
-                        marginTop: '-53px' 
-                      }}
-                      scrolling="no"
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
-                      allow="camera; microphone; geolocation"
-                    />
-                  </div>
-                )
-              ) : (
-                <div className="flex flex-col items-center justify-center h-full text-gray-500">
-                  <Globe className="w-16 h-16 mb-4 opacity-50" />
-                  <h2 className="text-lg font-medium mb-2">Welcome to Kernel Browser</h2>
-                  <p className="text-sm text-center max-w-md mb-4">
-                    Start browsing by entering a URL or search term in the address bar above. Powered by Kernel's isolated browser infrastructure!
-                  </p>
-                  <button
-                    onClick={() => window.open("https://www.wikipedia.org", '_blank')}
-                    className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
-                  >
-                    Try Wikipedia
-                  </button>
-                </div>
-              )}
-
-              {/* Loading Overlay */}
-              <AnimatePresence>
-                {isLoading && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                      <span className="text-sm font-medium text-gray-700">Loading...</span>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+      {/* Browser Content */}
+      <div className="flex-1 relative bg-white overflow-hidden">
+        {!isKernelReady ? (
+          <div className="flex flex-col items-center justify-center h-full text-gray-500">
+            <Shield className="w-16 h-16 mb-4 opacity-50" />
+            <h2 className="text-lg font-medium mb-2">Kernel API Required</h2>
+            <p className="text-sm text-center max-w-md mb-4">
+              To use this browser, you need a Kernel API key. Set NEXT_PUBLIC_KERNEL_API_KEY environment variable or add your API key to localStorage.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                placeholder="Enter Kernel API Key"
+                className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    const input = e.target as HTMLInputElement;
+                    const apiKey = input.value.trim();
+                    if (apiKey) {
+                      localStorage.setItem('kernelApiKey', apiKey);
+                      setKernelApiKey(apiKey);
+                      setIsKernelReady(true);
+                    }
+                  }
+                }}
+              />
+              <button
+                onClick={() => window.open('https://docs.onkernel.com', '_blank')}
+                className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
+              >
+                Get API Key
+              </button>
             </div>
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        ) : currentUrl && currentUrl !== "about:blank" ? (
+          kernelError || !kernelBrowser ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-500">
+              <Shield className="w-16 h-16 mb-4 opacity-50" />
+              <h2 className="text-lg font-medium mb-2">Browser Error</h2>
+              <p className="text-sm text-center max-w-md mb-4">
+                {kernelError?.message || "Failed to create Kernel browser session. Please check your connection and API key."}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => initializeKernelBrowser()}
+                  className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
+                >
+                  Retry
+                </button>
+                <button
+                  onClick={() => window.open('https://docs.onkernel.com', '_blank')}
+                  className="px-3 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm"
+                >
+                  Documentation
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="w-full h-full overflow-hidden">
+              <iframe
+                src={kernelBrowser?.browser_live_view_url}
+                className="w-full border-0"
+                style={{ 
+                  height: 'calc(100% + 66px)', 
+                  marginTop: '-53px' 
+                }}
+                scrolling="no"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
+                allow="camera; microphone; geolocation"
+              />
+            </div>
+          )
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full text-gray-500">
+            <Globe className="w-16 h-16 mb-4 opacity-50" />
+            <h2 className="text-lg font-medium mb-2">Welcome to Kernel Browser</h2>
+            <p className="text-sm text-center max-w-md mb-4">
+              Start browsing by entering a URL or search term in the address bar above. Powered by Kernel's isolated browser infrastructure!
+            </p>
+            <button
+              onClick={() => window.open("https://www.wikipedia.org", '_blank')}
+              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+            >
+              Try Wikipedia
+            </button>
+          </div>
+        )}
+
+        {/* Loading Overlay */}
+        <AnimatePresence>
+          {isLoading && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center"
+            >
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm font-medium text-gray-700">Loading...</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+
+  return (
+    <div 
+      className={`fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 transition-all duration-300 ${
+        isOpen 
+          ? 'opacity-100 scale-100 pointer-events-auto' 
+          : 'opacity-0 scale-95 pointer-events-none'
+      }`}
+      style={{ width: '956px', height: '706px' }}
+    >
+      {browserContent}
+    </div>
   );
 }
