@@ -10,6 +10,9 @@ import { Terminal } from "@/components/terminal";
 import { CryptoTracker } from "@/components/crypto-tracker";
 import { Browser } from "@/components/browser";
 import { MacOSDock } from "@/components/macos-dock";
+import { FinderIcon, SafariIcon, MessagesIcon, TerminalIcon as MacTerminalIcon, SystemPreferencesIcon, DownloadsIcon, CloudIcon } from "@/components/macos-icons";
+import { GlassEffect, GlassWindow, GlassDock, GlassButton, GlassFilter } from "@/components/ui/glass-effect";
+import { Toaster } from "@/components/ui/sonner";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search, Globe } from "lucide-react";
@@ -46,13 +49,13 @@ export default function Home() {
   };
   
   const dockApps = [
-    { id: 'finder', name: 'Finder', icon: <Folder className="w-8 h-8" />, color: 'from-blue-400 to-blue-600' },
-    { id: 'downloads', name: 'Downloads', icon: <Download className="w-8 h-8" />, color: 'from-pink-400 to-red-600' },
-    { id: 'browser', name: 'Browser', icon: <Globe className="w-8 h-8" />, color: 'from-orange-400 to-red-500' },
-    { id: 'gcp', name: 'GCP VMs', icon: <Cloud className="w-8 h-8" />, color: 'from-cyan-400 to-blue-600' },
-    { id: 'claude', name: 'Claude Chat', icon: <MessageCircle className="w-8 h-8" />, color: 'from-purple-400 to-purple-600' },
-    { id: 'terminal', name: 'Terminal', icon: <TerminalIcon className="w-8 h-8" />, color: 'from-gray-700 to-gray-900' },
-    { id: 'settings', name: 'Settings', icon: <Settings className="w-8 h-8" />, color: 'from-gray-400 to-gray-600' },
+    { id: 'finder', name: 'Finder', icon: <FinderIcon /> },
+    { id: 'browser', name: 'Safari', icon: <SafariIcon /> },
+    { id: 'claude', name: 'Messages', icon: <MessagesIcon /> },
+    { id: 'terminal', name: 'Terminal', icon: <MacTerminalIcon /> },
+    { id: 'downloads', name: 'Downloads', icon: <DownloadsIcon /> },
+    { id: 'gcp', name: 'Cloud', icon: <CloudIcon /> },
+    { id: 'settings', name: 'System Preferences', icon: <SystemPreferencesIcon /> },
   ];
 
   return (
@@ -64,24 +67,28 @@ export default function Home() {
         backgroundRepeat: 'no-repeat'
       }}
     >
+      <GlassFilter />
+      
       {/* macOS Menu Bar */}
-      <div className="bg-black/40 backdrop-blur-2xl h-7 flex items-center justify-between px-4 text-white text-xs font-medium z-50 border-b border-white/10">
-        <div className="flex items-center gap-4">
-          <Apple className="w-4 h-4" />
-          <span className="font-semibold">Claude OS</span>
-          <span className="text-white/70">File</span>
-          <span className="text-white/70">Edit</span>
-          <span className="text-white/70">View</span>
-          <span className="text-white/70">Window</span>
-          <span className="text-white/70">Help</span>
+      <GlassEffect className="fixed top-0 left-0 right-0 h-7 z-50 rounded-none">
+        <div className="h-full w-full flex items-center justify-between px-4 text-white text-xs font-medium">
+          <div className="flex items-center gap-4">
+            <Apple className="w-4 h-4" />
+            <span className="font-semibold">Claude OS</span>
+            <span className="text-white/70">File</span>
+            <span className="text-white/70">Edit</span>
+            <span className="text-white/70">View</span>
+            <span className="text-white/70">Window</span>
+            <span className="text-white/70">Help</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Search className="w-3.5 h-3.5" />
+            <Wifi className="w-3.5 h-3.5" />
+            <Battery className="w-3.5 h-3.5" />
+            <span>{formatTime(currentTime)}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          <Search className="w-3.5 h-3.5" />
-          <Wifi className="w-3.5 h-3.5" />
-          <Battery className="w-3.5 h-3.5" />
-          <span>{formatTime(currentTime)}</span>
-        </div>
-      </div>
+      </GlassEffect>
       
       {/* Desktop */}
       <div className="flex-1 relative overflow-hidden">
@@ -105,17 +112,13 @@ export default function Home() {
               exit={{ scale: 0.8, opacity: 0 }}
               className="absolute top-10 left-10 z-20"
             >
-              <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[800px]">
-                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
-                  <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
-                  <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
-                  <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
-                  <span className="ml-2 text-xs font-medium">Finder</span>
-                </div>
-                <div className="p-4">
-                  {useEnhancedBrowser ? <FileBrowserEnhanced /> : <FileBrowser />}
-                </div>
-              </div>
+              <GlassWindow 
+                title="Finder" 
+                onClose={() => setActiveApp(null)}
+                className="w-[800px]"
+              >
+                {useEnhancedBrowser ? <FileBrowserEnhanced /> : <FileBrowser />}
+              </GlassWindow>
             </motion.div>
           )}
           
@@ -126,17 +129,13 @@ export default function Home() {
               exit={{ scale: 0.8, opacity: 0 }}
               className="absolute top-10 left-10 z-20"
             >
-              <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[600px]">
-                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
-                  <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
-                  <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
-                  <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
-                  <span className="ml-2 text-xs font-medium">Downloads</span>
-                </div>
-                <div className="p-4">
-                  <DownloadTinder />
-                </div>
-              </div>
+              <GlassWindow 
+                title="Downloads" 
+                onClose={() => setActiveApp(null)}
+                className="w-[600px]"
+              >
+                <DownloadTinder />
+              </GlassWindow>
             </motion.div>
           )}
           
@@ -147,17 +146,13 @@ export default function Home() {
               exit={{ scale: 0.8, opacity: 0 }}
               className="absolute top-10 left-10 z-20"
             >
-              <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[900px]">
-                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
-                  <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
-                  <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
-                  <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
-                  <span className="ml-2 text-xs font-medium">GCP VMs</span>
-                </div>
-                <div className="p-4">
-                  <GCPVMList />
-                </div>
-              </div>
+              <GlassWindow 
+                title="GCP VMs" 
+                onClose={() => setActiveApp(null)}
+                className="w-[900px]"
+              >
+                <GCPVMList />
+              </GlassWindow>
             </motion.div>
           )}
         </AnimatePresence>
@@ -202,6 +197,9 @@ export default function Home() {
       <div style={{ display: 'none' }}>
         <DarkModeToggle />
       </div>
+      
+      {/* Toast Notifications */}
+      <Toaster position="top-center" />
     </main>
   );
 }
