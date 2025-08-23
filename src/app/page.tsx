@@ -9,7 +9,7 @@ import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { Terminal } from "@/components/terminal";
 import { CryptoTracker } from "@/components/crypto-tracker";
 import { Browser } from "@/components/browser";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search, Globe } from "lucide-react";
 
@@ -21,22 +21,85 @@ export default function Home() {
   const [showTerminal, setShowTerminal] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+  const [windowPositions, setWindowPositions] = useState<Record<string, { x: number; y: number }>>({
+    finder: { x: 60, y: 60 },
+    downloads: { x: 60, y: 60 },
+    gcp: { x: 60, y: 60 }
+  });
+  const [windowDimensions, setWindowDimensions] = useState({ width: 0, height: 0 });
+
+  // Refs for performance optimization
+  const windowDimensionsRef = useRef({ width: 0, height: 0 });
+  const dragConstraintsRef = useRef<Record<string, any>>({});
   
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Update window dimensions on mount and resize
+  useEffect(() => {
+    const updateDimensions = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      setWindowDimensions({ width, height });
+      windowDimensionsRef.current = { width, height };
+
+      // Pre-calculate drag constraints for all windows
+      dragConstraintsRef.current = {
+        finder: {
+          left: 0,
+          top: 40,
+          right: width - 800,
+          bottom: height - 300
+        },
+        downloads: {
+          left: 0,
+          top: 40,
+          right: width - 600,
+          bottom: height - 300
+        },
+        gcp: {
+          left: 0,
+          top: 40,
+          right: width - 900,
+          bottom: height - 300
+        }
+      };
+    };
+
+    updateDimensions();
+    window.addEventListener('resize', updateDimensions);
+    return () => window.removeEventListener('resize', updateDimensions);
+  }, []);
   
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-US', { 
+    return date.toLocaleTimeString('en-US', {
       weekday: 'short',
       month: 'short',
       day: 'numeric',
       hour: 'numeric',
       minute: '2-digit',
-      hour12: true 
+      hour12: true
     });
   };
+
+  // Memoized drag handlers for better performance
+  const createDragHandler = useCallback((windowId: string) => {
+    return (event: any, info: any) => {
+      setWindowPositions(prev => ({
+        ...prev,
+        [windowId]: {
+          x: info.point.x,
+          y: info.point.y
+        }
+      }));
+    };
+  }, []);
+
+  const finderDragHandler = useMemo(() => createDragHandler('finder'), [createDragHandler]);
+  const downloadsDragHandler = useMemo(() => createDragHandler('downloads'), [createDragHandler]);
+  const gcpDragHandler = useMemo(() => createDragHandler('gcp'), [createDragHandler]);
   
   const dockApps = [
     { id: 'finder', name: 'Finder', icon: <Folder className="w-8 h-8" />, color: 'from-blue-400 to-blue-600' },
@@ -96,10 +159,24 @@ export default function Home() {
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.8, opacity: 0 }}
-              className="absolute top-10 left-10 z-20"
+              drag
+              dragMomentum={false}
+              dragConstraints={dragConstraintsRef.current.finder || {
+                left: 0,
+                top: 40,
+                right: windowDimensions.width - 800,
+                bottom: windowDimensions.height - 300
+              }}
+              style={{
+                x: windowPositions.finder.x,
+                y: windowPositions.finder.y,
+                position: 'absolute',
+                zIndex: 20
+              }}
+              onDragEnd={finderDragHandler}
             >
               <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[800px]">
-                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
+                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2 cursor-move">
                   <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
                   <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
                   <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
@@ -117,10 +194,24 @@ export default function Home() {
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.8, opacity: 0 }}
-              className="absolute top-10 left-10 z-20"
+              drag
+              dragMomentum={false}
+              dragConstraints={dragConstraintsRef.current.downloads || {
+                left: 0,
+                top: 40,
+                right: windowDimensions.width - 600,
+                bottom: windowDimensions.height - 300
+              }}
+              style={{
+                x: windowPositions.downloads.x,
+                y: windowPositions.downloads.y,
+                position: 'absolute',
+                zIndex: 20
+              }}
+              onDragEnd={downloadsDragHandler}
             >
               <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[600px]">
-                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
+                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2 cursor-move">
                   <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
                   <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
                   <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
@@ -138,10 +229,24 @@ export default function Home() {
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.8, opacity: 0 }}
-              className="absolute top-10 left-10 z-20"
+              drag
+              dragMomentum={false}
+              dragConstraints={dragConstraintsRef.current.gcp || {
+                left: 0,
+                top: 40,
+                right: windowDimensions.width - 900,
+                bottom: windowDimensions.height - 300
+              }}
+              style={{
+                x: windowPositions.gcp.x,
+                y: windowPositions.gcp.y,
+                position: 'absolute',
+                zIndex: 20
+              }}
+              onDragEnd={gcpDragHandler}
             >
               <div className="bg-white/95 backdrop-blur-xl rounded-lg shadow-2xl overflow-hidden w-[900px]">
-                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2">
+                <div className="bg-gray-200 h-7 flex items-center px-3 gap-2 cursor-move">
                   <button onClick={() => setActiveApp(null)} className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-600" />
                   <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600" />
                   <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600" />
@@ -162,9 +267,13 @@ export default function Home() {
           {dockApps.map((app) => (
             <motion.button
               key={app.id}
+              whileHover={{ scale: 1.3, y: -10 }}
+              whileTap={{ scale: 0.95 }}
+              transition={{ type: "spring", stiffness: 300, damping: 20 }}
+              className="relative group"
               onClick={() => {
                 if (app.id === 'claude') {
-                  setShowClaude(true);
+                  setShowClaude(prev => !prev);
                 } else if (app.id === 'terminal') {
                   setShowTerminal(true);
                 } else if (app.id === 'browser') {
@@ -172,13 +281,18 @@ export default function Home() {
                 } else if (app.id === 'settings') {
                   setDarkMode(prev => !prev);
                 } else {
-                  setActiveApp(activeApp === app.id ? null : app.id);
+                  const newActiveApp = activeApp === app.id ? null : app.id;
+                  setActiveApp(newActiveApp);
+                  // Reset window position when opening a new app
+                  if (newActiveApp && newActiveApp !== activeApp) {
+                    const offset = Object.values(windowPositions).length * 20;
+                    setWindowPositions(prev => ({
+                      ...prev,
+                      [newActiveApp]: { x: 60 + offset, y: 60 + offset }
+                    }));
+                  }
                 }
               }}
-              whileHover={{ scale: 1.3, y: -10 }}
-              whileTap={{ scale: 0.95 }}
-              transition={{ type: "spring", stiffness: 300, damping: 20 }}
-              className="relative group"
             >
               <div className={`w-14 h-14 bg-gradient-to-br ${app.color} rounded-xl flex items-center justify-center text-white shadow-lg`}>
                 {app.icon}
