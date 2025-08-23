@@ -464,7 +464,7 @@ export function ClaudeChat({
                       onKeyPress={handleKeyPress}
                       onPaste={handlePaste}
                       placeholder="message claude code..."
-                      className="w-full px-4 py-2 text-sm bg-gray-50 rounded-full border border-gray-300 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                      className="w-full px-4 py-2 text-sm text-gray-900 bg-gray-50 rounded-full border border-gray-300 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                       disabled={isLoading}
                       rows={1}
                     />

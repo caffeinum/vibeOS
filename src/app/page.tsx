@@ -8,9 +8,10 @@ import { GCPVMList } from "@/components/gcp-vm-list";
 import { DarkModeToggle } from "@/components/dark-mode-toggle";
 import { Terminal } from "@/components/terminal";
 import { CryptoTracker } from "@/components/crypto-tracker";
+import { Browser } from "@/components/browser";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search } from "lucide-react";
+import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search, Globe } from "lucide-react";
 
 export default function Home() {
   const [activeApp, setActiveApp] = useState<string | null>(null);
@@ -18,6 +19,7 @@ export default function Home() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [showClaude, setShowClaude] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
+  const [showBrowser, setShowBrowser] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   
   useEffect(() => {
@@ -39,6 +41,7 @@ export default function Home() {
   const dockApps = [
     { id: 'finder', name: 'Finder', icon: <Folder className="w-8 h-8" />, color: 'from-blue-400 to-blue-600' },
     { id: 'downloads', name: 'Downloads', icon: <Download className="w-8 h-8" />, color: 'from-pink-400 to-red-600' },
+    { id: 'browser', name: 'Browser', icon: <Globe className="w-8 h-8" />, color: 'from-orange-400 to-red-500' },
     { id: 'gcp', name: 'GCP VMs', icon: <Cloud className="w-8 h-8" />, color: 'from-cyan-400 to-blue-600' },
     { id: 'claude', name: 'Claude Chat', icon: <MessageCircle className="w-8 h-8" />, color: 'from-purple-400 to-purple-600' },
     { id: 'terminal', name: 'Terminal', icon: <TerminalIcon className="w-8 h-8" />, color: 'from-gray-700 to-gray-900' },
@@ -164,6 +167,8 @@ export default function Home() {
                   setShowClaude(true);
                 } else if (app.id === 'terminal') {
                   setShowTerminal(true);
+                } else if (app.id === 'browser') {
+                  setShowBrowser(true);
                 } else if (app.id === 'settings') {
                   setDarkMode(prev => !prev);
                 } else {
@@ -194,15 +199,19 @@ export default function Home() {
       </div>
       
       {/* Controlled Components */}
-      <ClaudeChat 
-        position="bottom-right" 
-        size="lg" 
+      <ClaudeChat
+        position="bottom-right"
+        size="lg"
         isOpen={showClaude}
         onClose={() => setShowClaude(false)}
       />
-      <Terminal 
+      <Terminal
         isOpen={showTerminal}
         onClose={() => setShowTerminal(false)}
+      />
+      <Browser
+        isOpen={showBrowser}
+        onClose={() => setShowBrowser(false)}
       />
       <div style={{ display: 'none' }}>
         <DarkModeToggle />
