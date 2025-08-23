@@ -11,6 +11,8 @@ import { CryptoTracker } from "@/components/crypto-tracker";
 import { Browser } from "@/components/browser";
 import { MacOSDock } from "@/components/macos-dock";
 import { FinderIcon, SafariIcon, MessagesIcon, TerminalIcon as MacTerminalIcon, SystemPreferencesIcon, DownloadsIcon, CloudIcon } from "@/components/macos-icons";
+import { LiquidGlass } from "@/components/ui/liquid-glass";
+import { Toaster } from "@/components/ui/sonner";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Folder, Download, Cloud, Settings, MessageCircle, Terminal as TerminalIcon, Apple, Wifi, Battery, Search, Globe } from "lucide-react";
@@ -203,6 +205,12 @@ export default function Home() {
       <div style={{ display: 'none' }}>
         <DarkModeToggle />
       </div>
+      
+      {/* Liquid Glass Effect */}
+      <LiquidGlass />
+      
+      {/* Toast Notifications */}
+      <Toaster position="top-center" />
     </main>
   );
 }
