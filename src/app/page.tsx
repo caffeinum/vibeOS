@@ -161,9 +161,11 @@ export default function Home() {
               <GlassWindow 
                 title="Dedalus AI Chat" 
                 onClose={() => setActiveApp(null)}
-                className="w-[700px] h-[600px]"
+                className="w-[700px]"
               >
-                <DedalusChat />
+                <div className="h-[500px]">
+                  <DedalusChat />
+                </div>
               </GlassWindow>
             </motion.div>
           )}
