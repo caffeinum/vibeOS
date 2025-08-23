@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, MessageCircle, Send } from "lucide-react";
+import { Bot, MessageCircle, Send, StopCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 interface ClaudeChatProps {
@@ -266,15 +266,26 @@ export function ClaudeChat({
                       rows={1}
                     />
                   </div>
-                  <motion.button
-                    type="submit"
-                    disabled={isLoading || !input.trim()}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="px-3 py-2 bg-blue-500 text-white text-sm rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
-                  >
-                    <Send className="h-4 w-4" />
-                  </motion.button>
+                  {isLoading && (
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={stop}
+                      className="px-3 py-2 bg-blue-500 text-white text-sm rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
+                    >
+                      <StopCircle className="h-4 w-4" />
+                    </motion.button>
+                  )}
+                  {!isLoading && (
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={handleSubmit}
+                      className="px-3 py-2 bg-blue-500 text-white text-sm rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
+                    >
+                      <Send className="h-4 w-4" />
+                    </motion.button>
+                  )}
                 </div>
               </form>
             </motion.div>
