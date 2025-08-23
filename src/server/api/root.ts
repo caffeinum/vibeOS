@@ -4,7 +4,6 @@ import { filesRouter } from './routers/files';
 import { gcpRouter } from './routers/gcp';
 import { terminalRouter } from './routers/terminal';
 import { kernelRouter } from './routers/kernel';
-import { mcpRouter } from './routers/mcp';
 
 export const appRouter = router({
   crypto: cryptoRouter,
@@ -12,7 +11,6 @@ export const appRouter = router({
   gcp: gcpRouter,
   terminal: terminalRouter,
   kernel: kernelRouter,
-  mcp: mcpRouter,
 });
 
 export type AppRouter = typeof appRouter;
