@@ -1,9 +1,12 @@
 # Development Dockerfile with hot reload
 FROM oven/bun:1
 
+# Create a non-root user matching host user
+RUN adduser --system --uid 502 --gid 20 nextjs
+
 WORKDIR /app
 
-# Install claude-code globally
+# Install claude-code globally as root
 RUN bun add -g @anthropic-ai/claude-code
 
 # Copy package files
@@ -13,7 +16,17 @@ COPY package.json bun.lock ./
 RUN bun install
 
 # Copy application files
-COPY . .
+COPY --chown=nextjs:staff . .
+
+# Create home directory and change ownership
+RUN mkdir -p /home/nextjs && chown -R nextjs:staff /home/nextjs
+RUN chown -R nextjs:staff /app
+
+# Switch to non-root user
+USER nextjs
+
+# Set HOME environment variable for the nextjs user
+ENV HOME=/home/nextjs
 
 # Expose ports
 EXPOSE 3000
