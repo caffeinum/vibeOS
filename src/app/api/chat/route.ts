@@ -1,5 +1,9 @@
-import { query, type Options } from "@anthropic-ai/claude-code";
-import type { ContentBlockParam, ImageBlockParam, TextBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import { query, SDKUserMessage, type Options } from "@anthropic-ai/claude-code";
+import type {
+  ContentBlockParam,
+  ImageBlockParam,
+  TextBlockParam,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import {
   createUIMessageStream,
   createUIMessageStreamResponse,
@@ -7,6 +11,45 @@ import {
 } from "ai";
 
 export const maxDuration = 60000; // 60 seconds
+
+function buildPromptFromContentBlocks(
+  blocks: ContentBlockParam[]
+): string | AsyncIterable<SDKUserMessage> {
+  if (blocks.length === 1 && blocks[0].type === "text") {
+    return blocks[0].text;
+  }
+
+  const messages: SDKUserMessage[] = blocks
+    .filter((block) => block.type === "text" || block.type === "image")
+    .map((block) => {
+      if (block.type === "text") {
+        return {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: block.text }],
+          },
+          parent_tool_use_id: null,
+        } as SDKUserMessage;
+      }
+      // Handle image blocks
+      return {
+        type: "user",
+        message: {
+          role: "user",
+          content: [block],
+        },
+        parent_tool_use_id: null,
+      } as SDKUserMessage;
+    });
+
+  // Return the messages as an async iterable or handle appropriately
+  return (async function* () {
+    for (const message of messages) {
+      yield message;
+    }
+  })();
+}
 
 export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();
@@ -18,35 +61,36 @@ export async function POST(req: Request) {
 
   // Build prompt with support for images and text
   const contentBlocks: ContentBlockParam[] = [];
-  
+
   for (const part of lastMessage.parts) {
     console.log("[chat/route] processing part:", part.type);
-    
+
     if (part.type === "text") {
       const textBlock: TextBlockParam = {
         type: "text",
-        text: part.text
+        text: part.text,
       };
       contentBlocks.push(textBlock);
-    } else if (part.type === "image") {
+    } else if (part.type === "file" && part.mediaType.startsWith("image/")) {
       const imageBlock: ImageBlockParam = {
         type: "image",
         source: {
           type: "base64",
-          media_type: part.mimeType || "image/jpeg",
-          data: part.image,
+          media_type: part.mediaType || "image/jpeg",
+          data: part.url,
         },
       };
       contentBlocks.push(imageBlock);
     }
   }
 
-  console.log("[chat/route] content blocks to send:", JSON.stringify(contentBlocks).slice(0, 200));
+  console.log(
+    "[chat/route] content blocks to send:",
+    JSON.stringify(contentBlocks).slice(0, 200)
+  );
 
   // For backward compatibility, if only text parts exist, use a simple string
-  const prompt = contentBlocks.length === 1 && contentBlocks[0].type === "text" 
-    ? contentBlocks[0].text
-    : contentBlocks;
+  const prompt = buildPromptFromContentBlocks(contentBlocks);
 
   // Track session for conversation continuity
   const sessionId = messages.length > 1 ? "chat-session" : undefined;
@@ -72,7 +116,7 @@ export async function POST(req: Request) {
       }
 
       for await (const message of query({
-        prompt,
+        prompt: prompt,
         options: claudeOptions,
       })) {
         console.log("[chat/route] received message:", message.type);
@@ -104,7 +148,6 @@ export async function POST(req: Request) {
           //   type: "text-start",
           //   id: "0",
           // });
-
           // if (message.type === "user") {
           //   writer.write({
           //     type: "text-delta",
@@ -112,7 +155,6 @@ export async function POST(req: Request) {
           //     id: "0",
           //   });
           // }
-
           // if (message.type === "system") {
           //   writer.write({
           //     type: "text-delta",
@@ -120,7 +162,6 @@ export async function POST(req: Request) {
           //     id: "0",
           //   });
           // }
-
           // writer.write({
           //   type: "text-end",
           //   id: "0",
