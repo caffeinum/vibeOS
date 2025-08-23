@@ -39,6 +39,7 @@ export const clickRouter = router({
         for await (const message of messages) {
           const stream = messageStreams.get(input.streamId!);
           if (stream) {
+            console.log("[click] adding message to stream:", message);
             stream.push(message);
           }
         }
