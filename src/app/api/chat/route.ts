@@ -5,7 +5,7 @@ import {
   type UIMessage,
 } from "ai";
 
-export const maxDuration = 60 * 1000;
+export const maxDuration = 60000; // 60 seconds
 
 export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();

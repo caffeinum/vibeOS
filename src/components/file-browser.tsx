@@ -30,7 +30,7 @@ const getFileIcon = (name: string) => {
   
   if (!ext) return <File className="h-4 w-4" />;
   
-  const iconMap: Record<string, JSX.Element> = {
+  const iconMap: Record<string, React.ReactElement> = {
     // images
     jpg: <Image className="h-4 w-4 text-green-500" />,
     jpeg: <Image className="h-4 w-4 text-green-500" />,

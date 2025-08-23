@@ -38,7 +38,7 @@ interface SwipeAction {
 const getFileIcon = (extension: string, size: number = 24) => {
   const iconProps = { size };
   
-  const iconMap: Record<string, JSX.Element> = {
+  const iconMap: Record<string, React.ReactElement> = {
     '.jpg': <ImageIcon {...iconProps} className="text-green-500" />,
     '.jpeg': <ImageIcon {...iconProps} className="text-green-500" />,
     '.png': <ImageIcon {...iconProps} className="text-green-500" />,

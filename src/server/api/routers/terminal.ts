@@ -32,7 +32,7 @@ export const terminalRouter = createTRPCRouter({
           stderr: stderr || "",
           timestamp: new Date().toISOString(),
         };
-      } catch (error) {
+      } catch (error: any) {
         // handle command execution errors
         if (error.killed) {
           return {

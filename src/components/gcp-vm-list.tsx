@@ -436,7 +436,7 @@ export function GCPVMList() {
                 className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               >
                 <option value="">current project</option>
-                {projectsData.projects.map((project) => (
+                {projectsData.projects.map((project: any) => (
                   <option key={project.projectId} value={project.projectId}>
                     {project.name} ({project.projectId})
                   </option>

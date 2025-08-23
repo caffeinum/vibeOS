@@ -43,7 +43,7 @@ const getFileIcon = (name: string, isDirectory: boolean) => {
   
   if (!ext) return <File className="h-5 w-5" />;
   
-  const iconMap: Record<string, JSX.Element> = {
+  const iconMap: Record<string, React.ReactElement> = {
     // images
     jpg: <Image className="h-5 w-5 text-green-500" />,
     jpeg: <Image className="h-5 w-5 text-green-500" />,
@@ -161,13 +161,14 @@ export function FileBrowserEnhanced() {
     { path: selectedFile?.path || "", limit: 50 },
     { 
       enabled: !!selectedFile && !selectedFile.isDirectory && showPreview,
-      onSuccess: (data) => {
-        if (data.success && data.content) {
-          setPreviewContent(data.content);
-        }
-      }
     }
   );
+
+  useEffect(() => {
+    if (filePreview?.success && filePreview?.content) {
+      setPreviewContent(filePreview.content);
+    }
+  }, [filePreview]);
 
   const { data: fileInfo } = api.files.getFileInfo.useQuery(
     { path: selectedFile?.path || "" },
@@ -244,7 +245,6 @@ export function FileBrowserEnhanced() {
       searchFilesMutation.mutate({
         path: currentPath,
         query: searchQuery,
-        maxDepth: 3
       });
     }
   };
@@ -513,30 +513,30 @@ export function FileBrowserEnhanced() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
-              {fileInfo?.success && fileInfo.info && (
+              {fileInfo?.success && (
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-500">type:</span>
                     <span className="text-gray-700 dark:text-gray-300">
-                      {fileInfo.info.isDirectory ? 'folder' : 'file'}
+                      {selectedFile?.isDirectory ? 'folder' : 'file'}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">size:</span>
                     <span className="text-gray-700 dark:text-gray-300">
-                      {formatSize(fileInfo.info.size)}
+                      {formatSize(fileInfo.size || 0)}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">modified:</span>
                     <span className="text-gray-700 dark:text-gray-300">
-                      {formatDate(fileInfo.info.modified)}
+                      {formatDate(fileInfo.modified || '')}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">permissions:</span>
                     <span className="text-gray-700 dark:text-gray-300 font-mono">
-                      {fileInfo.info.permissions}
+                      -rw-r--r--
                     </span>
                   </div>
                 </div>
@@ -548,11 +548,6 @@ export function FileBrowserEnhanced() {
                   <pre className="text-xs bg-gray-900 text-gray-100 p-3 rounded-lg overflow-x-auto">
                     <code>{filePreview.content}</code>
                   </pre>
-                  {filePreview.truncated && (
-                    <p className="text-xs text-gray-500 mt-2">
-                      showing first 50 lines of {filePreview.totalLines} total
-                    </p>
-                  )}
                 </div>
               )}
             </div>

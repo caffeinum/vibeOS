@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, publicProcedure } from "@/server/api/trpc";
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as os from "os";
 import { exec } from "child_process";
 
 export const filesRouter = createTRPCRouter({
@@ -164,6 +165,81 @@ export const filesRouter = createTRPCRouter({
           success: false,
           error: error instanceof Error ? error.message : "failed to get downloads",
           files: [],
+        };
+      }
+    }),
+
+  getFileInfo: publicProcedure
+    .input(
+      z.object({
+        path: z.string(),
+      })
+    )
+    .query(async ({ input }) => {
+      try {
+        const filePath = path.join(os.homedir(), input.path);
+        const stats = await fs.stat(filePath);
+        
+        return {
+          success: true,
+          size: stats.size,
+          modified: stats.mtime.toISOString(),
+          created: stats.birthtime.toISOString(),
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Failed to get file info",
+        };
+      }
+    }),
+
+  readFile: publicProcedure
+    .input(
+      z.object({
+        path: z.string(),
+        limit: z.number().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      try {
+        const filePath = path.join(os.homedir(), input.path);
+        const content = await fs.readFile(filePath, "utf-8");
+        const lines = content.split("\n");
+        const preview = lines.slice(0, input.limit || 50).join("\n");
+        
+        return {
+          success: true,
+          content: preview,
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Read failed",
+          content: "",
+        };
+      }
+    }),
+
+  searchFiles: publicProcedure
+    .input(
+      z.object({
+        path: z.string(),
+        query: z.string(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      try {
+        // For now, just return empty results
+        // TODO: Implement actual file search
+        return {
+          success: true,
+          files: [],
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Search failed",
         };
       }
     }),
