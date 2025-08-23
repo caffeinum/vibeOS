@@ -543,7 +543,7 @@ export function Browser({ isOpen: externalIsOpen, onClose }: BrowserProps = {}) 
                       <button
                         key={bookmark.id}
                         onClick={() => navigateToUrl(bookmark.url)}
-                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-white transition-colors whitespace-nowrap"
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-white transition-colors whitespace-nowrap text-gray-700 hover:text-gray-900"
                       >
                         <span className="text-sm">{bookmark.favicon}</span>
                         <span className="text-sm font-medium">{bookmark.title}</span>
