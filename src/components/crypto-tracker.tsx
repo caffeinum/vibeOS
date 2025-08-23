@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { TrendingUp, TrendingDown, RefreshCw, DollarSign } from "lucide-react";
 import { api } from "@/utils/api";
+import { GlassEffect } from "@/components/ui/glass-effect";
 
 interface CryptoPrice {
   symbol: string;
@@ -91,20 +92,23 @@ export function CryptoTracker() {
 
   if (queryLoading && prices.length === 0) {
     return (
-      <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg">
-        <div className="flex items-center justify-center py-8">
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-            className="h-8 w-8 border-3 border-purple-500 border-t-transparent rounded-full"
-          />
+      <GlassEffect className="rounded-2xl">
+        <div className="p-6">
+          <div className="flex items-center justify-center py-8">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+              className="h-8 w-8 border-3 border-purple-500 border-t-transparent rounded-full"
+            />
+          </div>
         </div>
-      </div>
+      </GlassEffect>
     );
   }
 
   return (
-    <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg">
+    <GlassEffect className="rounded-2xl">
+      <div className="p-6">
       {/* header */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -269,6 +273,7 @@ export function CryptoTracker() {
           last updated: {lastRefresh.toLocaleTimeString()}
         </div>
       </div>
-    </div>
+      </div>
+    </GlassEffect>
   );
 }

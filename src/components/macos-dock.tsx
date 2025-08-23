@@ -3,6 +3,7 @@
 import { motion, useMotionValue, useSpring, useTransform } from "framer-motion";
 import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { GlassEffect } from "@/components/ui/glass-effect";
 
 interface DockItem {
   id: string;
@@ -27,21 +28,23 @@ export function MacOSDock({ items, activeItem, onItemClick }: MacOSDockProps) {
       onMouseLeave={() => mouseX.set(Infinity)}
       className="fixed bottom-0 left-1/2 -translate-x-1/2 mb-4 z-50"
     >
-      <div className="flex items-end gap-2 px-3 py-2 bg-white/10 dark:bg-black/20 backdrop-blur-2xl rounded-2xl border border-white/20 dark:border-white/10 shadow-2xl">
-        {items.map((item, index) => (
-          <DockIcon
-            key={item.id}
-            item={item}
-            index={index}
-            mouseX={mouseX}
-            isActive={activeItem === item.id}
-            onHoverStart={() => setHoveredIndex(index)}
-            onHoverEnd={() => setHoveredIndex(null)}
-            onClick={() => onItemClick(item)}
-            isHovered={hoveredIndex === index}
-          />
-        ))}
-      </div>
+      <GlassEffect className="rounded-2xl">
+        <div className="flex items-end gap-2 px-3 py-2">
+          {items.map((item, index) => (
+            <DockIcon
+              key={item.id}
+              item={item}
+              index={index}
+              mouseX={mouseX}
+              isActive={activeItem === item.id}
+              onHoverStart={() => setHoveredIndex(index)}
+              onHoverEnd={() => setHoveredIndex(null)}
+              onClick={() => onItemClick(item)}
+              isHovered={hoveredIndex === index}
+            />
+          ))}
+        </div>
+      </GlassEffect>
     </motion.div>
   );
 }
