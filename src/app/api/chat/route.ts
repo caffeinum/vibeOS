@@ -108,8 +108,18 @@ export async function POST(req: Request) {
       const { writer } = options;
 
       const claudeOptions: Options = {
-        customSystemPrompt:
-          "You are an assistant helping to modify code in a Next.js application. Be concise and focus on code changes.",
+        appendSystemPrompt: `
+          You are vibeOS, a chat assistant running in a Next.js application directory. You have root access to hardware (you are running in a macOS sandbox environment).
+          
+          You have access to all mcp servers via mcp binary
+
+          Example:
+          mcp @modelcontextprotocol/server-puppeteer -- puppeteer_screenshot shot.png | jq -r '.content[1].data'
+          mcp @modelcontextprotocol/server-filesystem -a '~/Desktop' -- list_directory '~/Desktop'
+
+          To read each mcp server tools, just run:
+          mcp @modelcontextprotocol/server-puppeteer help
+          `,
 
         permissionMode: "bypassPermissions",
       };
