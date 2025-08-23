@@ -15,10 +15,28 @@ export async function POST(req: Request) {
 
   console.log("[chat/route] received message:", lastMessage);
 
-  const prompt = lastMessage.parts
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n");
+  // Build prompt with support for images and text
+  const parts: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> = [];
+  
+  for (const part of lastMessage.parts) {
+    if (part.type === "text") {
+      parts.push({ type: "text", text: part.text });
+    } else if (part.type === "image") {
+      parts.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: part.mimeType || "image/jpeg",
+          data: part.image,
+        },
+      });
+    }
+  }
+
+  // For backward compatibility, if only text parts exist, use a simple string
+  const prompt = parts.length === 1 && parts[0].type === "text" 
+    ? parts[0].text
+    : parts;
 
   // Track session for conversation continuity
   const sessionId = messages.length > 1 ? "chat-session" : undefined;
@@ -100,7 +118,7 @@ export async function POST(req: Request) {
         }
       }
 
-      console.log("[chat/route] mock stream complete");
+      console.log("[chat/route] stream complete");
     },
   });
 
