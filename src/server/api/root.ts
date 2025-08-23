@@ -5,6 +5,7 @@ import { gcpRouter } from './routers/gcp';
 import { terminalRouter } from './routers/terminal';
 import { kernelRouter } from './routers/kernel';
 import { dedalusRouter } from './routers/dedalus';
+import { browserUseRouter } from './routers/browser-use';
 
 export const appRouter = router({
   crypto: cryptoRouter,
@@ -13,6 +14,7 @@ export const appRouter = router({
   terminal: terminalRouter,
   kernel: kernelRouter,
   dedalus: dedalusRouter,
+  browserUse: browserUseRouter,
 });
 
 export type AppRouter = typeof appRouter;

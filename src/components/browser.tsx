@@ -4,7 +4,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
-  Globe
+  Globe,
+  Send,
+  Loader2
 } from "lucide-react";
 import { api } from "@/utils/api";
 
@@ -86,6 +88,10 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
   const [currentUrl, setCurrentUrl] = useState("https://www.dedaluslabs.ai/");
   const [isLoading, setIsLoading] = useState(false);
 
+  // Browser-use state
+  const [taskInput, setTaskInput] = useState("");
+  const [isRunningAgent, setIsRunningAgent] = useState(false);
+
   // Kernel-specific state
   const [kernelApiKey, setKernelApiKey] = useState<string>("");
   const [isKernelReady, setIsKernelReady] = useState(false);
@@ -121,6 +127,18 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
     },
     onError: (error) => {
       console.error('[Browser] Close error:', error);
+    }
+  });
+
+  // Browser-use mutations
+  const runAgentMutation = api.browserUse.runAgent.useMutation({
+    onSuccess: (data) => {
+      console.log('[Browser] Agent completed:', data);
+      setIsRunningAgent(false);
+    },
+    onError: (error) => {
+      console.error('[Browser] Agent error:', error);
+      setIsRunningAgent(false);
     }
   });
 
@@ -191,6 +209,27 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
     }
   }, [createKernelBrowser]);
 
+  // Browser-use functions
+  const runBrowserAgent = useCallback(async (task: string) => {
+    if (!kernelBrowser?.cdp_ws_url || !task.trim()) {
+      console.warn("No CDP URL or task provided");
+      return;
+    }
+
+    setIsRunningAgent(true);
+
+    try {
+      await runAgentMutation.mutateAsync({
+        task: task.trim(),
+        cdpUrl: kernelBrowser.cdp_ws_url,
+        apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY || localStorage.getItem('openaiApiKey') || ''
+      });
+    } catch (error) {
+      console.error("Error running browser agent:", error);
+      setIsRunningAgent(false);
+    }
+  }, [kernelBrowser?.cdp_ws_url, runAgentMutation]);
+
   // Initialize Kernel API key from environment or localStorage
   useEffect(() => {
     const apiKey = process.env.NEXT_PUBLIC_KERNEL_API_KEY || localStorage.getItem('kernelApiKey') || '';
@@ -236,6 +275,44 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
             />
             <button className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-600 transition-colors" />
             <button className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-600 transition-colors" />
+          </div>
+          
+          {/* Task Input */}
+          <div className="flex-1 flex items-center gap-2 ml-4">
+                         <input
+               type="text"
+               placeholder="Enter a task for the browser agent (e.g., 'Search for Python tutorials')"
+               value={taskInput}
+               onChange={(e) => setTaskInput(e.target.value)}
+               onKeyPress={(e) => {
+                 if (e.key === 'Enter' && taskInput.trim() && !isRunningAgent) {
+                   runBrowserAgent(taskInput);
+                 }
+               }}
+                               className="flex-1 px-3 py-1 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                style={{ 
+                  caretColor: 'black',
+                  color: 'black'
+                }}
+               disabled={isRunningAgent || !kernelBrowser}
+             />
+            <button
+              onClick={() => taskInput.trim() && runBrowserAgent(taskInput)}
+              disabled={isRunningAgent || !kernelBrowser || !taskInput.trim()}
+              className="px-3 py-1 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm flex items-center gap-1"
+            >
+              {isRunningAgent ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <Send className="w-3 h-3" />
+                  Run
+                </>
+              )}
+            </button>
           </div>
         </div>
       </div>
@@ -304,7 +381,7 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized }: Browse
                 className="w-full border-0"
                 style={{ 
                   height: 'calc(100% + 66px)', 
-                  marginTop: '-53px' 
+                  marginTop: '-43px' 
                 }}
                 scrolling="no"
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
