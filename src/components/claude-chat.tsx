@@ -1,11 +1,10 @@
 "use client";
 
-import type { ClaudeRequest } from "@/claude-code-handler";
-import { api } from "@/utils/api";
-import type { SDKMessage } from "@anthropic-ai/claude-code";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, Copy, MessageCircle, Send } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Bot, MessageCircle, Send, StopCircle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 interface ClaudeChatProps {
   position?: "bottom-right" | "bottom-left";
@@ -24,12 +23,6 @@ export function ClaudeChat({
 }: ClaudeChatProps) {
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
-  const [prompt, setPrompt] = useState("");
-  const [continueSession, setContinueSession] = useState(true);
-  const [copiedCode, setCopiedCode] = useState<string>("");
-  const [sessionId, setSessionId] = useState<string>("");
-  const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<SDKMessage[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
 
@@ -44,71 +37,20 @@ export function ClaudeChat({
     "bottom-left": "bottom-6 left-6",
   };
 
-  const clickMutation = api.click.sendToClaudeCode.useMutation({
-    onSuccess: (data) => {
-      if (data?.streaming && data?.streamId) {
-        console.log("[claude-chat] streaming started:", data.streamId);
-        setCurrentStreamId(data.streamId);
-      }
-    },
+  // Use Vercel AI SDK useChat hook
+  const { messages, sendMessage, error, status, stop } = useChat({
+    transport: new DefaultChatTransport({
+      api: "/api/chat",
+    }),
     onError: (error) => {
-      console.error("[claude-chat] mutation error:", error);
-      // remove the user message if request failed
-      setMessages(prev => prev.slice(0, -1));
+      console.error("[claude-chat] error:", error);
     },
   });
 
-  const { error, isPending: isLoading } = clickMutation;
+  const [input, setInput] = useState("");
 
-  const stream = api.click.getStreamMessages.useQuery(
-    {
-      streamId: currentStreamId || "",
-      lastIndex: 0,
-    },
-    {
-      enabled: !!currentStreamId,
-      refetchInterval: currentStreamId ? 100 : false,
-    }
-  );
-
-  // update messages when stream data changes
-  useEffect(() => {
-    if (stream.data?.messages && stream.data.messages.length > 0) {
-      console.log("[claude-chat] stream has", stream.data.messages.length, "messages");
-      
-      // append new messages to existing conversation
-      setMessages(prev => {
-        // if this is a new stream, append to existing messages
-        if (currentStreamId && prev.length > 0) {
-          // check if the first message in stream is a user message we already have
-          const streamUserMsg = stream.data.messages[0];
-          const lastPrevMsg = prev[prev.length - 1];
-          
-          if (streamUserMsg?.type === "user" && lastPrevMsg?.type === "user" && 
-              streamUserMsg.message?.content?.[0]?.text === lastPrevMsg.message?.content?.[0]?.text) {
-            // skip duplicate user message, append rest
-            return [...prev, ...stream.data.messages.slice(1)];
-          }
-          // append all new messages
-          return [...prev, ...stream.data.messages];
-        }
-        // first message batch, just set them
-        return stream.data.messages;
-      });
-      
-      // extract session id from messages if available
-      const sessionMsg = stream.data.messages.find((m: SDKMessage) => m.session_id);
-      if (sessionMsg && sessionMsg.session_id !== sessionId) {
-        setSessionId(sessionMsg.session_id);
-      }
-    }
-    
-    // clear stream id when complete but keep messages
-    if (stream.data?.complete) {
-      console.log("[claude-chat] stream complete, clearing stream id");
-      setTimeout(() => setCurrentStreamId(null), 500);
-    }
-  }, [stream.data, currentStreamId]);
+  // type ChatStatus = 'submitted' | 'streaming' | 'ready' | 'error';
+  const isLoading = status === "streaming";
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -118,193 +60,28 @@ export function ClaudeChat({
     scrollToBottom();
   }, [messages]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!prompt.trim()) return;
-
-    console.log("[claude-chat] submitting with sessionId:", sessionId);
-
-    const currentPrompt = prompt;
-    setPrompt("");
-    
-    // add user message immediately to UI
-    const userMessage: SDKMessage = {
-      type: "user" as const,
-      message: {
-        role: "user",
-        content: [{ type: "text", text: currentPrompt }]
-      },
-      session_id: sessionId || "temp",
-      parent_tool_use_id: null
-    } as SDKMessage;
-    
-    // append user message or start fresh
-    if (continueSession && sessionId && messages.length > 0) {
-      setMessages(prev => [...prev, userMessage]);
-    } else {
-      // new conversation
-      setMessages([userMessage]);
-      setSessionId("");
-    }
-
-    // generate unique stream id
-    const streamId = `stream-${Date.now()}-${Math.random()
-      .toString(36)
-      .substring(7)}`;
-
-    const params: ClaudeRequest & { streamId: string } = {
-      prompt: currentPrompt,
-      streamId,
-    };
-
-    if (continueSession && sessionId) {
-      params.continueSession = true;
-      params.sessionId = sessionId;
-    }
-
-    clickMutation.mutate(params);
-  };
-
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e as React.FormEvent);
+      sendMessage({
+        role: "user",
+        parts: [{ type: "text", text: input }],
+      });
+      setInput("");
     }
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedCode(text);
-    setTimeout(() => setCopiedCode(""), 2000);
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    sendMessage({
+      role: "user",
+      parts: [{ type: "text", text: input }],
+    });
+    setInput("");
   };
 
-  const renderMessage = (msg: SDKMessage, index: number) => {
-    if (msg.type === "user") {
-      return (
-        <motion.div
-          key={index}
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
-          className="flex mb-3 justify-end"
-        >
-          <motion.div
-            initial={{ scale: 0.8 }}
-            animate={{ scale: 1 }}
-            transition={{ type: "spring", stiffness: 300, damping: 20 }}
-            className="max-w-[75%] ml-12"
-          >
-            <div className="px-4 py-2 rounded-2xl bg-blue-500 text-white rounded-br-md">
-              <p className="text-sm">
-                {msg.message?.content?.[0]?.text || "no content"}
-              </p>
-            </div>
-          </motion.div>
-        </motion.div>
-      );
-    }
-
-    if (msg.type === "assistant") {
-      return (
-        <motion.div
-          key={index}
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
-          className="flex mb-3 justify-start"
-        >
-          <motion.div
-            initial={{ scale: 0.8 }}
-            animate={{ scale: 1 }}
-            transition={{ type: "spring", stiffness: 300, damping: 20 }}
-            className="max-w-[75%] mr-12"
-          >
-            <div className="px-4 py-2 rounded-2xl bg-gray-200 text-gray-900 rounded-bl-md">
-              {msg.message?.content?.map(
-                (
-                  c: {
-                    type: string;
-                    text: string;
-                    name: string;
-                    input: unknown;
-                  },
-                  i: number
-                ) => (
-                  <div key={i}>
-                    {c.type === "text" && (
-                      <p className="text-sm whitespace-pre-wrap">{c.text}</p>
-                    )}
-                    {c.type === "tool_use" && (
-                      <motion.div
-                        initial={{ scale: 0.8, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        transition={{ delay: 0.1 }}
-                        className="mt-2 relative bg-gray-800/90 backdrop-blur-sm rounded-xl overflow-hidden"
-                      >
-                        <div className="bg-gray-700/50 px-3 py-1 text-xs text-gray-300 border-b border-gray-600/50 flex justify-between items-center">
-                          <span>tool: {c.name}</span>
-                          <button
-                            onClick={() =>
-                              copyToClipboard(JSON.stringify(c.input, null, 2))
-                            }
-                            className="p-1 hover:bg-gray-600/50 rounded transition-colors"
-                          >
-                            <Copy className="h-3 w-3" />
-                          </button>
-                        </div>
-                        <pre className="p-3 text-xs text-gray-200 overflow-x-auto">
-                          <code>{JSON.stringify(c.input, null, 2)}</code>
-                        </pre>
-                      </motion.div>
-                    )}
-                  </div>
-                )
-              )}
-            </div>
-          </motion.div>
-        </motion.div>
-      );
-    }
-
-    if (msg.type === "result") {
-      return (
-        <motion.div
-          key={index}
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.3 }}
-          className="flex mb-3 justify-center"
-        >
-          <div className="px-3 py-1 rounded-full bg-green-500/20 backdrop-blur-sm border border-green-500/30">
-            <div className="text-xs text-green-600">
-              ✓ completed • {msg.num_turns} turns • $
-              {msg.total_cost_usd?.toFixed(4)}
-            </div>
-          </div>
-        </motion.div>
-      );
-    }
-
-    if (msg.type === "system") {
-      return (
-        <motion.div
-          key={index}
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.3 }}
-          className="flex mb-3 justify-center"
-        >
-          <div className="px-3 py-1 rounded-full bg-purple-500/20 backdrop-blur-sm border border-purple-500/30">
-            <div className="text-xs text-purple-600 flex items-center gap-1">
-              <Bot className="h-3 w-3" />
-              {msg.model} • {msg.tools?.length} tools
-            </div>
-          </div>
-        </motion.div>
-      );
-    }
-
-    return null;
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
   };
 
   return (
@@ -358,11 +135,22 @@ export function ClaudeChat({
                   }}
                   className="p-1.5 rounded-full bg-black/20 hover:bg-black/30 backdrop-blur-sm transition-colors"
                 >
-                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  <svg
+                    className="w-4 h-4 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
                   </svg>
                 </button>
               </div>
+
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-hide [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col-reverse">
                 {error && (
@@ -375,7 +163,7 @@ export function ClaudeChat({
                   </motion.div>
                 )}
 
-                {messages.length === 0 && (
+                {messages.length === 0 && !isLoading && (
                   <div className="flex flex-col items-center justify-center h-full text-gray-400">
                     <Bot className="h-12 w-12 mb-3" />
                     <p className="text-sm">
@@ -384,7 +172,7 @@ export function ClaudeChat({
                   </div>
                 )}
 
-                {isLoading && (
+                {isLoading && messages.length === 0 && (
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -406,11 +194,59 @@ export function ClaudeChat({
                     </div>
                   </motion.div>
                 )}
-                
-                {[...messages].reverse().map((msg, index) => renderMessage(msg, index))}
-                
-                <div ref={messagesEndRef} />
 
+                {[...messages].reverse().map((msg) => (
+                  <motion.div
+                    key={msg.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className={`flex mb-3 ${
+                      msg.role === "user" ? "justify-end" : "justify-start"
+                    }`}
+                  >
+                    <motion.div
+                      initial={{ scale: 0.8 }}
+                      animate={{ scale: 1 }}
+                      transition={{
+                        type: "spring",
+                        stiffness: 300,
+                        damping: 20,
+                      }}
+                      className={`max-w-[75%] ${
+                        msg.role === "user" ? "ml-12" : "mr-12"
+                      }`}
+                    >
+                      <div
+                        className={`px-4 py-2 rounded-2xl ${
+                          msg.role === "user"
+                            ? "bg-blue-500 text-white rounded-br-md"
+                            : "bg-gray-200 text-gray-900 rounded-bl-md"
+                        }`}
+                      >
+                        <p className="text-sm whitespace-pre-wrap">
+                          {msg.parts.map((part, index) => (
+                            <span key={part.type + "%%" + index}>
+                              {part.type === "text" ? part.text : ""}
+                              {part.type === "reasoning" ? part.text : ""}
+                              {part.type === "dynamic-tool"
+                                ? part.toolName
+                                : ""}
+                              {part.type === "source-url" ? part.url : ""}
+                              {part.type === "source-document"
+                                ? part.filename || ""
+                                : ""}
+                              {part.type === "file" ? part.filename || "" : ""}
+                              {part.type === "step-start" ? "start" : ""}
+                            </span>
+                          ))}
+                        </p>
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                ))}
+
+                <div ref={messagesEndRef} />
               </div>
 
               {/* Input */}
@@ -420,20 +256,9 @@ export function ClaudeChat({
               >
                 <div className="flex gap-2 items-end">
                   <div className="flex-1">
-                    <div className="flex gap-2 mb-2">
-                      <label className="flex items-center gap-1">
-                        <input
-                          type="checkbox"
-                          checked={continueSession}
-                          onChange={(e) => setContinueSession(e.target.checked)}
-                          className="w-3 h-3 rounded border-gray-300"
-                        />
-                        <span className="text-xs text-gray-600">continue</span>
-                      </label>
-                    </div>
                     <textarea
-                      value={prompt}
-                      onChange={(e) => setPrompt(e.target.value)}
+                      value={input}
+                      onChange={handleInputChange}
                       onKeyPress={handleKeyPress}
                       placeholder="message claude code..."
                       className="w-full px-4 py-2 text-sm bg-gray-50 rounded-full border border-gray-300 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
@@ -441,28 +266,28 @@ export function ClaudeChat({
                       rows={1}
                     />
                   </div>
-                  <motion.button
-                    type="submit"
-                    disabled={isLoading || !prompt.trim()}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="px-3 py-2 bg-blue-500 text-white text-sm rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
-                  >
-                    <Send className="h-4 w-4" />
-                  </motion.button>
+                  {isLoading && (
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={stop}
+                      className="px-3 py-2 bg-blue-500 text-white text-sm rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
+                    >
+                      <StopCircle className="h-4 w-4" />
+                    </motion.button>
+                  )}
+                  {!isLoading && (
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={handleSubmit}
+                      className="px-3 py-2 bg-blue-500 text-white text-sm rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-9 w-9"
+                    >
+                      <Send className="h-4 w-4" />
+                    </motion.button>
+                  )}
                 </div>
               </form>
-
-              {copiedCode && (
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 20 }}
-                  className="absolute bottom-20 right-4 bg-gray-800 text-white text-xs px-3 py-1 rounded-lg"
-                >
-                  copied!
-                </motion.div>
-              )}
             </motion.div>
           </>
         )}

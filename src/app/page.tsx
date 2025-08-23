@@ -1,6 +1,6 @@
 "use client";
 
-import { ClaudeChat } from "@/components/claude-chat-new";
+import { ClaudeChat } from "@/components/claude-chat";
 import { FileBrowser } from "@/components/file-browser";
 import { FileBrowserEnhanced } from "@/components/file-browser-enhanced";
 import { DownloadTinder } from "@/components/download-tinder";
