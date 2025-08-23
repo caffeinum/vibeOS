@@ -46,22 +46,10 @@ echo "ANTHROPIC_API_KEY=your-api-key" > .env
 
 2. run with docker-compose:
 ```bash
-docker-compose up
+docker compose down && docker compose build --no-cache && docker compose up
 ```
 
 3. open http://localhost:3000
-
-### production docker
-
-1. build production image:
-```bash
-docker build -t claude-os:prod .
-```
-
-2. run container:
-```bash
-docker run -p 3000:3000 -e ANTHROPIC_API_KEY="your-api-key" claude-os:prod
-```
 
 ## api usage
 
