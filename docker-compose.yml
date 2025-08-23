@@ -1,5 +1,5 @@
 services:
-  claude-os:
+  vibe-os:
     build:
       context: .
       dockerfile: Dockerfile.dev

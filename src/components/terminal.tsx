@@ -412,7 +412,7 @@ export function Terminal({ isOpen: externalIsOpen, onClose }: TerminalProps = {}
                     </span>
                   </div>
                   <span className="text-gray-400">
-                    powered by claude os
+                    powered by vibe os
                   </span>
                 </div>
               </div>

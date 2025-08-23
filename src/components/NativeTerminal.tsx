@@ -22,7 +22,7 @@ export const NativeTerminal: React.FC<NativeTerminalProps> = ({
   const [isExecuting, setIsExecuting] = useState(false);
   const [currentDirectory, setCurrentDirectory] = useState('');
   const [terminalOutput, setTerminalOutput] = useState<Array<{type: 'command' | 'output' | 'error', text: string}>>([
-    { type: 'output', text: 'claudeos terminal v1.0.0' },
+    { type: 'output', text: 'vibeos terminal v1.0.0' },
     { type: 'output', text: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' },
     { type: 'output', text: 'connected to real shell - be careful!' },
     { type: 'output', text: '' }
