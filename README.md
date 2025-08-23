@@ -1,4 +1,4 @@
-# claude os
+# vibe os
 
 a containerized next.js application with claude code integration via trpc api
 

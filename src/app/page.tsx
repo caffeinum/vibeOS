@@ -76,7 +76,7 @@ export default function Home() {
         <div className="h-full w-full flex items-center justify-between px-4 text-white text-xs font-medium">
           <div className="flex items-center gap-4">
             <Apple className="w-4 h-4" />
-            <span className="font-semibold">Claude OS</span>
+            <span className="font-semibold">Vibe OS</span>
             <span className="text-white/70">File</span>
             <span className="text-white/70">Edit</span>
             <span className="text-white/70">View</span>
