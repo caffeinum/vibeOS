@@ -133,8 +133,8 @@ export default function Home() {
       <GlassFilter />
       
       {/* macOS Menu Bar */}
-      <GlassEffect className="fixed top-0 left-0 right-0 h-7 z-[100] rounded-none">
-        <div className="h-full w-full flex items-center justify-between px-4 text-white text-xs font-medium">
+      <GlassEffect className="fixed top-0 left-0 right-0 h-7 z-[100] rounded-none overflow-visible">
+        <div className="h-full w-full flex items-center justify-between px-4 text-white text-xs font-medium overflow-visible">
           <div className="flex items-center gap-4">
             <Apple className="w-4 h-4" />
             <span className="font-semibold">Vibe OS</span>
@@ -144,9 +144,9 @@ export default function Home() {
             <span className="text-white/70">Window</span>
             <span className="text-white/70">Help</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 overflow-visible">
             {/* Mode Switcher */}
-            <div className="relative">
+            <div className="relative overflow-visible">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
