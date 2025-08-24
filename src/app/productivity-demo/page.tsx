@@ -344,27 +344,24 @@ export default function ProductivityDemo() {
           <div className="absolute inset-0 bg-gradient-to-br from-blue-100 to-purple-100"></div>
         </div>
         
-        {/* centered content */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.6, ease: "easeOut" }}
-          className="text-center z-10"
-        >
+        {/* centered content - removed AnimatePresence to prevent loops */}
+        <div className="text-center z-10">
           {/* logo */}
           <motion.div
+            key="logo"
             initial={{ y: -20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.2, duration: 0.5 }}
             className="mb-8"
           >
-            <div className="w-24 h-24 mx-auto bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl shadow-2xl flex items-center justify-center">
-              <span className="text-white text-3xl font-bold">V</span>
+            <div className="w-24 h-24 mx-auto bg-orange-500 rounded-2xl shadow-2xl flex items-center justify-center">
+              <span className="text-white text-4xl font-black">Y</span>
             </div>
           </motion.div>
           
           {/* welcome text */}
           <motion.div
+            key="welcome"
             initial={{ y: 20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.4, duration: 0.5 }}
@@ -379,6 +376,7 @@ export default function ProductivityDemo() {
 
           {/* subtle cta */}
           <motion.div
+            key="cta"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.8, duration: 0.5 }}
@@ -391,10 +389,11 @@ export default function ProductivityDemo() {
               press space to begin
             </button>
           </motion.div>
-        </motion.div>
+        </div>
 
         {/* minimalist dock at bottom */}
         <motion.div
+          key="dock"
           initial={{ y: 100, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ delay: 0.6, duration: 0.5 }}
