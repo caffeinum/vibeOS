@@ -9,8 +9,9 @@ WORKDIR /app
 # Install claude-code globally as root
 RUN bun add -g @anthropic-ai/claude-code
 
-# Install uv (Python package manager)
-RUN apt-get update && apt-get install -y python3-pip && \
+# Enable multi-arch and install uv (Python package manager), npm, and multi-arch libraries
+RUN dpkg --add-architecture amd64 && \
+    apt-get update && apt-get install -y python3-pip nodejs npm libc6:amd64 libstdc++6:amd64 && \
     pip3 install --break-system-packages uv
 
 # Copy package files
@@ -18,6 +19,9 @@ COPY package.json bun.lock ./
 
 # Install dependencies
 RUN bun install
+
+# Install Chrome for puppeteer as root
+RUN npx puppeteer browsers install chrome
 
 # Copy application files
 COPY --chown=nextjs:staff . .
@@ -40,5 +44,5 @@ ENV NODE_ENV=development
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME="0.0.0.0"
 
-# Start dev server
-CMD ["bun", "run", "dev"]
+# Start mcp daemon in background and then dev server
+CMD ["sh", "-c", "nohup /app/node_modules/.bin/mcp daemon & bun run dev"]

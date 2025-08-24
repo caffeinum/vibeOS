@@ -86,7 +86,6 @@ response format:
 │   └── claude-code-handler.ts  # claude code sdk integration
 ├── public/               # static assets
 ├── Dockerfile           # production docker image
-├── Dockerfile.dev       # development docker image
 └── docker-compose.yml   # docker compose configuration
 ```
 
