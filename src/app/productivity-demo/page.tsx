@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import Image from "next/image";
 import { 
   Coffee, 
   Brain, 
@@ -320,94 +321,101 @@ export default function ProductivityDemo() {
     </div>
   );
 
-  const AfterSection = () => (
-    <div className="h-full flex flex-col bg-gradient-to-br from-indigo-50 via-white to-purple-50">
-      {/* minimal header */}
-      <div className="h-8 bg-white/50 backdrop-blur-sm border-b border-gray-100">
-        <div className="h-full flex items-center justify-between px-4">
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-green-400"></div>
-            <span className="text-xs text-gray-400">{formatTime(currentTime)}</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <div className="w-2 h-2 rounded-full bg-gray-300"></div>
-            <div className="w-2 h-2 rounded-full bg-gray-300"></div>
-            <div className="w-2 h-2 rounded-full bg-gray-300"></div>
-          </div>
-        </div>
-      </div>
+  const AfterSection = () => {
+    const [hasAnimated, setHasAnimated] = useState(false);
 
-      {/* clean empty desktop with centered logo */}
-      <div className="flex-1 flex items-center justify-center relative">
-        {/* subtle gradient background */}
-        <div className="absolute inset-0 opacity-30">
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-100 to-purple-100"></div>
+    useEffect(() => {
+      setHasAnimated(true);
+    }, []);
+
+    return (
+      <div className="h-full flex flex-col bg-gradient-to-br from-indigo-50 via-white to-purple-50">
+        {/* minimal header */}
+        <div className="h-8 bg-white/50 backdrop-blur-sm border-b border-gray-100">
+          <div className="h-full flex items-center justify-between px-4">
+            <div className="flex items-center gap-3">
+              <div className="w-2 h-2 rounded-full bg-green-400"></div>
+              <span className="text-xs text-gray-400">{formatTime(currentTime)}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-2 h-2 rounded-full bg-gray-300"></div>
+              <div className="w-2 h-2 rounded-full bg-gray-300"></div>
+              <div className="w-2 h-2 rounded-full bg-gray-300"></div>
+            </div>
+          </div>
         </div>
-        
-        {/* centered content - removed AnimatePresence to prevent loops */}
-        <div className="text-center z-10">
-          {/* logo */}
+
+        {/* clean empty desktop with centered logo */}
+        <div className="flex-1 flex items-center justify-center relative">
+          {/* subtle gradient background */}
+          <div className="absolute inset-0 opacity-30">
+            <div className="absolute inset-0 bg-gradient-to-br from-blue-100 to-purple-100"></div>
+          </div>
+          
+          {/* centered content */}
+          <div className="text-center z-10">
+            {/* logo */}
+            <motion.div
+              initial={!hasAnimated ? { y: -20, opacity: 0 } : false}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.2, duration: 0.5 }}
+              className="mb-8 relative w-24 h-24 mx-auto"
+            >
+              <Image 
+                src="/assets/vibe-logo.png" 
+                alt="vibe os logo" 
+                fill
+                className="object-contain"
+              />
+            </motion.div>
+            
+            {/* welcome text */}
+            <motion.div
+              initial={!hasAnimated ? { y: 20, opacity: 0 } : false}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.4, duration: 0.5 }}
+            >
+              <h1 className="text-5xl font-light text-gray-800 mb-3">
+                welcome to <span className="font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">vibeOS</span>
+              </h1>
+              <p className="text-xl text-gray-500">
+                you're in control
+              </p>
+            </motion.div>
+
+            {/* subtle cta */}
+            <motion.div
+              initial={!hasAnimated ? { opacity: 0 } : false}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.8, duration: 0.5 }}
+              className="mt-12"
+            >
+              <button
+                onClick={() => setAutoPilotActive(true)}
+                className="px-6 py-2 text-sm text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                press space to begin
+              </button>
+            </motion.div>
+          </div>
+
+          {/* minimalist dock at bottom */}
           <motion.div
-            key="logo"
-            initial={{ y: -20, opacity: 0 }}
+            initial={!hasAnimated ? { y: 100, opacity: 0 } : false}
             animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.2, duration: 0.5 }}
-            className="mb-8"
+            transition={{ delay: 0.6, duration: 0.5 }}
+            className="absolute bottom-4 left-1/2 transform -translate-x-1/2"
           >
-            <div className="w-24 h-24 mx-auto bg-orange-500 rounded-2xl shadow-2xl flex items-center justify-center">
-              <span className="text-white text-4xl font-black">Y</span>
+            <div className="flex items-center gap-2 px-4 py-2 bg-white/80 backdrop-blur-md rounded-full shadow-lg">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="w-8 h-8 rounded-lg bg-gradient-to-br from-gray-100 to-gray-200"></div>
+              ))}
             </div>
           </motion.div>
-          
-          {/* welcome text */}
-          <motion.div
-            key="welcome"
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.4, duration: 0.5 }}
-          >
-            <h1 className="text-5xl font-light text-gray-800 mb-3">
-              welcome to <span className="font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">vibeOS</span>
-            </h1>
-            <p className="text-xl text-gray-500">
-              you're in control
-            </p>
-          </motion.div>
-
-          {/* subtle cta */}
-          <motion.div
-            key="cta"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.8, duration: 0.5 }}
-            className="mt-12"
-          >
-            <button
-              onClick={() => setAutoPilotActive(true)}
-              className="px-6 py-2 text-sm text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              press space to begin
-            </button>
-          </motion.div>
         </div>
-
-        {/* minimalist dock at bottom */}
-        <motion.div
-          key="dock"
-          initial={{ y: 100, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.6, duration: 0.5 }}
-          className="absolute bottom-4 left-1/2 transform -translate-x-1/2"
-        >
-          <div className="flex items-center gap-2 px-4 py-2 bg-white/80 backdrop-blur-md rounded-full shadow-lg">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="w-8 h-8 rounded-lg bg-gradient-to-br from-gray-100 to-gray-200"></div>
-            ))}
-          </div>
-        </motion.div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <main className="h-screen w-screen overflow-hidden relative flex flex-col bg-gradient-to-br from-gray-50 to-gray-100">
