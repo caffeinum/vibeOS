@@ -46,6 +46,20 @@ export default function Home() {
     setBrowserInitialized(true);
   }, []);
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showModeDropdown) {
+        setShowModeDropdown(false);
+      }
+    };
+
+    if (showModeDropdown) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    }
+  }, [showModeDropdown]);
+
   // Handle mode changes
   useEffect(() => {
     if (desktopMode === "cluttered") {
@@ -132,9 +146,12 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-3">
             {/* Mode Switcher */}
-            <div className="relative">
+            <div className="relative z-[60]">
               <button
-                onClick={() => setShowModeDropdown(!showModeDropdown)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowModeDropdown(!showModeDropdown);
+                }}
                 className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-white/10 transition-colors"
               >
                 {desktopMode === "default" && <Monitor className="w-3.5 h-3.5" />}
@@ -148,7 +165,7 @@ export default function Home() {
                 <motion.div
                   initial={{ opacity: 0, y: -5 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="absolute top-full right-0 mt-1 bg-white/95 backdrop-blur-md rounded-lg shadow-lg overflow-hidden min-w-[180px]"
+                  className="absolute top-full right-0 mt-1 bg-white/95 backdrop-blur-md rounded-lg shadow-lg overflow-hidden min-w-[180px] z-[70]"
                 >
                   <div className="py-1">
                     <button
