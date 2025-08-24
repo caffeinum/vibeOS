@@ -465,7 +465,7 @@ export default function Home() {
               className="w-[600px]"
             >
               <div className="h-[400px] p-12 flex flex-col items-center justify-center bg-gradient-to-br from-white via-purple-50/30 to-indigo-50/30">
-                <div className="relative w-32 h-32 mb-8">
+                <div className="relative w-48 h-48 mb-8">
                   <Image 
                     src="/assets/vibe-logo.png" 
                     alt="vibe os logo" 
@@ -474,7 +474,7 @@ export default function Home() {
                   />
                 </div>
                 
-                <h1 className="text-5xl font-light mb-4" style={{ 
+                <h1 className="text-4xl font-light mb-4" style={{ 
                   fontFamily: 'Helvetica Neue, Helvetica, sans-serif',
                   background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                   WebkitBackgroundClip: 'text',
