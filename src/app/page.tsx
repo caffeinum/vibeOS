@@ -133,7 +133,7 @@ export default function Home() {
       <GlassFilter />
       
       {/* macOS Menu Bar */}
-      <GlassEffect className="fixed top-0 left-0 right-0 h-7 z-50 rounded-none">
+      <GlassEffect className="fixed top-0 left-0 right-0 h-7 z-[100] rounded-none">
         <div className="h-full w-full flex items-center justify-between px-4 text-white text-xs font-medium">
           <div className="flex items-center gap-4">
             <Apple className="w-4 h-4" />
@@ -146,7 +146,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-3">
             {/* Mode Switcher */}
-            <div className="relative z-[60]">
+            <div className="relative">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -165,7 +165,8 @@ export default function Home() {
                 <motion.div
                   initial={{ opacity: 0, y: -5 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="absolute top-full right-0 mt-1 bg-white/95 backdrop-blur-md rounded-lg shadow-lg overflow-hidden min-w-[180px] z-[70]"
+                  className="absolute top-full right-0 mt-1 bg-white backdrop-blur-md rounded-lg shadow-xl overflow-hidden min-w-[180px] z-[200]"
+                  style={{ backgroundColor: 'rgba(255, 255, 255, 0.95)' }}
                 >
                   <div className="py-1">
                     <button
