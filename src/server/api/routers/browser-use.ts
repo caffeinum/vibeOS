@@ -67,7 +67,7 @@ export const browserUseRouter = router({
               try {
                 const parsed = JSON.parse(line);
                 console.log('[browser-use]', parsed);
-              } catch (e) {
+              } catch {
                 // Not JSON, ignore
               }
             }
@@ -157,7 +157,7 @@ export const browserUseRouter = router({
               try {
                 const parsed = JSON.parse(line);
                 stream.push(JSON.stringify(parsed) + '\n');
-              } catch (e) {
+              } catch {
                 // Not JSON, ignore
               }
             }

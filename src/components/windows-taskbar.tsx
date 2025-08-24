@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useState } from "react";
-import { Search, Wifi, Battery, Volume2, Windows } from "lucide-react";
+import { Search, Wifi, Battery, Volume2, Grid3x3 } from "lucide-react";
 
 interface TaskbarItem {
   id: string;
@@ -97,7 +97,7 @@ export function WindowsTaskbar({ items, activeItem, onItemClick, currentTime }: 
               showStartMenu ? 'bg-gray-700' : 'hover:bg-gray-800'
             }`}
           >
-            <Windows className="w-5 h-5 text-blue-400" />
+            <Grid3x3 className="w-5 h-5 text-blue-400" />
           </button>
           
           {/* Search Bar */}

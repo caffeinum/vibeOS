@@ -487,7 +487,7 @@ export default function Home() {
                 <p className="text-xl text-gray-600" style={{ 
                   fontFamily: 'Helvetica Neue, Helvetica, sans-serif' 
                 }}>
-                  you're in control
+                  you&apos;re in control
                 </p>
               </div>
             </GlassWindow>

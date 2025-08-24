@@ -1,7 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { GlassEffect } from '@/components/ui/glass-effect';
+import React, { useState } from 'react';
 import { Plus, Trash2, Folder, Search, MoreHorizontal } from 'lucide-react';
 
 interface Note {
@@ -58,7 +57,7 @@ export const NotesApp: React.FC = () => {
   const [selectedNote, setSelectedNote] = useState<Note | null>(notes[0]);
   const [selectedFolder, setSelectedFolder] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isEditing, setIsEditing] = useState(false);
+  const [, setIsEditing] = useState(false);
 
   const filteredNotes = notes.filter(note => {
     const matchesFolder = selectedFolder === 'all' || note.folder === folders.find(f => f.id === selectedFolder)?.name;

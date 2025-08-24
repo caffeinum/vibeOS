@@ -146,7 +146,7 @@ export const dedalusRouter = router({
                 } else if (output.type === "error") {
                   emit.error(new Error(output.error));
                 }
-              } catch (e) {
+              } catch {
                 // ignore non-json lines
                 console.log("non-json output:", line);
               }
@@ -274,7 +274,7 @@ export const dedalusRouter = router({
               } else if (result.type === "error") {
                 reject(new Error(result.error));
               }
-            } catch (e) {
+            } catch {
               reject(new Error("failed to parse python runner output"));
             }
           } else {

@@ -156,7 +156,7 @@ export default function ProductivityDemo() {
             you opened a tab to do something important...
           </p>
           <p className="text-sm text-red-500 mt-2">
-            but now you're 47 tabs deep and forgot what it was
+            but now you&apos;re 47 tabs deep and forgot what it was
           </p>
         </div>
 
@@ -164,7 +164,7 @@ export default function ProductivityDemo() {
         <GlassEffect className="p-6 bg-red-50/30 border-2 border-red-500/30">
           <div className="text-center mb-4">
             <h3 className="font-bold text-xl text-red-600">current tab journey</h3>
-            <p className="text-sm text-gray-500 mt-1">you started with: "project documentation"</p>
+            <p className="text-sm text-gray-500 mt-1">you started with: &quot;project documentation&quot;</p>
           </div>
           
           <div className="flex items-center justify-center gap-2 flex-wrap">
@@ -203,7 +203,7 @@ export default function ProductivityDemo() {
             </div>
             <div className="space-y-2">
               <div className="text-xs text-gray-600">
-                • can't find that important tab
+                • can&apos;t find that important tab
               </div>
               <div className="text-xs text-gray-600">
                 • duplicate tabs everywhere
@@ -379,7 +379,7 @@ export default function ProductivityDemo() {
                 welcome to <span className="font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">vibeOS</span>
               </h1>
               <p className="text-xl text-gray-500">
-                you're in control
+                you&apos;re in control
               </p>
             </motion.div>
 

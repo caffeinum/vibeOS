@@ -2,7 +2,6 @@
 
 import { motion, useMotionValue, useSpring, useTransform } from "framer-motion";
 import { useRef, useState } from "react";
-import { GlassEffect } from "@/components/ui/glass-effect";
 
 interface DockItem {
   id: string;
