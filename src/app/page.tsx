@@ -17,9 +17,10 @@ import { GlassEffect, GlassWindow, GlassFilter } from "@/components/ui/glass-eff
 import { Toaster } from "@/components/ui/sonner";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Apple, Wifi, Battery, Search, ChevronDown, Monitor, Layers, Focus } from "lucide-react";
+import { Apple, Wifi, Battery, Search, ChevronDown, Monitor, Layers, Focus, Sparkles } from "lucide-react";
+import Image from "next/image";
 
-type DesktopMode = "default" | "cluttered" | "focused";
+type DesktopMode = "default" | "cluttered" | "focused" | "welcome";
 
 export default function Home() {
   const [activeApp, setActiveApp] = useState<string | null>(null);
@@ -35,6 +36,7 @@ export default function Home() {
   const [desktopMode, setDesktopMode] = useState<DesktopMode>("default");
   const [showModeDropdown, setShowModeDropdown] = useState(false);
   const [clutteredWindows, setClutteredWindows] = useState<Array<{id: string, type: string, position: {x: number, y: number}}>>([]);
+  const [showWelcome, setShowWelcome] = useState(false);
   
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -82,6 +84,7 @@ export default function Home() {
       setShowClaude(false);
       setShowTerminal(false);
       setShowNativeTerminal(false);
+      setShowWelcome(false);
     } else if (desktopMode === "focused") {
       // show only browser with yc application
       setClutteredWindows([]);
@@ -90,10 +93,21 @@ export default function Home() {
       setShowClaude(false);
       setShowTerminal(false);
       setShowNativeTerminal(false);
+      setShowWelcome(false);
+    } else if (desktopMode === "welcome") {
+      // show welcome window
+      setClutteredWindows([]);
+      setActiveApp(null);
+      setShowBrowser(false);
+      setShowClaude(false);
+      setShowTerminal(false);
+      setShowNativeTerminal(false);
+      setShowWelcome(true);
     } else {
       // default mode - clean slate
       setClutteredWindows([]);
       setShowBrowser(false);
+      setShowWelcome(false);
     }
   }, [desktopMode]);
 
@@ -157,6 +171,7 @@ export default function Home() {
                 {desktopMode === "default" && <Monitor className="w-3.5 h-3.5" />}
                 {desktopMode === "cluttered" && <Layers className="w-3.5 h-3.5" />}
                 {desktopMode === "focused" && <Focus className="w-3.5 h-3.5" />}
+                {desktopMode === "welcome" && <Sparkles className="w-3.5 h-3.5" />}
                 <span className="capitalize">{desktopMode}</span>
                 <ChevronDown className="w-3 h-3" />
               </button>
@@ -209,6 +224,20 @@ export default function Home() {
                       <Focus className="w-4 h-4" />
                       <span className="text-sm">Focused</span>
                       {desktopMode === "focused" && <div className="ml-auto w-2 h-2 bg-green-600 rounded-full" />}
+                    </button>
+                    
+                    <button
+                      onClick={() => {
+                        setDesktopMode("welcome");
+                        setShowModeDropdown(false);
+                      }}
+                      className={`w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-100 transition-colors ${
+                        desktopMode === "welcome" ? "bg-purple-50 text-purple-600" : "text-gray-700"
+                      }`}
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span className="text-sm">Welcome</span>
+                      {desktopMode === "welcome" && <div className="ml-auto w-2 h-2 bg-purple-600 rounded-full" />}
                     </button>
                   </div>
                 </motion.div>
@@ -416,6 +445,56 @@ export default function Home() {
           initialized={browserInitialized}
         />
       )}
+      
+      {/* Welcome Window */}
+      {showWelcome && (
+        <motion.div
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.8, opacity: 0 }}
+          className="fixed inset-0 flex items-center justify-center z-30 pointer-events-none"
+          style={{ paddingTop: '60px', paddingBottom: '80px' }}
+        >
+          <div className="pointer-events-auto">
+            <GlassWindow 
+              title="Welcome to Vibe OS" 
+              onClose={() => {
+                setShowWelcome(false);
+                setDesktopMode("default");
+              }}
+              className="w-[600px]"
+            >
+              <div className="h-[400px] p-12 flex flex-col items-center justify-center bg-gradient-to-br from-white via-purple-50/30 to-indigo-50/30">
+                <div className="relative w-32 h-32 mb-8">
+                  <Image 
+                    src="/assets/vibe-logo.png" 
+                    alt="vibe os logo" 
+                    fill
+                    className="object-contain"
+                  />
+                </div>
+                
+                <h1 className="text-5xl font-light mb-4" style={{ 
+                  fontFamily: 'Helvetica Neue, Helvetica, sans-serif',
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text'
+                }}>
+                  Welcome to vibeOS
+                </h1>
+                
+                <p className="text-xl text-gray-600" style={{ 
+                  fontFamily: 'Helvetica Neue, Helvetica, sans-serif' 
+                }}>
+                  you're in control
+                </p>
+              </div>
+            </GlassWindow>
+          </div>
+        </motion.div>
+      )}
+      
       <div style={{ display: 'none' }}>
         <DarkModeToggle />
       </div>
