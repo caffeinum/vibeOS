@@ -27,6 +27,7 @@ interface BrowserProps {
   isOpen?: boolean;
   onClose?: () => void;
   initialized?: boolean;
+  defaultUrl?: string;
 }
 
 // Utility function to get page title from URL
@@ -82,10 +83,10 @@ interface BrowserProps {
 //   }
 // };
 
-export function Browser({ isOpen: externalIsOpen, onClose, initialized }: BrowserProps = {}) {
+export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultUrl }: BrowserProps = {}) {
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
-  const [currentUrl, setCurrentUrl] = useState("https://www.dedaluslabs.ai/");
+  const [currentUrl, setCurrentUrl] = useState(defaultUrl || "https://www.dedaluslabs.ai/");
   const [isLoading, setIsLoading] = useState(false);
 
   // Browser-use state
