@@ -218,3 +218,35 @@ export const DedalusIcon = () => (
     </svg>
   </div>
 );
+
+export const NotesIcon = () => (
+  <div className="w-full h-full relative">
+    <svg viewBox="0 0 100 100" className="w-full h-full">
+      <defs>
+        <linearGradient id="notesGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#FFD60A" />
+          <stop offset="100%" stopColor="#FF9500" />
+        </linearGradient>
+        <linearGradient id="notesPaper" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#FFFFFF" />
+          <stop offset="100%" stopColor="#F8F8F8" />
+        </linearGradient>
+      </defs>
+      <rect x="10" y="10" width="80" height="80" rx="18" fill="url(#notesGradient)" />
+      {/* Paper note */}
+      <rect x="20" y="20" width="60" height="60" rx="8" fill="url(#notesPaper)" />
+      {/* Lines of text */}
+      <rect x="25" y="30" width="50" height="2" fill="#333" opacity="0.7" />
+      <rect x="25" y="35" width="45" height="2" fill="#333" opacity="0.7" />
+      <rect x="25" y="40" width="40" height="2" fill="#333" opacity="0.7" />
+      <rect x="25" y="45" width="35" height="2" fill="#333" opacity="0.7" />
+      <rect x="25" y="50" width="30" height="2" fill="#333" opacity="0.7" />
+      <rect x="25" y="55" width="25" height="2" fill="#333" opacity="0.7" />
+      <rect x="25" y="60" width="20" height="2" fill="#333" opacity="0.7" />
+      <rect x="25" y="65" width="15" height="2" fill="#333" opacity="0.7" />
+      {/* Fold corner */}
+      <path d="M 70 20 L 80 20 L 80 30 L 70 30 Z" fill="#FFD60A" />
+      <path d="M 70 20 L 80 30" stroke="#FF9500" strokeWidth="1" fill="none" />
+    </svg>
+  </div>
+);

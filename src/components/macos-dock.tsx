@@ -25,10 +25,20 @@ export function MacOSDock({ items, activeItem, onItemClick }: MacOSDockProps) {
     <motion.div
       onMouseMove={(e) => mouseX.set(e.pageX)}
       onMouseLeave={() => mouseX.set(Infinity)}
-      className="fixed bottom-0 left-1/2 -translate-x-1/2 mb-4 z-50"
+      className="fixed bottom-0 left-1/2 -translate-x-1/2 mb-4 z-50 overflow-visible"
     >
-      <GlassEffect className="rounded-2xl">
-        <div className="flex items-end gap-2 px-3 py-2">
+      <div className="relative">
+        {/* Background with proper clipping */}
+        <div className="absolute inset-0 rounded-2xl overflow-hidden">
+          <div className="absolute inset-0 backdrop-blur-md bg-white/20" />
+          <div className="absolute inset-0 bg-white/25" />
+          <div className="absolute inset-0 rounded-2xl" style={{
+            boxShadow: "inset 2px 2px 1px 0 rgba(255, 255, 255, 0.5), inset -1px -1px 1px 1px rgba(255, 255, 255, 0.5)"
+          }} />
+        </div>
+        
+        {/* Content that can overflow */}
+        <div className="relative flex items-end gap-2 px-3 py-2 overflow-visible">
           {items.map((item, index) => (
             <DockIcon
               key={item.id}
@@ -42,7 +52,7 @@ export function MacOSDock({ items, activeItem, onItemClick }: MacOSDockProps) {
             />
           ))}
         </div>
-      </GlassEffect>
+      </div>
     </motion.div>
   );
 }
