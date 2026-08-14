@@ -1,0 +1,46 @@
+src/components/local-browser-view.tsx
+  s_5e83b0922092c9::t_25c0df8b806afb 1-139
+src/server/api/root.ts
+  s_5e83b0922092c9::t_98d39d15911754 9,19
+src/server/api/routers/browser-use.ts
+  s_5e83b0922092c9::t_00dbe60cdb025f 7-22,30,121
+  s_5e83b0922092c9::t_51e49c511b66db 41-42,47,132-133,138
+Dockerfile
+  s_5e83b0922092c9::t_fb03b60371b6e6 30-36
+  s_5e83b0922092c9::t_0fdc31189d781e 72
+  s_5e83b0922092c9::t_82e0b37c46ff27 73-79
+scripts/chromium-supervise.sh
+  s_5e83b0922092c9::t_5a7ab6c0daa112 1-60
+src/app/api/browser/input/route.ts
+  s_5e83b0922092c9::t_9b82084d6bb657 1-39
+src/components/browser.tsx
+  s_5e83b0922092c9::t_0128e5d2b813f4 317-320,322-326,334,347
+  s_5e83b0922092c9::t_7a48616d825cd2 152,167
+  s_5e83b0922092c9::t_109d4ee33eaf5b 164,184
+  s_5e83b0922092c9::t_e6df1e93377df2 101,120
+  s_5e83b0922092c9::t_c55a8fdfa699b3 202,212,219
+  s_5e83b0922092c9::t_3d9b6f3836fb61 12,221-226,229-230
+  s_5e83b0922092c9::t_ee8e09f77f6aec 220
+src/server/api/routers/local-browser.ts
+  s_5e83b0922092c9::t_716475a25608c4 1-58
+src/app/api/browser/screencast/route.ts
+  s_5e83b0922092c9::t_67a2a33e67375a 1-85
+src/server/cdp.ts
+  s_5e83b0922092c9::t_16866cde39f2f0 1-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6f04454201ea3f9d5b0a1dfc7d45d08dc5d75d1c",
+  "prompts": {},
+  "sessions": {
+    "s_5e83b0922092c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aac9fd07-cba9-4a58-9d86-8bcf27c81bdb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
