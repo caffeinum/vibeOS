@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "claude-os",
@@ -8,7 +9,6 @@
         "@ai-sdk/ui-utils": "^1.2.11",
         "@anthropic-ai/claude-code": "^1.0.86",
         "@linear/sdk": "^57.0.0",
-        "@makosst/mcp": "^0.0.4",
         "@onkernel/sdk": "^0.9.1",
         "@radix-ui/react-collapsible": "^1.1.12",
         "@radix-ui/react-dropdown-menu": "^2.1.16",
@@ -27,6 +27,7 @@
         "dedalus-labs": "^0.1.0-alpha.4",
         "framer-motion": "^12.23.12",
         "lucide-react": "^0.541.0",
+        "mcp": "github:caffeinum/mcpcli#c35188208a79d615412a066c4a7a12303b6ef140",
         "next": "15.5.0",
         "react": "19.1.0",
         "react-dom": "19.1.0",
@@ -165,8 +166,6 @@
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.30", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-GQ7Nw5G2lTu/BtHTKfXhKHok2WGetd4XYcVKGx00SjAk8GMwgJM3zr6zORiPGuOE+/vkc90KtTosSSvaCjKb2Q=="],
 
     "@linear/sdk": ["@linear/sdk@57.0.0", "", { "dependencies": { "@graphql-typed-document-node/core": "^3.1.0", "graphql": "^15.4.0", "isomorphic-unfetch": "^3.1.0" } }, "sha512-9xYjUXVfRl5LgzM4y+zd7tDxWS3n0M+bT8brIVOQJK2VziUD7vE0J16gEUHAfsOgHmbi6JhSwRV9xoQwzdO7Gg=="],
-
-    "@makosst/mcp": ["@makosst/mcp@0.0.4", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.17.4", "@oclif/core": "^4", "@oclif/plugin-help": "^6", "@oclif/plugin-plugins": "^5", "axios": "^1.6.2", "cors": "^2.8.5", "express": "^4.18.2" }, "bin": { "mcp": "bin/run.js" } }, "sha512-dFqQK5Ljh9zm7G1u6WOsqRlzX43z2+8GYo2U3x9ZFVUNp50xR7u1/SUEubHzTiP6NTfV4LcP9ZE8OetYsf8jvQ=="],
 
     "@modelcontextprotocol/sdk": ["@modelcontextprotocol/sdk@1.17.4", "", { "dependencies": { "ajv": "^6.12.6", "content-type": "^1.0.5", "cors": "^2.8.5", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.0", "express": "^5.0.1", "express-rate-limit": "^7.5.0", "pkce-challenge": "^5.0.0", "raw-body": "^3.0.0", "zod": "^3.23.8", "zod-to-json-schema": "^3.24.1" } }, "sha512-zq24hfuAmmlNZvik0FLI58uE5sriN0WWsQzIlYnzSuKDAHFqJtBFrl/LfB1NLgJT5Y7dEBzaX4yAKqOPrcetaw=="],
 
@@ -865,6 +864,8 @@
     "magic-string": ["magic-string@0.30.18", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.5.5" } }, "sha512-yi8swmWbO17qHhwIBNeeZxTceJMeBvWJaId6dyvTSOwTipqeHhMhOrz6513r1sOKnpvQ7zkhlG8tPrpilwTxHQ=="],
 
     "math-intrinsics": ["math-intrinsics@1.1.0", "", {}, "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g=="],
+
+    "mcp": ["mcp@github:caffeinum/mcpcli#c351882", { "dependencies": { "@modelcontextprotocol/sdk": "^1.17.4", "@oclif/core": "^4", "@oclif/plugin-help": "^6", "@oclif/plugin-plugins": "^5", "axios": "^1.6.2", "cors": "^2.8.5", "express": "^4.18.2" }, "bin": { "mcp": "./bin/run.js" } }, "caffeinum-mcpcli-c351882", "sha512-e2AklPIZfEqu9zcaebeGZbiuyysy8M5uQZ+Wz8rWpJyljpSLGsIG88LmHmQ1jZCcYNjcSRz/8Xl9tLJ4TprZ1Q=="],
 
     "media-typer": ["media-typer@0.3.0", "", {}, "sha512-dq+qelQ9akHpcOl/gUVRTxVIOkAJ1wR3QAvb4RsVjS8oVoFjDGTc679wJYmUmknUF5HwMLOgb5O+a3KxfWapPQ=="],
 
