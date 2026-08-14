@@ -52,5 +52,14 @@ ENV NODE_ENV=development
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME="0.0.0.0"
 
-# Start mcp daemon in background and then dev server
-CMD ["sh", "-c", "nohup /app/node_modules/.bin/mcp daemon & bun run dev"]
+# Start the mcp daemon alongside the dev server.
+#
+# `wait -n` returns as soon as the FIRST job exits, so the container dies if
+# either process does. Previously the daemon was backgrounded with nohup and
+# its status discarded: it could exit 127 on a missing binary and the container
+# still looked healthy, because `bun run dev` held the foreground and vouched
+# for a process it never checked.
+#
+# bash, not sh: Debian's sh is dash, which has no `wait -n`.
+# `exit $?` is load-bearing — keep it if anything is ever added after this line.
+CMD ["bash", "-c", "/app/node_modules/.bin/mcp daemon & bun run dev & wait -n; exit $?"]
