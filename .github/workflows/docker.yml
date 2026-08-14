@@ -1,0 +1,141 @@
+name: publish docker image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  # Never cancel a run that is mid-push: a cancelled publish leaves the tag
+  # pointing at whatever landed last, so a green run would not be the one
+  # that shipped. Only coalesce on branches that do not publish.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # hardcoded, not ${{ github.repository }} — this repo has been renamed
+          # once already and the published tag must not move when it happens again
+          images: ghcr.io/caffeinum/vibeos
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A green build is not evidence of a multi-arch manifest — issue #13 was a
+      # successful push that shipped arm64 only. Assert the published tag really
+      # resolves on both platforms before calling the job done.
+      - name: verify published manifest is multi-arch
+        env:
+          IMAGE: ghcr.io/caffeinum/vibeos@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$IMAGE"
+
+          # The manifest must be a list, and must advertise both platforms.
+          published=$(docker buildx imagetools inspect "$IMAGE" --raw |
+            jq -r '.manifests[]? | select(.platform.os != "unknown")
+                   | "\(.platform.os)/\(.platform.architecture)"' | sort -u)
+          echo "published platforms: ${published:-<none — not a manifest list>}"
+
+          for platform in linux/amd64 linux/arm64; do
+            grep -qx "$platform" <<<"$published" || {
+              echo "::error::$IMAGE does not publish $platform"
+              exit 1
+            }
+            # and it has to actually pull, not just be listed
+            docker pull --quiet --platform "$platform" "$IMAGE" >/dev/null
+          done
+
+      # The tools below are invoked as shell strings from the agent's system
+      # prompt (src/app/api/chat/route.ts), so they are invisible to bun install
+      # and to dependabot. `npx puppeteer browsers install chrome` failed on
+      # arm64 with exit 1 and no output for months while CI stayed green and the
+      # image shipped with no browser. Assert they exist, in the running
+      # container, as the user the entrypoint actually runs as.
+      - name: smoke test shelled-out binaries
+        env:
+          IMAGE: ghcr.io/caffeinum/vibeos@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for platform in linux/amd64 linux/arm64; do
+            echo "::group::$platform"
+            cid=$(docker run -d --platform "$platform" "$IMAGE")
+            trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+
+            # If the entrypoint died, `docker exec` reports "container not
+            # running" and hides the real reason. Surface the logs instead.
+            sleep 5
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid")" != "true" ]; then
+              echo "::error::[$platform] container exited on startup:"
+              docker logs "$cid" || true
+              exit 1
+            fi
+
+            # uvx: src/server/api/routers/{browser-use,dedalus}.ts spawn it to
+            # fetch `browser-use` / `dedalus-labs` from PyPI at first call.
+            # NOTE: `uvx --version` proves only that uv is installed. It does
+            # NOT prove `browser-use` or `dedalus-labs` resolve from PyPI at
+            # first call — those are unpinned and fetched at runtime.
+            for probe in "bun --version" "chromium --version" "uvx --version" \
+                         "jq --version" "npm --version"; do
+              if out=$(docker exec "$cid" sh -lc "$probe" 2>&1); then
+                echo "ok: $probe -> $out"
+              else
+                echo "::error::[$platform] \`$probe\` failed in the built image:"
+                echo "$out"
+                docker logs "$cid" || true
+                exit 1
+              fi
+            done
+
+            # `mcp --version` and `mcp --help` both exit 0 on an install
+            # where dist/ was never built — oclif answers them without loading
+            # a command class. `daemon --help` forces the daemon command class
+            # to load, which imports dist/, so it fails loudly on exactly the
+            # broken install. Don't run `mcp daemon` itself: the CMD already
+            # holds its port, and a hang before bind is indistinguishable from
+            # healthy-and-serving.
+            if out=$(docker exec "$cid" sh -lc \
+                  '/app/node_modules/.bin/mcp daemon --help' 2>&1); then
+              echo "ok: mcp daemon command class loads"
+            else
+              echo "::error::[$platform] \`mcp daemon --help\` failed — dist/ is probably missing:"
+              echo "$out"
+              exit 1
+            fi
+
+            docker rm -f "$cid" >/dev/null
+            trap - EXIT
+            echo "::endgroup::"
+          done

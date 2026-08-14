@@ -5,6 +5,10 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
+    # Docker's default /dev/shm is 64MB; chromium crashes on it under any real
+    # page load, and it presents as a random tab crash rather than an OOM.
+    # Never publish the CDP port — it is unauthenticated and can read file://.
+    shm_size: "1gb"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - NODE_ENV=development
