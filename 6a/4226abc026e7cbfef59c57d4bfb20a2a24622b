@@ -1,0 +1,23 @@
+docker-compose.yml
+  s_5e83b0922092c9::t_eaabe0d964ec56 8-11
+Dockerfile
+  s_5e83b0922092c9::t_eaabe0d964ec56 2-3,5-7,14-28,37,39,56
+.github/workflows/docker.yml
+  s_5e83b0922092c9::t_eaabe0d964ec56 1-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6a4226abc026e7cbfef59c57d4bfb20a2a24622b",
+  "prompts": {},
+  "sessions": {
+    "s_5e83b0922092c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aac9fd07-cba9-4a58-9d86-8bcf27c81bdb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
