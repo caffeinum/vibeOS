@@ -1,0 +1,19 @@
+Dockerfile
+  s_5e83b0922092c9::t_1dfba49ffbb52f 55-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "976a2750ad20aa88cc7e3d6428a38a6c8486bc38",
+  "prompts": {},
+  "sessions": {
+    "s_5e83b0922092c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aac9fd07-cba9-4a58-9d86-8bcf27c81bdb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
