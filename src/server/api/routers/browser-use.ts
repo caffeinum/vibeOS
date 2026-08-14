@@ -4,6 +4,22 @@ import { spawn } from 'child_process';
 import { Readable } from 'stream';
 import path from 'path';
 
+import { listTargets } from '../../cdp';
+
+/**
+ * Resolve a page target's CDP websocket URL server-side.
+ *
+ * This used to be a `cdpUrl: z.string()` supplied by the client. That was
+ * tolerable when it addressed a per-user remote browser; with a local CDP
+ * endpoint in the container it would let a caller point the agent at an
+ * arbitrary websocket, so the client now sends only an opaque target id.
+ */
+async function cdpUrlFor(browserId: string): Promise<string> {
+  const target = (await listTargets()).find((t) => t.id === browserId);
+  if (!target) throw new Error(`no such browser target: ${browserId}`);
+  return target.webSocketDebuggerUrl;
+}
+
 // browser-use integration with streaming
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
@@ -11,7 +27,7 @@ export const browserUseRouter = router({
   runAgent: publicProcedure
     .input(z.object({
       task: z.string(),
-      cdpUrl: z.string(),
+      browserId: z.string(),
       model: z.string().optional().default("openai/gpt-4o-mini"),
       apiKey: z.string().optional(),
     }))
@@ -22,11 +38,13 @@ export const browserUseRouter = router({
         throw new Error("OpenAI API key not configured");
       }
       
+      const cdpUrl = await cdpUrlFor(input.browserId);
+
       return new Promise((resolve, reject) => {
         // prepare config for python runner
         const config = {
           task: input.task,
-          cdp_url: input.cdpUrl,
+          cdp_url: cdpUrl,
           model: input.model,
           stream: false,
         };
@@ -100,7 +118,7 @@ export const browserUseRouter = router({
   runAgentStream: publicProcedure
     .input(z.object({
       task: z.string(),
-      cdpUrl: z.string(),
+      browserId: z.string(),
       model: z.string().optional().default("openai/gpt-4o-mini"),
       apiKey: z.string().optional(),
     }))
@@ -111,11 +129,13 @@ export const browserUseRouter = router({
         throw new Error("OpenAI API key not configured");
       }
       
+      const cdpUrl = await cdpUrlFor(input.browserId);
+
       return new Promise((resolve, reject) => {
         // prepare config for python runner
         const config = {
           task: input.task,
-          cdp_url: input.cdpUrl,
+          cdp_url: cdpUrl,
           model: input.model,
           stream: true,
         };
