@@ -73,8 +73,21 @@ jobs:
               echo "::error::$IMAGE does not publish $platform"
               exit 1
             }
-            # and it has to actually pull, not just be listed
-            docker pull --quiet --platform "$platform" "$IMAGE" >/dev/null
+
+            # And it has to actually pull, not just be listed.
+            #
+            # Pull the per-platform digest, NOT `--platform <p> <index-digest>`.
+            # Pulling the same index digest twice with different --platform
+            # values fails the second time with "cannot overwrite digest": the
+            # local store keys on the digest, so the arm64 pull collides with
+            # the amd64 one already stored under it. The image is fine; the
+            # check is what breaks. Per-platform digests are distinct, so they
+            # coexist.
+            digest=$(docker buildx imagetools inspect "$IMAGE" --raw |
+              jq -r --arg p "$platform" '.manifests[]
+                     | select("\(.platform.os)/\(.platform.architecture)" == $p)
+                     | .digest')
+            docker pull --quiet "ghcr.io/caffeinum/vibeos@$digest" >/dev/null
           done
 
       # The tools below are invoked as shell strings from the agent's system
@@ -90,7 +103,18 @@ jobs:
           set -euo pipefail
           for platform in linux/amd64 linux/arm64; do
             echo "::group::$platform"
-            cid=$(docker run -d --platform "$platform" "$IMAGE")
+
+            # Per-platform digest, for the same reason as the step above: the
+            # second `--platform <p> <index-digest>` collides in the local store.
+            digest=$(docker buildx imagetools inspect "$IMAGE" --raw |
+              jq -r --arg p "$platform" '.manifests[]
+                     | select("\(.platform.os)/\(.platform.architecture)" == $p)
+                     | .digest')
+
+            # No command argument — this must start the real CMD, so that a
+            # daemon dying at startup takes the container down via `wait -n`
+            # and is caught by the State.Running check below.
+            cid=$(docker run -d --platform "$platform" "ghcr.io/caffeinum/vibeos@$digest")
             trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
             # If the entrypoint died, `docker exec` reports "container not
