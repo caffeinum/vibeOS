@@ -97,7 +97,7 @@ export const dedalusRouter = router({
           // spawn python process with uvx
           const pythonProcess = spawn(
             "uvx",
-            ["--from", "dedalus-labs", "python", runnerPath],
+            ["--from", "dedalus-labs==0.3.0", "python", runnerPath],
             {
               env: {
                 ...process.env,
@@ -230,7 +230,7 @@ export const dedalusRouter = router({
 
         const pythonProcess = spawn(
           "uvx",
-          ["--from", "dedalus-labs", "python", runnerPath],
+          ["--from", "dedalus-labs==0.3.0", "python", runnerPath],
           {
             env: {
               ...process.env,

@@ -1,3 +1,7 @@
-browser-use>=0.1.0
+# NOTE: nothing installs this file. The python runners are launched with
+# `uvx --from <pkg>==<ver>` from src/server/api/routers/{browser-use,dedalus}.ts,
+# which resolves from PyPI at first call. Keep these pins in sync with the
+# versions in those two files, or delete this file.
+browser-use==0.13.7
+dedalus-labs==0.3.0
 openai>=1.0.0
-asyncio
