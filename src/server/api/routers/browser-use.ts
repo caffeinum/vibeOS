@@ -21,21 +21,31 @@ async function cdpUrlFor(browserId: string): Promise<string> {
 }
 
 // browser-use integration with streaming
+const DEFAULT_MODEL = "claude-sonnet-5";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+
+// Which key a run needs depends on the model it asks for.
+const keyFor = (model: string) =>
+  model.startsWith("claude") ? ANTHROPIC_API_KEY : OPENAI_API_KEY;
 
 export const browserUseRouter = router({
   runAgent: publicProcedure
     .input(z.object({
       task: z.string(),
       browserId: z.string(),
-      model: z.string().optional().default("openai/gpt-4o-mini"),
+      model: z.string().optional().default(DEFAULT_MODEL),
       apiKey: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
       console.log('[browser-use/runAgent] Starting browser-use agent...');
       
-      if (!OPENAI_API_KEY) {
-        throw new Error("OpenAI API key not configured");
+      if (!keyFor(input.model)) {
+        throw new Error(
+          input.model.startsWith("claude")
+            ? "ANTHROPIC_API_KEY not configured — run the container with -e ANTHROPIC_API_KEY=sk-ant-..."
+            : "OPENAI_API_KEY not configured",
+        );
       }
       
       const cdpUrl = await cdpUrlFor(input.browserId);
@@ -63,6 +73,7 @@ export const browserUseRouter = router({
             env: {
               ...process.env,
               OPENAI_API_KEY: OPENAI_API_KEY,
+              ANTHROPIC_API_KEY: ANTHROPIC_API_KEY,
             },
           }
         );
@@ -119,14 +130,18 @@ export const browserUseRouter = router({
     .input(z.object({
       task: z.string(),
       browserId: z.string(),
-      model: z.string().optional().default("openai/gpt-4o-mini"),
+      model: z.string().optional().default(DEFAULT_MODEL),
       apiKey: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
       console.log('[browser-use/runAgentStream] Starting streaming browser-use agent...');
       
-      if (!OPENAI_API_KEY) {
-        throw new Error("OpenAI API key not configured");
+      if (!keyFor(input.model)) {
+        throw new Error(
+          input.model.startsWith("claude")
+            ? "ANTHROPIC_API_KEY not configured — run the container with -e ANTHROPIC_API_KEY=sk-ant-..."
+            : "OPENAI_API_KEY not configured",
+        );
       }
       
       const cdpUrl = await cdpUrlFor(input.browserId);
@@ -154,6 +169,7 @@ export const browserUseRouter = router({
             env: {
               ...process.env,
               OPENAI_API_KEY: OPENAI_API_KEY,
+              ANTHROPIC_API_KEY: ANTHROPIC_API_KEY,
             },
           }
         );

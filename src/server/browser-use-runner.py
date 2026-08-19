@@ -17,6 +17,7 @@ if sys.platform == "win32":
 
 try:
     from browser_use import Agent, BrowserSession
+    from browser_use.llm import ChatAnthropic, ChatOpenAI
 except ImportError as e:
     print(json.dumps({
         "type": "error",
@@ -35,11 +36,21 @@ async def main():
     try:
         # Connect to Chrome via CDP
         browser_session = BrowserSession(cdp_url=config["cdp_url"])
-        
+
+        # Pick the LLM from the configured model. Previously no llm was passed
+        # at all, so browser-use silently fell back to its OpenAI default and
+        # the `model` sent by the caller was ignored.
+        model = config.get("model") or "claude-sonnet-5"
+        if model.startswith("claude"):
+            llm = ChatAnthropic(model=model, api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        else:
+            llm = ChatOpenAI(model=model, api_key=os.environ.get("OPENAI_API_KEY"))
+
         # Create agent
         agent = Agent(
             task=config["task"],
             browser_session=browser_session,
+            llm=llm,
         )
         
         # Run agent
