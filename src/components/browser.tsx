@@ -244,14 +244,28 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
     }
   }, [isKernelReady, kernelBrowser, initialized, initializeKernelBrowser]);
 
-  // Cleanup Kernel browser on unmount
+  // Cleanup the browser on unmount — and ONLY on unmount.
+  //
+  // This used to depend on [kernelBrowser, closeKernelBrowser]. closeKernelBrowser
+  // is a useCallback over closeBrowserMutation, and tRPC's useMutation returns a
+  // fresh object every render, so the dep changed on every render, the effect
+  // re-ran, and its cleanup fired — closing the target that had just been created.
+  // The session died immediately and every later input 404'd.
+  //
+  // Refs keep the latest values without making the effect re-subscribe.
+  const kernelBrowserRef = useRef(kernelBrowser);
+  const closeKernelBrowserRef = useRef(closeKernelBrowser);
+  kernelBrowserRef.current = kernelBrowser;
+  closeKernelBrowserRef.current = closeKernelBrowser;
+
   useEffect(() => {
     return () => {
-      if (kernelBrowser) {
-        closeKernelBrowser(kernelBrowser.id);
+      const browser = kernelBrowserRef.current;
+      if (browser) {
+        closeKernelBrowserRef.current(browser.id);
       }
     };
-  }, [kernelBrowser, closeKernelBrowser]);
+  }, []);
 
   // Render the browser content always, but hide it when not open
   const browserContent = (
