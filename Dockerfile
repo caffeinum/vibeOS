@@ -27,6 +27,13 @@ ENV PUPPETEER_SKIP_DOWNLOAD=1
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV CHROME_PATH=/usr/bin/chromium
 
+# Local CDP endpoint. Loopback only, and never EXPOSEd or published: an
+# unauthenticated CDP port is equivalent to remote code execution and can
+# navigate file:// to read this container's filesystem. The Next server proxies
+# it in-process.
+ENV CHROME_CDP_PORT=9222
+ENV CHROME_PROFILE_DIR=/home/nextjs/.chrome-profile
+
 # Copy package files
 COPY package.json bun.lock ./
 
@@ -62,4 +69,11 @@ ENV HOSTNAME="0.0.0.0"
 #
 # bash, not sh: Debian's sh is dash, which has no `wait -n`.
 # `exit $?` is load-bearing — keep it if anything is ever added after this line.
-CMD ["bash", "-c", "/app/node_modules/.bin/mcp daemon & bun run dev & wait -n; exit $?"]
+#
+# chromium-supervise.sh is started but deliberately kept OUT of the wait set: it
+# restarts itself, and a tab crash must not take the dev server with it.
+#
+# Hence `wait -n "$mcp" "$dev"` with explicit PIDs. Bare `wait -n` waits for ANY
+# background job, which would have silently included chromium and reintroduced
+# exactly the coupling this avoids.
+CMD ["bash", "-c", "/app/scripts/chromium-supervise.sh & /app/node_modules/.bin/mcp daemon & mcp=$!; bun run dev & dev=$!; wait -n \"$mcp\" \"$dev\"; exit $?"]

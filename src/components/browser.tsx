@@ -9,12 +9,11 @@ import {
   Loader2
 } from "lucide-react";
 import { api } from "@/utils/api";
+import { LocalBrowserView } from "@/components/local-browser-view";
 
 // Kernel browser types
 interface KernelBrowser {
   id: string;
-  cdp_ws_url: string;
-  browser_live_view_url: string;
   status: 'creating' | 'running' | 'stopped';
 }
 
@@ -94,19 +93,16 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
   const [isRunningAgent, setIsRunningAgent] = useState(false);
 
   // Kernel-specific state
-  const [kernelApiKey, setKernelApiKey] = useState<string>("");
   const [isKernelReady, setIsKernelReady] = useState(false);
   const [kernelBrowser, setKernelBrowser] = useState<KernelBrowser | null>(null);
   const [kernelError, setKernelError] = useState<KernelError | null>(null);
 
   // tRPC mutations
-  const createBrowserMutation = api.kernel.createBrowser.useMutation({
+  const createBrowserMutation = api.localBrowser.createBrowser.useMutation({
     onSuccess: (data) => {
       console.log('[Browser] Created successfully:', data.id);
       setKernelBrowser({
         id: data.id,
-        cdp_ws_url: data.cdp_ws_url,
-        browser_live_view_url: data.browser_live_view_url,
         status: data.status
       });
       setKernelError(null);
@@ -121,7 +117,7 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
     }
   });
 
-  const closeBrowserMutation = api.kernel.closeBrowser.useMutation({
+  const closeBrowserMutation = api.localBrowser.closeBrowser.useMutation({
     onSuccess: () => {
       console.log('[Browser] Closed successfully');
       setKernelBrowser(null);
@@ -145,10 +141,6 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
 
   // Kernel API functions
   const createKernelBrowser = useCallback(async (): Promise<KernelBrowser | undefined> => {
-    if (!kernelApiKey) {
-      console.warn("Kernel API key not set");
-      return undefined;
-    }
 
     // Don't create if already creating or exists
     if (createBrowserMutation.isPending || kernelBrowser) {
@@ -157,14 +149,10 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
     }
 
     try {
-      const data = await createBrowserMutation.mutateAsync({
-        apiKey: kernelApiKey
-      });
+      const data = await createBrowserMutation.mutateAsync({});
 
       const browser = {
         id: data.id,
-        cdp_ws_url: data.cdp_ws_url,
-        browser_live_view_url: data.browser_live_view_url,
         status: data.status as 'creating' | 'running' | 'stopped'
       };
       
@@ -173,10 +161,10 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
       console.error("Error creating Kernel browser:", error);
       return undefined;
     }
-  }, [kernelApiKey, createBrowserMutation, kernelBrowser]);
+  }, [createBrowserMutation, kernelBrowser]);
 
   const closeKernelBrowser = useCallback(async (browserId: string): Promise<boolean> => {
-    if (!kernelApiKey || !browserId) return false;
+    if (!browserId) return false;
 
     // Don't close if already closing
     if (closeBrowserMutation.isPending) {
@@ -186,7 +174,6 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
 
     try {
       await closeBrowserMutation.mutateAsync({
-        apiKey: kernelApiKey,
         browserId
       });
       return true;
@@ -194,7 +181,7 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
       console.error("Error closing Kernel browser:", error);
       return false;
     }
-  }, [kernelApiKey, closeBrowserMutation]);
+  }, [closeBrowserMutation]);
 
   const initializeKernelBrowser = useCallback(async (): Promise<KernelBrowser | undefined> => {
     const browser = await createKernelBrowser();
@@ -212,7 +199,7 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
 
   // Browser-use functions
   const runBrowserAgent = useCallback(async (task: string) => {
-    if (!kernelBrowser?.cdp_ws_url || !task.trim()) {
+    if (!kernelBrowser?.id || !task.trim()) {
       console.warn("No CDP URL or task provided");
       return;
     }
@@ -222,21 +209,25 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
     try {
       await runAgentMutation.mutateAsync({
         task: task.trim(),
-        cdpUrl: kernelBrowser.cdp_ws_url,
+        browserId: kernelBrowser.id,
         apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY || localStorage.getItem('openaiApiKey') || ''
       });
     } catch (error) {
       console.error("Error running browser agent:", error);
       setIsRunningAgent(false);
     }
-  }, [kernelBrowser?.cdp_ws_url, runAgentMutation]);
+  }, [kernelBrowser?.id, runAgentMutation]);
 
-  // Initialize Kernel API key from environment or localStorage
+  // Browsing runs on the local chromium in this container, over CDP. There is
+  // no API key: readiness means the CDP endpoint answers, not that a process
+  // exists or that a credential was supplied.
+  const localStatus = api.localBrowser.status.useQuery(undefined, {
+    refetchInterval: (q) => (q.state.data?.ready ? false : 3000),
+  });
+
   useEffect(() => {
-    const apiKey = process.env.NEXT_PUBLIC_KERNEL_API_KEY || localStorage.getItem('kernelApiKey') || '';
-    setKernelApiKey(apiKey);
-    setIsKernelReady(!!apiKey);
-  }, []);
+    setIsKernelReady(!!localStatus.data?.ready);
+  }, [localStatus.data?.ready]);
 
   // Initialize browser when component mounts (regardless of isOpen state)
   // Use a ref to track initialization state to prevent multiple calls
@@ -323,34 +314,16 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
         {!isKernelReady ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-500">
             <Shield className="w-16 h-16 mb-4 opacity-50" />
-            <h2 className="text-lg font-medium mb-2">Kernel API Required</h2>
-            <p className="text-sm text-center max-w-md mb-4">
-              To use this browser, you need a Kernel API key. Set NEXT_PUBLIC_KERNEL_API_KEY environment variable or add your API key to localStorage.
+            <h2 className="text-lg font-medium mb-2">Starting local browser…</h2>
+            <p className="text-sm text-center max-w-md">
+              Browsing runs on a chromium inside this container. Nothing leaves the
+              machine and no API key is needed.
             </p>
-            <div className="flex gap-2">
-              <input
-                type="password"
-                placeholder="Enter Kernel API Key"
-                className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    const input = e.target as HTMLInputElement;
-                    const apiKey = input.value.trim();
-                    if (apiKey) {
-                      localStorage.setItem('kernelApiKey', apiKey);
-                      setKernelApiKey(apiKey);
-                      setIsKernelReady(true);
-                    }
-                  }
-                }}
-              />
-              <button
-                onClick={() => window.open('https://docs.onkernel.com', '_blank')}
-                className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
-              >
-                Get API Key
-              </button>
-            </div>
+            {localStatus.data && !localStatus.data.ready && (
+              <p className="text-xs text-center max-w-md mt-3 text-gray-400">
+                {localStatus.data.error}
+              </p>
+            )}
           </div>
         ) : currentUrl && currentUrl !== "about:blank" ? (
           kernelError || !kernelBrowser ? (
@@ -358,7 +331,7 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
               <Shield className="w-16 h-16 mb-4 opacity-50" />
               <h2 className="text-lg font-medium mb-2">Browser Error</h2>
               <p className="text-sm text-center max-w-md mb-4">
-                {kernelError?.message || "Failed to create Kernel browser session. Please check your connection and API key."}
+                {kernelError?.message || "Failed to start a local browser session."}
               </p>
               <div className="flex gap-2">
                 <button
@@ -367,27 +340,11 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
                 >
                   Retry
                 </button>
-                <button
-                  onClick={() => window.open('https://docs.onkernel.com', '_blank')}
-                  className="px-3 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm"
-                >
-                  Documentation
-                </button>
               </div>
             </div>
           ) : (
             <div className="w-full h-full overflow-hidden">
-              <iframe
-                src={kernelBrowser?.browser_live_view_url}
-                className="w-full border-0"
-                style={{ 
-                  height: 'calc(100% + 66px)', 
-                  marginTop: '-43px' 
-                }}
-                scrolling="no"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
-                allow="camera; microphone; geolocation"
-              />
+              <LocalBrowserView browserId={kernelBrowser.id} />
             </div>
           )
         ) : (
