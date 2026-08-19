@@ -24,9 +24,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    // Extensions (password managers, AI agent add-ons, etc.) inject attributes
+    // onto <html> and <body> before React hydrates, which React reports as a
+    // mismatch it "won't patch up". suppressHydrationWarning is one level deep,
+    // so this silences the attribute noise on these two elements only — real
+    // mismatches inside the app still surface.
+    <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        suppressHydrationWarning
       >
         <TRPCProvider>{children}</TRPCProvider>
       </body>
