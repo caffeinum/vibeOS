@@ -122,6 +122,10 @@ export async function POST(req: Request) {
           `,
 
         permissionMode: "bypassPermissions",
+        // Pin the model. Without this the claude-code SDK picks its own
+        // default, which drifts between SDK releases and silently changes
+        // what vibeOS runs on.
+        model: "claude-sonnet-5",
       };
 
       // handle session continuation
