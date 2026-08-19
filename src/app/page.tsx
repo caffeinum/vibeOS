@@ -25,7 +25,9 @@ type DesktopMode = "default" | "cluttered" | "focused" | "welcome";
 export default function Home() {
   const [activeApp, setActiveApp] = useState<string | null>(null);
   const [useEnhancedBrowser] = useState(true);
-  const [currentTime, setCurrentTime] = useState(new Date());
+  // null until mounted: the server renders in UTC and the browser renders in
+  // local time, so rendering a clock during SSR guarantees a hydration mismatch.
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [showClaude, setShowClaude] = useState(false);
   const [showDedalus, setShowDedalus] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
@@ -39,6 +41,7 @@ export default function Home() {
   const [showWelcome, setShowWelcome] = useState(false);
   
   useEffect(() => {
+    setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -247,7 +250,9 @@ export default function Home() {
             <Search className="w-3.5 h-3.5" />
             <Wifi className="w-3.5 h-3.5" />
             <Battery className="w-3.5 h-3.5" />
-            <span>{formatTime(currentTime)}</span>
+            <span suppressHydrationWarning>
+              {currentTime ? formatTime(currentTime) : ""}
+            </span>
           </div>
         </div>
       </GlassEffect>
