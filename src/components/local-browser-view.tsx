@@ -20,8 +20,19 @@ export function LocalBrowserView({ browserId }: { browserId: string }) {
   const viewport = useRef({ width: 1280, height: 800 });
   const imgRef = useRef<HTMLImageElement>(null);
 
+  // Measure the pane before opening the stream so chromium can render at the
+  // size we're actually going to display, instead of a fixed 1280x800 that
+  // letterboxes into whatever space the window happens to have.
+  const containerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    const source = new EventSource(`/api/browser/screencast?browserId=${encodeURIComponent(browserId)}`);
+    const box = containerRef.current?.getBoundingClientRect();
+    const w = Math.round(box?.width ?? 0);
+    const h = Math.round(box?.height ?? 0);
+    const size = w > 0 && h > 0 ? `&w=${w}&h=${h}` : "";
+    const source = new EventSource(
+      `/api/browser/screencast?browserId=${encodeURIComponent(browserId)}${size}`,
+    );
 
     source.addEventListener("ready", () => setStatus("live"));
     source.addEventListener("frame", (event) => {
@@ -116,7 +127,7 @@ export function LocalBrowserView({ browserId }: { browserId: string }) {
   }
 
   return (
-    <div className="w-full h-full flex items-center justify-center bg-gray-900">
+    <div ref={containerRef} className="w-full h-full flex items-center justify-center bg-gray-900">
       {frame ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img

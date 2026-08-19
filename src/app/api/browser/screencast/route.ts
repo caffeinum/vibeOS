@@ -11,7 +11,8 @@ export const dynamic = 'force-dynamic';
  * the frames come over Page.startScreencast and are painted client-side.
  */
 export async function GET(request: Request) {
-  const browserId = new URL(request.url).searchParams.get('browserId');
+  const { searchParams } = new URL(request.url);
+  const browserId = searchParams.get('browserId');
   if (!browserId) {
     return new Response('browserId required', { status: 400 });
   }
@@ -20,6 +21,13 @@ export async function GET(request: Request) {
   if (!target) {
     return new Response(`no such browser target: ${browserId}`, { status: 404 });
   }
+
+  // The client reports the size of the pane it will paint into. Clamped so a
+  // bogus value can't ask chromium for an absurd viewport.
+  const clamp = (v: number, lo: number, hi: number) =>
+    Number.isFinite(v) && v > 0 ? Math.min(Math.max(Math.round(v), lo), hi) : 0;
+  const viewWidth = clamp(Number(searchParams.get('w')), 320, 3840) || 1280;
+  const viewHeight = clamp(Number(searchParams.get('h')), 240, 2160) || 800;
 
   const session = await CdpSession.attach(target.webSocketDebuggerUrl);
   const encoder = new TextEncoder();
@@ -45,11 +53,21 @@ export async function GET(request: Request) {
 
       try {
         await session.send('Page.enable');
+        // Size chromium's viewport to the pane the client is actually showing.
+        // Without this the page always renders at a fixed 1280x800, so a wider
+        // or taller pane letterboxes it and the page shows less content than
+        // the window has room for.
+        await session.send('Emulation.setDeviceMetricsOverride', {
+          width: viewWidth,
+          height: viewHeight,
+          deviceScaleFactor: 0,
+          mobile: false,
+        });
         await session.send('Page.startScreencast', {
           format: 'jpeg',
           quality: 60,
-          maxWidth: 1280,
-          maxHeight: 800,
+          maxWidth: viewWidth,
+          maxHeight: viewHeight,
           everyNthFrame: 1,
         });
         send('ready', { browserId });
