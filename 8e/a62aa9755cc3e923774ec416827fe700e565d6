@@ -1,0 +1,29 @@
+src/server/api/routers/browser-use.ts
+  s_eacdf770d99162::t_c9c8ade2179e71 24,26-30,37,43-48,76,133,139-144,172
+src/server/browser-use-runner.py
+  s_a2f3b663bf4f58::t_f96b514ac650c6 20,39-48,53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8ea62aa9755cc3e923774ec416827fe700e565d6",
+  "prompts": {},
+  "sessions": {
+    "s_a2f3b663bf4f58": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3da634b8-8eb7-4e20-b93f-b1bac7fd190b",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    },
+    "s_eacdf770d99162": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37e46d39-19cd-49f9-831e-7abcb9428a8d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
