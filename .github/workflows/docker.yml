@@ -40,6 +40,13 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
+          # build-push-action applies these OVER the Dockerfile's LABELs, so the
+          # Dockerfile is not the source of truth for anything listed here.
+          # metadata-action defaults image.url to the repo and derives licenses
+          # from GitHub's detection, which silently blanked both.
+          labels: |
+            org.opencontainers.image.url=https://vibeos.sh/?ref=ghcr
+            org.opencontainers.image.licenses=MIT
 
       - id: build
         uses: docker/build-push-action@v6
