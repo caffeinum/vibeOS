@@ -2,6 +2,8 @@
 
 a containerized next.js application with claude code integration via trpc api
 
+[vibeos.sh](https://vibeos.sh/?ref=github-readme) · MIT · experimental
+
 ## features
 
 - **next.js app** - built with bun, typescript, tailwind css

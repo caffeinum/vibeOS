@@ -2,6 +2,14 @@
 # Builds for linux/amd64 and linux/arm64.
 FROM oven/bun:1.3.14-debian
 
+# OCI metadata. `image.source` is what links the GHCR package back to this
+# repo -- without it the published package page shows no source at all.
+LABEL org.opencontainers.image.source="https://github.com/caffeinum/vibeOS" \
+      org.opencontainers.image.url="https://vibeos.sh/?ref=ghcr" \
+      org.opencontainers.image.title="vibeOS" \
+      org.opencontainers.image.description="an open source AI-native desktop -- every window written on demand" \
+      org.opencontainers.image.licenses="MIT"
+
 # Create a non-root user matching host user.
 # trixie-based bun images ship `useradd` only, no `adduser`.
 RUN useradd --system --uid 502 --gid 20 --create-home --home-dir /home/nextjs nextjs
