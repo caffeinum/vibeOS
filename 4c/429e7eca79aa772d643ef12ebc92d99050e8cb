@@ -1,0 +1,21 @@
+Dockerfile
+  s_eacdf770d99162::t_82d0c3f381fb7c 5-12
+README.md
+  s_eacdf770d99162::t_800b5e7c1782f5 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "4c429e7eca79aa772d643ef12ebc92d99050e8cb",
+  "prompts": {},
+  "sessions": {
+    "s_eacdf770d99162": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37e46d39-19cd-49f9-831e-7abcb9428a8d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
