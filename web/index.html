@@ -1525,6 +1525,98 @@ function SettingsApp(body, win, opts) {
   show(SETTINGS_TABS.find(t => t.id === (opts && opts.tab)) || SETTINGS_TABS[0]);
 }
 
+/* ---------- a browser, without a browser engine -----------------------
+
+   Real sites cannot be framed — X-Frame-Options and frame-ancestors exist
+   precisely to stop it, which is why the docker build drives Chromium over
+   CDP. So this re-serves instead of framing: fetch through the proxy, then
+   render.
+
+   The page is rendered inside a SANDBOXED iframe with no allow-scripts and
+   no allow-same-origin. That matters more than it looks: this desktop holds
+   the user's API key in localStorage, so injecting a stranger's HTML into
+   our own origin would be handing it over. Scripts never run, and the frame
+   has no access to us.
+   -------------------------------------------------------------------- */
+
+const PROXY = '/api/proxy?url=';
+
+function BrowserApp(body) {
+  body.style.padding = '0';
+  body.innerHTML = `
+    <div class="row" style="gap:6px;padding:8px 10px;border-bottom:1px solid #262b38;background:#12151d">
+      <button class="btn sm" id="back" title="Back" disabled>←</button>
+      <input type="text" id="url" placeholder="example.com" spellcheck="false"
+             style="flex:1;border:1px solid #23262f;border-radius:8px;background:#0c0e14;padding:6px 10px;font-size:12.5px" />
+      <button class="btn p sm" id="go">Go</button>
+    </div>
+    <div id="status" class="tiny dimmer" style="padding:5px 10px"></div>
+    <iframe id="page" sandbox="allow-popups allow-popups-to-escape-sandbox"
+            referrerpolicy="no-referrer"
+            style="width:100%;height:calc(100% - 74px);border:0;background:#fff"></iframe>`;
+
+  const input = body.querySelector('#url'), frame = body.querySelector('#page');
+  const status = body.querySelector('#status'), back = body.querySelector('#back');
+  const stack = [];
+
+  const absolutise = (html, base) => {
+    // Relative URLs would resolve against our origin inside srcdoc, so make
+    // them absolute against the page they came from.
+    try {
+      const b = new URL(base);
+      return html.replace(/\b(href|src)\s*=\s*["']([^"']+)["']/gi, (m, attr, val) => {
+        if (/^(https?:|data:|mailto:|#)/i.test(val)) return m;
+        try { return `${attr}="${new URL(val, b).href}"`; } catch { return m; }
+      });
+    } catch { return html; }
+  };
+
+  const strip = (html) => html
+    // The sandbox already blocks scripts; removing them as well keeps the
+    // rendered DOM honest and stops noisy console errors.
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<\s*(iframe|object|embed|form)\b/gi, '<disabled-$1')
+    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+
+  async function open(target, push = true) {
+    let url = target.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    input.value = url;
+    status.textContent = 'fetching…';
+    frame.removeAttribute('srcdoc');
+    try {
+      const r = await fetch(PROXY + encodeURIComponent(url), { headers: { 'ngrok-skip-browser-warning': '1' } });
+      const type = r.headers.get('content-type') || '';
+      const text = await r.text();
+      if (!r.ok) {
+        let msg = text;
+        try { msg = JSON.parse(text).error || text; } catch {}
+        status.innerHTML = `<span class="no">${msg.slice(0, 140)}</span>`;
+        return;
+      }
+      if (push) { stack.push(url); back.disabled = stack.length < 2; }
+
+      const doc = type.includes('text/html')
+        ? absolutise(strip(text), url)
+        : `<pre style="white-space:pre-wrap;font:13px ui-monospace,monospace;padding:12px">${
+             text.slice(0, 200000).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</pre>`;
+
+      // <base target="_blank"> so links leave the sandbox rather than dying
+      // silently inside it.
+      frame.srcdoc = `<!doctype html><meta charset="utf-8"><base href="${url}" target="_blank">${doc}`;
+      status.innerHTML = `<span class="dimmer">${type.split(';')[0] || 'ok'} · ${(text.length / 1024).toFixed(0)} KB · scripts disabled</span>`;
+    } catch (e) {
+      status.innerHTML = `<span class="no">${e.message}</span>`;
+    }
+  }
+
+  body.querySelector('#go').onclick = () => open(input.value);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') open(input.value); });
+  back.onclick = () => { stack.pop(); const prev = stack[stack.length - 1]; back.disabled = stack.length < 2; if (prev) open(prev, false); };
+  setTimeout(() => input.focus(), 50);
+}
+
 function NetworkApp(body) {
   const render = () => {
     const on = !!VM.relay;
@@ -1626,6 +1718,7 @@ const ICONS = {
 
 const SHELL = {
   chat:     { title: 'vibeOS',   badge: 'agent',    render: ChatApp,     w: 580, h: 500 },
+  browser:  { title: 'Browser',  badge: 'proxied',  render: BrowserApp,  w: 820, h: 560 },
   settings: { title: 'Settings', badge: '',         render: SettingsApp, w: 720, h: 480 },
 };
 
@@ -1647,6 +1740,7 @@ async function paintDock() {
   };
 
   add(ICONS.vibeos, 'vibeOS — ask for an app', () => openWindow(SHELL.chat));
+  add('🌐', 'Browser', () => openWindow(SHELL.browser));
 
   let apps = [];
   try { apps = await Apps.list(); } catch {}
