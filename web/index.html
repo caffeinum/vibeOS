@@ -941,8 +941,23 @@ const BASE = (() => {
 })();
 const V86_ASSETS = BASE + 'v86/';
 
+// A CORS proxy is the natural fit here and it is what v86's `fetch` backend is
+// designed around — but that backend is NOT in the published npm build (0.5.445
+// ships wisp, ws and inbrowser only; `fetch` exists on master). So the working
+// option today is WISP: a websocket protocol carrying real TCP, which is
+// strictly more capable anyway — TLS and apt work over it, and they cannot over
+// a CORS proxy. Off by default; a VM with no network is the safer default.
+const NET_DEFAULT = 'wisps://wisp.mercurywork.shop/';
+
 const VM = {
-  state: 'off',            // off | unavailable | booting | ready | failed
+  state: 'off',
+  net: '',                 // '' = no relay, 'connecting', an IP, or 'no lease'
+  get relay() {
+    try { return localStorage.getItem('vibeos-net') || ''; } catch { return ''; }
+  },
+  setRelay(url) {
+    try { url ? localStorage.setItem('vibeos-net', url) : localStorage.removeItem('vibeos-net'); } catch {}
+  },            // off | unavailable | booting | ready | failed
   emu: null,
   screen: null,            // created once, moved between windows
   serial: '',
@@ -978,6 +993,7 @@ const VM = {
         bios:     { url: V86_ASSETS + 'seabios.bin' },
         vga_bios: { url: V86_ASSETS + 'vgabios.bin' },
         cdrom:    { url: V86_ASSETS + 'linux4.iso' },
+        ...(this.relay ? { net_device: { type: 'ne2k', relay_url: this.relay } } : {}),
         filesystem: {},        // the 9p mount at /mnt — the file bridge
         screen_container: this.screen,
         autostart: true,
@@ -1003,6 +1019,19 @@ const VM = {
       });
       this.hookWrites();
       this.set('ready');
+
+      // The image brings the NIC up but does not ask for a lease, so a
+      // configured relay would look broken until someone ran udhcpc by hand.
+      if (this.relay) {
+        this.set('ready');
+        try {
+          this.net = 'connecting';
+          await this.exec('udhcpc -i eth0 -n -q 2>&1 | tail -1', 45000);
+          const ip = await this.exec("ifconfig eth0 | grep -o 'inet addr:[0-9.]*'");
+          this.net = ip.includes('inet addr') ? ip.replace('inet addr:', '').trim() : 'no lease';
+        } catch { this.net = 'no lease'; }
+        this.emit();
+      }
     } catch (e) {
       this.set('failed', e.message);
     }
@@ -1077,7 +1106,8 @@ function paintVM() {
   dot.className = 'dot' + (VM.state === 'ready' ? '' :
                            VM.state === 'booting' ? ' warn' : ' off');
   document.getElementById('lxPill').title =
-    VM.state === 'ready'   ? 'The VM is up. Every window reads from it; api.shell() runs real commands.' :
+    VM.state === 'ready'   ? ('The VM is up. api.shell() runs real commands.'
+                              + (VM.net ? '  Network: ' + VM.net : '  No network.')) :
     VM.state === 'booting' ? 'Booting — about 30 seconds.' :
     VM.state === 'failed'  ? ('Boot failed: ' + (VM.detail || '')) :
     VM.state === 'unavailable' ? 'The 11 MB of v86 assets are not served here.' :
@@ -1459,6 +1489,7 @@ const SETTINGS_TABS = [
   { id: 'console',   label: 'Machine',      render: ConsoleApp },
   { id: 'sync',      label: 'Sync',         render: SyncApp },
   { id: 'caps',      label: 'Capabilities', render: CapsApp },
+  { id: 'network',   label: 'Network',      render: NetworkApp },
   { id: 'model',     label: 'Model',        render: ModelApp },
   { id: 'about',     label: 'About',        render: AboutApp },
 ];
@@ -1492,6 +1523,56 @@ function SettingsApp(body, win, opts) {
     nav.appendChild(b);
   });
   show(SETTINGS_TABS.find(t => t.id === (opts && opts.tab)) || SETTINGS_TABS[0]);
+}
+
+function NetworkApp(body) {
+  const render = () => {
+    const on = !!VM.relay;
+    body.innerHTML = `
+      <h3>Network</h3>
+      <p class="small muted" style="margin-top:0">
+        The VM has no network unless you give it a relay. v86's <code>fetch</code> backend turns the
+        guest's HTTP requests into browser <code>fetch()</code> calls, and a CORS proxy makes those
+        reach the open internet.
+      </p>
+      <div class="col" style="margin-bottom:10px">
+        <input type="text" id="relay" placeholder="${NET_DEFAULT}" value="${on ? VM.relay : ''}" />
+        <div class="row">
+          <button class="btn p sm" id="save">${on ? 'Update' : 'Enable networking'}</button>
+          <button class="btn sm" id="preset">Use vibeos.sh proxy</button>
+          ${on ? '<button class="btn sm" id="off">Turn off</button>' : ''}
+        </div>
+      </div>
+      <p class="small ${VM.net && VM.net !== 'no lease' && VM.net !== 'connecting' ? 'yes' : 'dimmer'}" style="margin:0 0 8px">
+        ${!on ? '' : VM.net === 'connecting' ? 'getting a lease…'
+          : VM.net === 'no lease' ? 'connected to the relay but got no DHCP lease'
+          : VM.net ? 'guest has <b>' + VM.net + '</b>' : ''}
+      </p>
+      <p class="note">
+        <b>Takes effect on the next VM start</b> — reload the page after changing it.
+        ${on ? '' : 'Currently <b>off</b>: the guest can reach nothing.'}
+      </p>
+      <h3 style="margin-top:16px">What this does and does not give you</h3>
+      <table><tbody>
+        <tr><td>Plain HTTP from the guest</td><td class="yes"><b>yes</b></td>
+            <td class="dimmer tiny">via the proxy, to allowlisted hosts</td></tr>
+        <tr><td>HTTPS / TLS from the guest</td><td class="no"><b>no</b></td>
+            <td class="dimmer tiny">the fetch backend speaks HTTP; TLS needs the <code>wisp</code> backend and a WISP server</td></tr>
+        <tr><td>Raw TCP, ssh, listening sockets</td><td class="no"><b>no</b></td>
+            <td class="dimmer tiny">same reason</td></tr>
+        <tr><td>Arbitrary destinations</td><td class="part"><b>allowlisted</b></td>
+            <td class="dimmer tiny">an open forwarder gets abused; the proxy only passes hosts it names</td></tr>
+      </tbody></table>`;
+    body.querySelector('#save').onclick = () => {
+      VM.setRelay(body.querySelector('#relay').value.trim()); render();
+    };
+    body.querySelector('#preset').onclick = () => {
+      body.querySelector('#relay').value = NET_DEFAULT; VM.setRelay(NET_DEFAULT); render();
+    };
+    const off = body.querySelector('#off');
+    if (off) off.onclick = () => { VM.setRelay(''); render(); };
+  };
+  render();
 }
 
 function ModelApp(body) {

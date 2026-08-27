@@ -4,8 +4,10 @@ A build of vibeOS that runs entirely in a tab. Hosted at
 **[vibeos.sh/app](https://vibeos.sh/app)**.
 
     ./fetch-assets.sh          # ~11 MB of v86 engine + a small Linux image
-    python3 -m http.server 8080
-    open http://localhost:8080
+    bunx serve .
+    open http://localhost:3000
+
+It is a static page. There is no server component and no build step.
 
 ## What it actually is
 
@@ -29,8 +31,13 @@ but it runs on a virtual disk. That boundary is why the native build exists,
 and the UI marks apps that need capabilities this mode lacks instead of letting
 them fail on open.
 
-## server.py
+## Networking
 
-Optional. Serves this folder and proxies model calls so a key can live in a
-process instead of a browser — useful for demos over a tunnel. The hosted build
-does not use it.
+The VM has no network unless you give it a relay, under Settings > Network.
+v86's published build supports `wisp://` and `ws://` backends; the `fetch`
+backend that a plain CORS proxy would drive exists on v86's master branch but
+is **not** in the npm package, so WISP is the working option — and the better
+one, since it carries real TCP and therefore TLS and `apt`.
+
+Verified against a public WISP server: the guest gets a DHCP lease and
+`wget http://icanhazip.com` returns a public address.
