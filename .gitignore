@@ -40,3 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .worktrees/
+
+# third-party build artifacts, fetched by web/fetch-assets.sh
+web/v86/
