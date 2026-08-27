@@ -1,0 +1,27 @@
+.gitignore
+  s_eacdf770d99162::t_bf768c7bf43b90 43-45
+web/README.md
+  s_eacdf770d99162::t_5c01bfaf125236 1-36
+web/fetch-assets.sh
+  s_eacdf770d99162::t_2eb909ceb54f46 1-14
+web/index.html
+  s_eacdf770d99162::t_08d873e7d1fddd 1-1625
+web/server.py
+  s_eacdf770d99162::t_45cac0eca25bff 1-203
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "ab8666d88128e4939c06d5c75381b761a928f72c",
+  "prompts": {},
+  "sessions": {
+    "s_eacdf770d99162": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37e46d39-19cd-49f9-831e-7abcb9428a8d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
