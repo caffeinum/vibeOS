@@ -1570,10 +1570,25 @@ function BrowserApp(body) {
     // them absolute against the page they came from.
     try {
       const b = new URL(base);
-      return html.replace(/\b(href|src)\s*=\s*["']([^"']+)["']/gi, (m, attr, val) => {
-        if (/^(https?:|data:|mailto:|#)/i.test(val)) return m;
-        try { return `${attr}="${new URL(val, b).href}"`; } catch { return m; }
-      });
+      const one = (val) => {
+        if (/^(https?:|data:|mailto:|#)/i.test(val)) return val;
+        try { return new URL(val, b).href; } catch { return val; }
+      };
+      return html
+        .replace(/\b(href|src|poster)\s*=\s*["']([^"']+)["']/gi,
+                 (m, attr, val) => `${attr}="${one(val)}"`)
+        // srcset is a comma-separated list with descriptors, so it needs its
+        // own pass — missing it is why responsive images (Google's logo among
+        // them) rendered as broken icons.
+        .replace(/\bsrcset\s*=\s*["']([^"']+)["']/gi, (m, list) =>
+          'srcset="' + list.split(',').map(part => {
+            const bits = part.trim().split(/\s+/);
+            if (!bits[0]) return part.trim();
+            bits[0] = one(bits[0]);
+            return bits.join(' ');
+          }).join(', ') + '"')
+        // Same problem inside inline styles: url(...) references.
+        .replace(/url\((['"]?)([^'")]+)\1\)/gi, (m, q, val) => `url(${q}${one(val)}${q})`);
     } catch { return html; }
   };
 
@@ -1594,6 +1609,8 @@ function BrowserApp(body) {
     try {
       const r = await fetch(PROXY + encodeURIComponent(url), { headers: { 'ngrok-skip-browser-warning': '1' } });
       const type = r.headers.get('content-type') || '';
+      // Resolve relative URLs against where the content actually came from.
+      const finalUrl = r.headers.get('x-final-url') || url;
       const text = await r.text();
       if (!r.ok) {
         let msg = text;
@@ -1604,13 +1621,13 @@ function BrowserApp(body) {
       if (push) { stack.push(url); back.disabled = stack.length < 2; }
 
       const doc = type.includes('text/html')
-        ? absolutise(strip(text), url)
+        ? absolutise(strip(text), finalUrl)
         : `<pre style="white-space:pre-wrap;font:13px ui-monospace,monospace;padding:12px">${
              text.slice(0, 200000).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</pre>`;
 
       // <base target="_blank"> so links leave the sandbox rather than dying
       // silently inside it.
-      frame.srcdoc = `<!doctype html><meta charset="utf-8"><base href="${url}" target="_blank">${doc}`;
+      frame.srcdoc = `<!doctype html><meta charset="utf-8"><base href="${finalUrl}" target="_blank">${doc}`;
       status.innerHTML = `<span class="dimmer">${type.split(';')[0] || 'ok'} · ${(text.length / 1024).toFixed(0)} KB · scripts disabled</span>`;
     } catch (e) {
       status.innerHTML = `<span class="no">${e.message}</span>`;
