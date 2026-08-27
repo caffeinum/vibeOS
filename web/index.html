@@ -947,7 +947,13 @@ const V86_ASSETS = BASE + 'v86/';
 // option today is WISP: a websocket protocol carrying real TCP, which is
 // strictly more capable anyway — TLS and apt work over it, and they cannot over
 // a CORS proxy. Off by default; a VM with no network is the safer default.
+// Our own WISP server, running as a Vercel function next to the site. The
+// public one stays available as a fallback while ours is in beta.
+// The public relay is the default because it demonstrably works. Ours is
+// deployed and accepts the WebSocket, but no TCP stream completes through it
+// yet — so it is offered, not defaulted.
 const NET_DEFAULT = 'wisps://wisp.mercurywork.shop/';
+const NET_OURS = 'wisps://vibeos.sh/api/wisp';
 
 const VM = {
   state: 'off',
@@ -1631,7 +1637,8 @@ function NetworkApp(body) {
         <input type="text" id="relay" placeholder="${NET_DEFAULT}" value="${on ? VM.relay : ''}" />
         <div class="row">
           <button class="btn p sm" id="save">${on ? 'Update' : 'Enable networking'}</button>
-          <button class="btn sm" id="preset">Use vibeos.sh proxy</button>
+          <button class="btn sm" id="preset">public relay</button>
+          <button class="btn sm" id="public">vibeos.sh relay (beta)</button>
           ${on ? '<button class="btn sm" id="off">Turn off</button>' : ''}
         </div>
       </div>
@@ -1652,14 +1659,19 @@ function NetworkApp(body) {
             <td class="dimmer tiny">the fetch backend speaks HTTP; TLS needs the <code>wisp</code> backend and a WISP server</td></tr>
         <tr><td>Raw TCP, ssh, listening sockets</td><td class="no"><b>no</b></td>
             <td class="dimmer tiny">same reason</td></tr>
-        <tr><td>Arbitrary destinations</td><td class="part"><b>allowlisted</b></td>
-            <td class="dimmer tiny">an open forwarder gets abused; the proxy only passes hosts it names</td></tr>
+        <tr><td>Arbitrary destinations</td><td class="part"><b>public only</b></td>
+            <td class="dimmer tiny">the relay refuses loopback, private ranges and odd ports, so the guest cannot reach our infrastructure</td></tr>
+        <tr><td>Staying connected</td><td class="part"><b>time-limited</b></td>
+            <td class="dimmer tiny">the relay is a serverless function; the socket closes at its max duration and the guest loses the network until the VM restarts</td></tr>
       </tbody></table>`;
     body.querySelector('#save').onclick = () => {
       VM.setRelay(body.querySelector('#relay').value.trim()); render();
     };
     body.querySelector('#preset').onclick = () => {
       body.querySelector('#relay').value = NET_DEFAULT; VM.setRelay(NET_DEFAULT); render();
+    };
+    body.querySelector('#public').onclick = () => {
+      body.querySelector('#relay').value = NET_OURS; VM.setRelay(NET_OURS); render();
     };
     const off = body.querySelector('#off');
     if (off) off.onclick = () => { VM.setRelay(''); render(); };
