@@ -984,12 +984,49 @@ const VM = {
     catch { return false; }
   },
 
+  // v86 owns the relay WebSocket internally and exposes no event for it, so
+  // wrap the constructor while it connects. Without this a dropped relay is
+  // invisible: the guest simply stops reaching anything, with no signal at all.
+  watchRelay() {
+    if (!this.relay || window.__wsWrapped) return;
+    window.__wsWrapped = true;
+    const Native = window.WebSocket;
+    const self = this;
+    const host = (() => { try { return new URL(self.relay.replace(/^wisps?:/, 'https:')).host; } catch { return ''; } })();
+    window.WebSocket = function (url, protocols) {
+      const ws = protocols === undefined ? new Native(url) : new Native(url, protocols);
+      if (host && String(url).includes(host)) {
+        self.relaySocket = ws;
+        ws.addEventListener('close', () => {
+          if (self.state !== 'ready') return;
+          self.net = 'disconnected';
+          self.emit();
+        });
+      }
+      return ws;
+    };
+    window.WebSocket.prototype = Native.prototype;
+    Object.assign(window.WebSocket, Native);
+  },
+
+  // The relay is gone and v86 cannot redial, so the machine has to come back.
+  // Apps survive because they are files on disk; VM state does not.
+  async restart() {
+    try { this.emu && this.emu.stop(); } catch {}
+    try { this.emu && this.emu.destroy && this.emu.destroy(); } catch {}
+    this.emu = null; this.screen = null; this.serial = ''; this.net = '';
+    window.__v86loaded = null; window.__wsWrapped = false;
+    this.set('off');
+    await this.boot();
+  },
+
   async boot() {
     if (this.state === 'booting' || this.state === 'ready') return;
     if (!(await this.available())) return this.set('unavailable');
     this.set('booting');
     try {
       await loadScriptOnce(V86_ASSETS + 'libv86.js');
+      this.watchRelay();
 
       this.screen = document.createElement('div');
       this.screen.tabIndex = 0;
@@ -1113,8 +1150,9 @@ const VM_LABEL = {
 function paintVM() {
   const dot = document.getElementById('lxDot'), txt = document.getElementById('lxText');
   if (!dot) return;
-  txt.textContent = VM_LABEL[VM.state];
-  dot.className = 'dot' + (VM.state === 'ready' ? '' :
+  const dropped = VM.state === 'ready' && VM.net === 'disconnected';
+  txt.textContent = dropped ? 'network dropped' : VM_LABEL[VM.state];
+  dot.className = 'dot' + (dropped ? ' warn' : VM.state === 'ready' ? '' :
                            VM.state === 'booting' ? ' warn' : ' off');
   document.getElementById('lxPill').title =
     VM.state === 'ready'   ? ('The VM is up. api.shell() runs real commands.'
@@ -1664,11 +1702,14 @@ function NetworkApp(body) {
           ${on ? '<button class="btn sm" id="off">Turn off</button>' : ''}
         </div>
       </div>
-      <p class="small ${VM.net && VM.net !== 'no lease' && VM.net !== 'connecting' ? 'yes' : 'dimmer'}" style="margin:0 0 8px">
+      <p class="small ${VM.net && !['no lease','connecting','disconnected'].includes(VM.net) ? 'yes' : 'dimmer'}" style="margin:0 0 8px">
         ${!on ? '' : VM.net === 'connecting' ? 'getting a lease…'
           : VM.net === 'no lease' ? 'connected to the relay but got no DHCP lease'
+          : VM.net === 'disconnected'
+            ? '<span class="no">the relay dropped this connection.</span> serverless functions have a maximum duration, so a long session will hit it. v86 cannot redial, so the machine has to restart — your apps are files and survive; anything only in VM memory does not.'
           : VM.net ? 'guest has <b>' + VM.net + '</b>' : ''}
       </p>
+      ${VM.net === 'disconnected' ? '<button class="btn p sm" id="reconnect" style="margin-bottom:10px">Restart the machine</button>' : ''}
       <p class="note">
         <b>Takes effect on the next VM start</b> — reload the page after changing it.
         ${on ? 'On by default, through our own relay.' : 'Currently <b>off</b>: the guest can reach nothing.'}
@@ -1686,6 +1727,9 @@ function NetworkApp(body) {
         <tr><td>Staying connected</td><td class="part"><b>time-limited</b></td>
             <td class="dimmer tiny">the relay is a serverless function; the socket closes at its max duration and the guest loses the network until the VM restarts</td></tr>
       </tbody></table>`;
+    const rc = body.querySelector('#reconnect');
+    if (rc) rc.onclick = async () => { rc.disabled = true; rc.textContent = 'restarting…'; await VM.restart(); render(); };
+
     body.querySelector('#save').onclick = () => {
       VM.setRelay(body.querySelector('#relay').value.trim()); render();
     };
