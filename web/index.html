@@ -949,11 +949,10 @@ const V86_ASSETS = BASE + 'v86/';
 // a CORS proxy. Off by default; a VM with no network is the safer default.
 // Our own WISP server, running as a Vercel function next to the site. The
 // public one stays available as a fallback while ours is in beta.
-// The public relay is the default because it demonstrably works. Ours is
-// deployed and accepts the WebSocket, but no TCP stream completes through it
-// yet — so it is offered, not defaulted.
-const NET_DEFAULT = 'wisps://wisp.mercurywork.shop/';
-const NET_OURS = 'wisps://vibeos.sh/api/wisp';
+// Our own relay, verified end to end: the guest gets a lease and reaches the
+// internet through it. The public one stays as a fallback.
+const NET_DEFAULT = 'wisps://vibeos.sh/api/wisp';
+const NET_OURS = 'wisps://wisp.mercurywork.shop/';
 
 const VM = {
   state: 'off',
@@ -1654,8 +1653,8 @@ function NetworkApp(body) {
         <input type="text" id="relay" placeholder="${NET_DEFAULT}" value="${on ? VM.relay : ''}" />
         <div class="row">
           <button class="btn p sm" id="save">${on ? 'Update' : 'Enable networking'}</button>
-          <button class="btn sm" id="preset">public relay</button>
-          <button class="btn sm" id="public">vibeos.sh relay (beta)</button>
+          <button class="btn sm" id="preset">vibeos.sh relay</button>
+          <button class="btn sm" id="public">public relay</button>
           ${on ? '<button class="btn sm" id="off">Turn off</button>' : ''}
         </div>
       </div>
