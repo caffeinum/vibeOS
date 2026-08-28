@@ -957,11 +957,17 @@ const NET_OURS = 'wisps://wisp.mercurywork.shop/';
 const VM = {
   state: 'off',
   net: '',                 // '' = no relay, 'connecting', an IP, or 'no lease'
+  // Networking is on by default now. An absent setting means "use the default
+  // relay"; the explicit string 'off' is how someone turns it off, so that is
+  // distinguishable from never having chosen.
   get relay() {
-    try { return localStorage.getItem('vibeos-net') || ''; } catch { return ''; }
+    let stored = null;
+    try { stored = localStorage.getItem('vibeos-net'); } catch {}
+    if (stored === 'off') return '';
+    return stored || NET_DEFAULT;
   },
   setRelay(url) {
-    try { url ? localStorage.setItem('vibeos-net', url) : localStorage.removeItem('vibeos-net'); } catch {}
+    try { localStorage.setItem('vibeos-net', url || 'off'); } catch {}
   },            // off | unavailable | booting | ready | failed
   emu: null,
   screen: null,            // created once, moved between windows
@@ -1665,7 +1671,7 @@ function NetworkApp(body) {
       </p>
       <p class="note">
         <b>Takes effect on the next VM start</b> — reload the page after changing it.
-        ${on ? '' : 'Currently <b>off</b>: the guest can reach nothing.'}
+        ${on ? 'On by default, through our own relay.' : 'Currently <b>off</b>: the guest can reach nothing.'}
       </p>
       <h3 style="margin-top:16px">What this does and does not give you</h3>
       <table><tbody>
