@@ -3,6 +3,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap">
+<!-- Same web analytics as the rest of vibeos.sh. Counts pageviews and a few
+     product events. Never prompts, never keys, never page contents. -->
+<script defer src="/_vercel/insights/script.js"></script>
 <style>
   :root {
     --bg: #0a0a0c; --panel: #101219; --panel2: #0c0e14; --line: #23262f;
@@ -165,6 +168,12 @@
       makes "download the binary and keep your apps" need no export, no
       sync and no account — the native build opens the same folder.
    ========================================================================= */
+
+// Product events, so "46 people opened /app" can become "and this is what
+// happened next". Deliberately coarse: no prompt text, no URLs, no key state.
+function track(name, data) {
+  try { window.va && window.va('event', { name, ...(data || {}) }); } catch {}
+}
 
 /* ---------- capability providers ------------------------------------- */
 
@@ -879,6 +888,7 @@ function ChatApp(body) {
 
     const target = parseTarget(source);
     const title = parseTitle(source) || text.slice(0, 30);
+    track(live ? 'app_generated' : 'app_stock', { target });
 
     if (target === 'vm') {
       const file = parseFile(source) || 'script.sh';
@@ -1024,6 +1034,7 @@ const VM = {
     if (this.state === 'booting' || this.state === 'ready') return;
     if (!(await this.available())) return this.set('unavailable');
     this.set('booting');
+    this.bootStarted = Date.now();
     try {
       await loadScriptOnce(V86_ASSETS + 'libv86.js');
       this.watchRelay();
@@ -1067,6 +1078,7 @@ const VM = {
       });
       this.hookWrites();
       this.set('ready');
+      track('vm_ready', { seconds: Math.round((Date.now() - this.bootStarted) / 1000) });
 
       // The image brings the NIC up but does not ask for a lease, so a
       // configured relay would look broken until someone ran udhcpc by hand.
@@ -1082,6 +1094,7 @@ const VM = {
       }
     } catch (e) {
       this.set('failed', e.message);
+      track('vm_failed');
     }
   },
 
@@ -1650,6 +1663,7 @@ function BrowserApp(body) {
     status.textContent = 'fetching…';
     frame.removeAttribute('srcdoc');
     try {
+      track('browser_open');
       const r = await fetch(PROXY + encodeURIComponent(url), { headers: { 'ngrok-skip-browser-warning': '1' } });
       const type = r.headers.get('content-type') || '';
       // Resolve relative URLs against where the content actually came from.
@@ -1864,6 +1878,7 @@ tick(); setInterval(tick, 1000);
   if (!Gen.available) {
     try { if (!localStorage.getItem('vibeos-asked')) { localStorage.setItem('vibeos-asked', '1'); Gen.askForKey(); } }
     catch { Gen.askForKey(); }
+    track(Gen.available ? 'key_added' : 'key_declined');
   }
   // The VM is the system, so it starts with the page rather than on demand.
   VM.available().then(ok => ok ? VM.boot() : VM.set('unavailable'));
