@@ -75,7 +75,27 @@
     margin-left: auto; font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
     color: var(--dimmer); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px;
   }
-  .body { flex: 1 1 auto; overflow: auto; padding: 14px; }
+  .body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px; }
+  /* Generated apps: fixed chrome, mount fills the pane — no host scrollbar. */
+  .body.app-shell {
+    display: flex; flex-direction: column;
+    overflow: hidden; padding: 0;
+    scrollbar-width: none;
+  }
+  .body.app-shell::-webkit-scrollbar { display: none; }
+  .app-mount {
+    flex: 1 1 auto; min-height: 0; min-width: 0;
+    width: 100%; height: 100%;
+    overflow: hidden; position: relative; box-sizing: border-box;
+    contain: layout style;
+  }
+  .app-scroll {
+    overflow: auto; min-height: 0;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,.14) transparent;
+  }
+  .app-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+  .app-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 3px; }
   .resize {
     position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
     background: linear-gradient(135deg, transparent 50%, var(--line2) 50%);
@@ -110,6 +130,7 @@
   input:focus, textarea:focus { border-color: #3a4560; }
   .row { display: flex; gap: 8px; align-items: center; }
   .col { display: flex; flex-direction: column; gap: 8px; }
+  [hidden] { display: none !important; }
   .muted { color: var(--dim); } .dimmer { color: var(--dimmer); }
   .small { font-size: 12px; } .tiny { font-size: 11px; }
   h3 { margin: 0 0 8px; font-size: 15px; }
@@ -133,6 +154,29 @@
   .req { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; border-radius: 4px; padding: 1px 5px; border: 1px solid var(--line2); color: var(--dimmer); }
   .req.miss { color: var(--warn); border-color: #4a3a1a; }
   .upsell { border: 1px solid #2c3550; background: linear-gradient(160deg,#141a2e,#101219); border-radius: 10px; padding: 12px; }
+  .key-modal-overlay {
+    position: fixed; inset: 0; z-index: 9000;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.55); backdrop-filter: blur(4px);
+  }
+  .key-modal {
+    width: min(420px, calc(100vw - 32px));
+    background: rgba(16,18,25,.97); color: var(--text);
+    border: 1px solid var(--line2); border-radius: 12px;
+    padding: 20px 22px; box-shadow: 0 30px 70px -20px rgba(0,0,0,.75);
+  }
+  .key-modal h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
+  .key-modal-actions { margin-top: 16px; }
+  .key-modal-actions .btn { width: 100%; }
+  .key-modal-actions .btn.skip { background: transparent; border-color: transparent; color: var(--dimmer); font-weight: 400; }
+  .key-modal-actions .btn.skip:hover { color: var(--dim); border-color: var(--line); }
+  .key-modal a { color: var(--accent); }
+  .oauth-panel { margin-top: 4px; gap: 10px; }
+  .oauth-code {
+    font-size: 28px; font-weight: 600; letter-spacing: .12em; text-align: center;
+    padding: 12px; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel2);
+  }
+  .oauth-status { min-height: 1.2em; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
@@ -153,6 +197,7 @@
   <div id="dock"></div>
 </div>
 
+<script src="/app/oauth.js"></script>
 <script>
 /* =========================================================================
    vibeOS Web — capability-provider prototype
@@ -172,7 +217,11 @@
 // Product events, so "46 people opened /app" can become "and this is what
 // happened next". Deliberately coarse: no prompt text, no URLs, no key state.
 function track(name, data) {
-  try { window.va && window.va('event', { name, ...(data || {}) }); } catch {}
+  try {
+    const evt = { name };
+    if (data) evt.data = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)]));
+    window.va && window.va('event', evt);
+  } catch {}
 }
 
 /* ---------- capability providers ------------------------------------- */
@@ -412,33 +461,170 @@ const Gen = {
   available: false,
   token: (location.hash.match(/token=([^&]+)/) || [])[1] || '',
   key: '', provider: '', model: '', viaServer: false,
+  oauth: null,
 
   // Both Anthropic and OpenAI send CORS headers, so a hosted page can call
   // them directly with the user's OWN key. No key ever ships with the app.
+  // ChatGPT Codex OAuth is stored locally and proxied through vibeos.sh.
   loadKey() {
     try { this.key = localStorage.getItem('vibeos-key') || ''; } catch {}
+    try { this.oauth = VibeOSOAuth.loadOAuthSession(); } catch { this.oauth = null; }
     this.setProvider();
     return this.key;
   },
   setProvider() {
-    this.provider = this.key.startsWith('sk-ant-') ? 'anthropic' : this.key ? 'openai' : '';
-    this.model = this.provider === 'anthropic' ? 'claude-sonnet-5'
-               : this.provider === 'openai' ? 'gpt-5.6-terra' : '';
-    this.available = !!this.provider || this.viaServer;
+    if (this.viaServer) {
+      this.available = true;
+      return;
+    }
+    if (this.key) {
+      this.provider = this.key.startsWith('sk-ant-') ? 'anthropic' : 'openai';
+      this.model = this.provider === 'anthropic' ? 'claude-sonnet-5'
+                 : this.provider === 'openai' ? 'gpt-5.6' : '';   // terra is the Codex model; a plain key gets plain 5.6
+      this.available = !!this.provider;
+      return;
+    }
+    if (this.oauth?.accessToken && this.oauth?.accountId) {
+      this.provider = 'openai-codex';
+      this.model = VibeOSOAuth.CODEX_MODEL;
+      this.available = true;
+      return;
+    }
+    this.provider = '';
+    this.model = '';
+    this.available = false;
   },
   saveKey(k) {
     this.key = (k || '').trim();
     try { k ? localStorage.setItem('vibeos-key', this.key) : localStorage.removeItem('vibeos-key'); } catch {}
     this.setProvider();
   },
+  saveOAuth(session) {
+    this.oauth = session ? VibeOSOAuth.saveOAuthSession(session) : (VibeOSOAuth.clearOAuthSession(), null);
+    this.setProvider();
+  },
+  async ensureOAuthFresh() {
+    if (!this.oauth) return null;
+    this.oauth = await VibeOSOAuth.ensureFreshOAuthSession(this.oauth);
+    this.setProvider();
+    return this.oauth;
+  },
   askForKey() {
-    const k = window.prompt(
-      'Paste an API key to let vibeOS build apps.\n\n' +
-      'Anthropic (sk-ant-...) or OpenAI (sk-...). It is stored only in this browser ' +
-      'and sent straight to the provider — never to vibeos.sh.\n\n' +
-      'Leave blank to explore without a model.');
-    if (k !== null) this.saveKey(k);
-    return this.available;
+    if (this._askModal) return this._askModal;
+    this._askModal = new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.className = 'key-modal-overlay';
+      overlay.innerHTML = `
+        <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="keyModalTitle">
+          <h2 id="keyModalTitle">vibeOS needs AI features to work.</h2>
+          <p class="small dimmer" id="keyModalSubtitle" style="margin:0">Sign in with your OpenAI account to get started.</p>
+          <div class="key-modal-actions col">
+            <div class="col" id="keyModalStep1">
+              <button type="button" class="btn p" id="keyLoginBtn">Login with OpenAI</button>
+              <div id="keyOAuthSlot"></div>
+              <p class="note oauth-error" id="keyOAuthError" hidden style="margin:0;color:var(--no)"></p>
+              <button type="button" class="btn" id="keyOtherBtn">Other options</button>
+            </div>
+            <div class="col" id="keyModalStep2" hidden>
+              <button type="button" class="btn sm skip" id="keyBackBtn">← Back to sign in</button>
+              <button type="button" class="btn" id="keyPasteBtn">Paste an API key (OpenAI/Anthropic)</button>
+              <div class="col" id="keyPasteForm" hidden>
+                <input type="password" id="keyInput" placeholder="sk-... or sk-ant-..." autocomplete="off" spellcheck="false">
+                <p class="tiny dimmer" style="margin:0">Stored only in this browser, sent straight to the provider — never to vibeos.sh.</p>
+                <button type="button" class="btn p sm" id="keySaveBtn">Save</button>
+              </div>
+              <button type="button" class="btn" id="keyCreateBtn">Create account</button>
+              <p class="note" id="keyCreateNote" hidden style="margin:0">
+                Coming soon! <a href="/get-access">Subscribe to waitlist</a> to know it first.
+              </p>
+              <button type="button" class="btn sm skip" id="keySkipBtn">Continue without AI features</button>
+            </div>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      const finish = () => {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+        this._askModal = null;
+        resolve(this.available);
+      };
+      const decline = () => { track('key_declined'); finish(); };
+      const onKey = e => { if (e.key === 'Escape') decline(); };
+
+      document.addEventListener('keydown', onKey);
+      overlay.querySelector('#keyOtherBtn').onclick = () => {
+        overlay.querySelector('#keyModalStep1').hidden = true;
+        overlay.querySelector('#keyModalStep2').hidden = false;
+        overlay.querySelector('#keyModalSubtitle').textContent =
+          'Paste your API key or pick an option below.';
+      };
+      overlay.querySelector('#keyBackBtn').onclick = () => {
+        overlay.querySelector('#keyModalStep1').hidden = false;
+        overlay.querySelector('#keyModalStep2').hidden = true;
+        overlay.querySelector('#keyPasteForm').hidden = true;
+        overlay.querySelector('#keyCreateNote').hidden = true;
+        overlay.querySelector('#keyInput').value = '';
+        overlay.querySelector('#keyModalSubtitle').textContent =
+          'Sign in with your OpenAI account to get started.';
+      };
+      overlay.querySelector('#keyPasteBtn').onclick = () => {
+        overlay.querySelector('#keyPasteForm').hidden = false;
+        overlay.querySelector('#keyInput').focus();
+      };
+      overlay.querySelector('#keySaveBtn').onclick = () => {
+        const k = overlay.querySelector('#keyInput').value.trim();
+        this.saveKey(k);
+        if (k) track('key_added');
+        finish();
+      };
+      overlay.querySelector('#keyCreateBtn').onclick = () => {
+        track('create_account_click');
+        overlay.querySelector('#keyCreateNote').hidden = false;
+      };
+      overlay.querySelector('#keyLoginBtn').onclick = async () => {
+        track('login_openai_click');
+        const slot = overlay.querySelector('#keyOAuthSlot');
+        const errEl = overlay.querySelector('#keyOAuthError');
+        const loginBtn = overlay.querySelector('#keyLoginBtn');
+        errEl.hidden = true;
+        errEl.textContent = '';
+        loginBtn.disabled = true;
+        try {
+          const flow = await VibeOSOAuth.startOAuthDeviceFlow();
+          slot.innerHTML = VibeOSOAuth.renderOAuthPanelHtml({ code: flow.code, url: flow.url, status: 'waiting' });
+          window.open(flow.url, '_blank', 'noopener');
+          const tokens = await VibeOSOAuth.pollOAuthUntilComplete(flow.id, {
+            sleep: ms => new Promise(r => setTimeout(r, ms)),
+            intervalMs: 5000,
+            fetchImpl: fetch,
+            onPoll: result => {
+              if (result.status === 'pending') {
+                VibeOSOAuth.updateOAuthPanelStatus(slot, flow, 'polling');
+              } else if (result.status === 'complete') {
+                VibeOSOAuth.updateOAuthPanelStatus(slot, flow, 'complete');
+              }
+            },
+          });
+          this.saveOAuth(tokens);
+          track('key_added');
+          finish();
+        } catch (e) {
+          if (slot.querySelector('#oauthPanel')) {
+            const statusEl = slot.querySelector('.oauth-status');
+            if (statusEl) statusEl.textContent = (e && e.message) || 'authorization failed';
+          }
+          errEl.textContent = (e && e.message) || 'authorization failed';
+          errEl.hidden = false;
+          loginBtn.disabled = false;
+        }
+      };
+      overlay.querySelector('#keySkipBtn').onclick = decline;
+      overlay.querySelector('#keyInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter') overlay.querySelector('#keySaveBtn').click();
+      });
+    });
+    return this._askModal;
   },
 
   async probe() {
@@ -454,7 +640,7 @@ const Gen = {
     return this.available;
   },
 
-  async generate(prompt, history) {
+  async generate(prompt, history, onStatus) {
     if (this.viaServer) {
       const r = await fetch('/api/generate', {
         method: 'POST',
@@ -466,36 +652,37 @@ const Gen = {
       if (!r.ok) throw new Error(j.error || ('server returned ' + r.status));
       return j.source;
     }
-    if (!this.key) throw new Error('no API key set');
+    if (this.key) {
+      const url = this.provider === 'anthropic'
+        ? 'https://api.anthropic.com/v1/messages'
+        : 'https://api.openai.com/v1/chat/completions';
+      const headers = this.provider === 'anthropic'
+        ? { 'content-type': 'application/json', 'x-api-key': this.key,
+            'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }
+        : { 'content-type': 'application/json', authorization: 'Bearer ' + this.key };
+      const payload = this.provider === 'anthropic'
+        ? { model: this.model, max_tokens: 2000, system: PASTE_KEY_SYSTEM_PROMPT,
+            messages: [...(history || []).slice(-6), { role: 'user', content: prompt }] }
+        : { model: this.model, max_completion_tokens: 2000,
+            messages: [{ role: 'system', content: PASTE_KEY_SYSTEM_PROMPT },
+                       ...(history || []).slice(-6), { role: 'user', content: prompt }] };
 
-    const url = this.provider === 'anthropic'
-      ? 'https://api.anthropic.com/v1/messages'
-      : 'https://api.openai.com/v1/chat/completions';
-    const headers = this.provider === 'anthropic'
-      ? { 'content-type': 'application/json', 'x-api-key': this.key,
-          'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }
-      : { 'content-type': 'application/json', authorization: 'Bearer ' + this.key };
-    const payload = this.provider === 'anthropic'
-      ? { model: this.model, max_tokens: 2000, system: SYSTEM_PROMPT,
-          messages: [...(history || []).slice(-6), { role: 'user', content: prompt }] }
-      : { model: this.model, max_completion_tokens: 2000,
-          messages: [{ role: 'system', content: SYSTEM_PROMPT },
-                     ...(history || []).slice(-6), { role: 'user', content: prompt }] };
-
-    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(`${this.provider} ${r.status}: ${(j.error && j.error.message) || 'request failed'}`);
-    let src = this.provider === 'anthropic'
-      ? (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim()
-      : ((j.choices || [{}])[0].message || {}).content.trim();
-    if (src.startsWith('```')) src = src.split('\n').slice(1).join('\n').replace(/```\s*$/, '').trim();
-    return src;
+      const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(`${this.provider} ${r.status}: ${(j.error && j.error.message) || 'request failed'}`);
+      let src = this.provider === 'anthropic'
+        ? (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim()
+        : ((j.choices || [{}])[0].message || {}).content.trim();
+      if (src.startsWith('```')) src = src.split('\n').slice(1).join('\n').replace(/```\s*$/, '').trim();
+      return src;
+    }
+    if (this.oauth) return Agent.run(prompt, history, onStatus);
+    throw new Error('no model configured');
   },
 };
 
-// Kept in the client too, because the hosted build talks to the provider
-// directly and has no server to hold it.
-const SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
+// Paste-key path only — talks to the provider directly with one-shot codegen.
+const PASTE_KEY_SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
 
 TARGET 1, a desktop window (default). Header exactly:
 // @title <Short Name>
@@ -503,7 +690,10 @@ TARGET 1, a desktop window (default). Header exactly:
 // @requires <space-separated caps, or none>
 Caps: files (read the workspace), shell (run commands in the VM). Use none unless needed.
 Then: export default function (mount, api) { ... }
-mount is an empty HTMLElement. api.list() -> [{name,dir}] (needs files). api.shell(cmd) -> stdout (needs shell).
+mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.shell(cmd) -> stdout (needs shell). api.onResize((w,h) => ...) when layout depends on size.
+
+Layout rules (required): root width/height 100%, box-sizing:border-box, display:flex, flex-direction:column, overflow:hidden on mount. No document scroll, no min-height exceeding the window. Modest type and padding; empty states must fit. Scroll inner panes only (overflow:auto, scrollbar-width:thin), never mount.
+
 Plain JavaScript only, no JSX, no imports, no external URLs. Style inline for a dark UI: text #e8eaf0, panels #0c0e14, borders #23262f. Under 60 lines and it must work.
 
 TARGET 2, a program inside the VM. Use when the request is about files, text processing or system tasks. Header exactly:
@@ -511,6 +701,101 @@ TARGET 2, a program inside the VM. Use when the request is about files, text pro
 // @target vm
 // @file <name.sh>
 Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.`;
+
+const Agent = {
+  MAX_STEPS: 5,
+
+  async callServer(body) {
+    await Gen.ensureOAuthFresh();
+    const auth = VibeOSOAuth.oauthAuthHeaders(Gen.oauth);
+    if (!auth) throw new Error('no oauth session');
+    const r = await fetch('/api/openai/generate', {
+      method: 'POST',
+      headers: Object.assign({ 'content-type': 'application/json' }, auth),
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('server returned ' + r.status));
+    return j;
+  },
+
+  async executeTool(call, onStatus) {
+    const { toolName, input } = call;
+    if (toolName === 'create_app') {
+      const title = input.title || 'app';
+      const source = input.source || '';
+      onStatus?.(`creating “${title}”`);
+      const target = parseTarget(source);
+      if (target === 'vm') {
+        const file = parseFile(source) || 'script.sh';
+        let installed = false;
+        if (VM.state === 'ready') {
+          try { await VM.emu.create_file(file, new TextEncoder().encode(source)); installed = true; } catch {}
+        }
+        return { ok: true, kind: 'vm', title, file, installed, source };
+      }
+      const saved = await Apps.save(title, source).catch(() => ({}));
+      paintDock();
+      launchApp({ title, source, requires: parseRequires(source) });
+      return { ok: true, kind: 'window', title, saved };
+    }
+    if (toolName === 'vm_exec') {
+      onStatus?.('running in vm…');
+      if (VM.state !== 'ready') return { ok: false, error: 'Linux is not running yet.' };
+      const output = await VM.exec(input.command);
+      return { ok: true, output: output || '' };
+    }
+    if (toolName === 'list_apps') {
+      onStatus?.('listing apps…');
+      const apps = await Apps.list();
+      return { ok: true, apps: apps.map(a => ({ title: a.title, name: a.name })) };
+    }
+    throw new Error('unknown tool: ' + toolName);
+  },
+
+  async run(prompt, history, onStatus) {
+    let messages = null;
+    const created = [];
+    let lastText = '';
+
+    for (let step = 0; step < this.MAX_STEPS; step++) {
+      const body = messages ? { messages } : { prompt, history: (history || []).slice(-6) };
+      const j = await this.callServer(body);
+      lastText = j.text || '';
+
+      if (!j.toolCalls || !j.toolCalls.length) {
+        return { text: lastText, created, steps: step + 1 };
+      }
+
+      const toolResults = [];
+      for (const call of j.toolCalls) {
+        const output = await this.executeTool(call, onStatus);
+        if (call.toolName === 'create_app') created.push(output);
+        toolResults.push({
+          type: 'tool-result',
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          output: { type: 'json', value: output },
+        });
+      }
+
+      if (j.finishReason !== 'tool-calls') {
+        return { text: lastText, created, steps: step + 1 };
+      }
+
+      messages = [
+        ...(messages || [
+          ...(history || []).slice(-6).map(h => ({ role: h.role, content: h.content })),
+          { role: 'user', content: prompt },
+        ]),
+        ...(j.responseMessages || []),
+        { role: 'tool', content: toolResults },
+      ];
+    }
+
+    return { text: lastText, created, steps: this.MAX_STEPS };
+  },
+};
 
 let z = 10, offset = 0;
 function openWindow({ title, badge = '', w = 560, h = 380, render }) {
@@ -572,7 +857,40 @@ function drag(handle, move, start) {
    this is that the agent emits plain JS rather than JSX.
    -------------------------------------------------------------------- */
 
-async function runModule(source, mount, api) {
+function createAppMount(body) {
+  body.classList.add('app-shell');
+  const mount = document.createElement('div');
+  mount.className = 'app-mount';
+  body.appendChild(mount);
+  return mount;
+}
+
+function createAppApi(provider, mount) {
+  let resizeCb = null;
+  const ro = new ResizeObserver(entries => {
+    const { width, height } = entries[0].contentRect;
+    mount.style.setProperty('--mount-w', Math.round(width) + 'px');
+    mount.style.setProperty('--mount-h', Math.round(height) + 'px');
+    if (resizeCb) resizeCb(width, height);
+  });
+  ro.observe(mount);
+  const win = mount.closest('.win');
+  if (win) win.querySelector('.tl.r')?.addEventListener('click', () => ro.disconnect(), { once: true });
+  return {
+    async list(...args) { return provider.list(...args); },
+    async shell(...args) { return provider.shell(...args); },
+    onResize(fn) {
+      resizeCb = fn;
+      fn(mount.clientWidth, mount.clientHeight);
+    },
+    mountSize() {
+      return { width: mount.clientWidth, height: mount.clientHeight };
+    },
+  };
+}
+
+async function runModule(source, mount, provider) {
+  const api = createAppApi(provider, mount);
   const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
   try {
     const mod = await import(url);
@@ -585,7 +903,8 @@ function launchApp(app) {
   const missing = missingCaps(app.requires);
   openWindow({
     title: app.title, badge: missing.length ? 'blocked' : 'app', w: 430, h: 320,
-    render: async (mount) => {
+    render: async (body) => {
+      const mount = createAppMount(body);
       if (missing.length) return renderUpsell(mount, missing);
       try { await runModule(app.source, mount, CAP); }
       catch (e) { mount.innerHTML = `<p class="no small">${e.message}</p>`; }
@@ -777,7 +1096,7 @@ const CANNED = {
   clock: `// @title Clock
 // @requires none
 export default function (mount) {
-  mount.innerHTML = '<div style="display:grid;place-items:center;height:100%;font:600 44px ui-monospace,monospace"></div>';
+  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:grid;place-items:center;font:600 36px ui-monospace,monospace"></div>';
   const el = mount.firstChild;
   const t = () => el.textContent = new Date().toLocaleTimeString();
   t(); setInterval(t, 1000);
@@ -785,7 +1104,7 @@ export default function (mount) {
   notes: `// @title Notes
 // @requires none
 export default function (mount) {
-  mount.innerHTML = '<textarea style="width:100%;height:100%;background:#0c0e14;color:#e8eaf0;border:1px solid #23262f;border-radius:8px;padding:10px;font:13px ui-monospace,monospace" placeholder="type; saved in this browser"></textarea>';
+  mount.innerHTML = '<textarea style="width:100%;height:100%;box-sizing:border-box;background:#0c0e14;color:#e8eaf0;border:0;border-radius:0;padding:10px;font:13px ui-monospace,monospace;resize:none" placeholder="type; saved in this browser"></textarea>';
   const ta = mount.firstChild;
   ta.value = localStorage.getItem('vibeos-note') || '';
   ta.oninput = () => localStorage.setItem('vibeos-note', ta.value);
@@ -794,31 +1113,32 @@ export default function (mount) {
 // @requires none
 export default function (mount) {
   let n = 0;
-  mount.innerHTML = '<div style="display:grid;place-items:center;gap:14px;height:100%"><b style="font-size:52px">0</b><button style="padding:8px 18px;border-radius:8px;border:1px solid #2a3244;background:#161922;color:#c9d3e6;cursor:pointer">increment</button></div>';
+  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px"><b style="font-size:40px">0</b><button style="padding:8px 18px;border-radius:8px;border:1px solid #2a3244;background:#161922;color:#c9d3e6;cursor:pointer">increment</button></div>';
   const b = mount.querySelector('b');
   mount.querySelector('button').onclick = () => b.textContent = ++n;
 }`,
   files: `// @title Folder listing
 // @requires files
 export default async function (mount, api) {
-  mount.innerHTML = '<p style="color:#8e93a0;font-size:13px">Reading your workspace…</p>';
+  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;padding:8px"><p style="color:#8e93a0;font-size:13px;margin:0 0 6px">Reading your workspace…</p><div class="app-scroll" style="flex:1"></div></div>';
+  const list = mount.querySelector('.app-scroll');
   try {
     const items = await api.list();
-    mount.innerHTML = '';
+    mount.firstChild.firstChild.textContent = items.length + ' items';
+    list.innerHTML = '';
     items.slice(0,200).forEach(i => {
       const d = document.createElement('div');
       d.style.cssText = 'padding:3px 0;font-size:13px';
       d.textContent = (i.dir ? '📁 ' : '📄 ') + i.name;
-      mount.appendChild(d);
+      list.appendChild(d);
     });
-  } catch (e) { mount.innerHTML = '<p style="color:#f87171;font-size:13px">' + e.message + '</p>'; }
+  } catch (e) { mount.innerHTML = '<p style="color:#f87171;font-size:13px;padding:8px">' + e.message + '</p>'; }
 }`,
   shell: `// @title Terminal
 // @requires shell
 export default async function (mount, api) {
-  const out = await api.shell('uname -a && ls ~');
-  mount.innerHTML = '<pre style="font-size:12px;white-space:pre-wrap"></pre>';
-  mount.firstChild.textContent = out;
+  mount.innerHTML = '<pre style="width:100%;height:100%;box-sizing:border-box;margin:0;padding:8px;font-size:12px;white-space:pre-wrap;overflow:auto;scrollbar-width:thin"></pre>';
+  mount.firstChild.textContent = await api.shell('uname -a && ls ~');
 }`,
 };
 
@@ -873,8 +1193,61 @@ function ChatApp(body) {
     input.value = '';
     bubble('you', text.replace(/</g, '&lt;'));
     const thinking = bubble('vibeos', '<span class="dimmer">thinking…</span>');
+    const onStatus = status => { thinking.innerHTML = `<span class="dimmer">${status}</span>`; };
 
-    let source, live = false, failure = '';
+    let live = false, failure = '';
+    history.push({ role: 'user', content: text });
+
+    if (Gen.oauth && Gen.available) {
+      try {
+        const result = await Gen.generate(text, history, onStatus);
+        live = true;
+        thinking.remove();
+        const summary = result.text || result.created.map(c => c.title).join(', ') || 'done';
+        history.push({ role: 'assistant', content: summary.slice(0, 1200) });
+
+        for (const item of result.created) {
+          if (item.kind === 'vm') {
+            track('app_generated', { target: 'vm' });
+            const b = bubble('vibeos', `<b>${item.title}</b> <span class="req">vm script</span><br>
+              <span class="tiny dimmer">${item.installed ? 'installed at <b>/mnt/' + item.file + '</b>' : 'not installed — the VM is not running'}</span>
+              <div class="row" style="margin-top:8px">
+                <button class="btn sm" id="run" ${item.installed ? '' : 'disabled'}>Run it</button>
+                <button class="btn sm" id="src">Source</button>
+              </div>
+              <pre class="out" id="res" style="display:none;margin-top:8px"></pre>`);
+            const res = b.querySelector('#res');
+            b.querySelector('#src').onclick = () => { res.style.display = 'block'; res.textContent = item.source; };
+            if (item.installed) b.querySelector('#run').onclick = async () => {
+              res.style.display = 'block'; res.textContent = 'running…';
+              try { res.textContent = (await VM.exec('sh /mnt/' + item.file)) || '(no output)'; }
+              catch (e) { res.textContent = e.message; }
+            };
+          } else {
+            track('app_generated', { target: 'browser' });
+            const where = [item.saved && item.saved.vm && 'the VM', item.saved && item.saved.folder && Workspace.label].filter(Boolean).join(' and ');
+            bubble('vibeos', `<b>${item.title}</b> <span class="req">window</span><br>
+              <span class="tiny dimmer">${where ? 'saved to ' + where : 'opened on the desktop'}</span>`);
+          }
+        }
+
+        if (result.text && !result.created.length) {
+          bubble('vibeos', result.text.replace(/</g, '&lt;'));
+        } else if (result.text && result.created.length) {
+          bubble('vibeos', `<span class="tiny dimmer">${result.text.replace(/</g, '&lt;')}</span>`);
+        }
+      } catch (e) {
+        failure = e.message;
+        thinking.remove();
+        const source = CANNED[pickCanned(text)];
+        history.push({ role: 'assistant', content: source.slice(0, 1200) });
+        await openFromSource(source, text, false);
+        bubble('vibeos', `<span class="no">${failure}</span> — fell back to a stock module.`);
+      }
+      return;
+    }
+
+    let source;
     try {
       if (!Gen.available) throw new Error('no model configured');
       source = await Gen.generate(text, history); live = true;
@@ -883,9 +1256,16 @@ function ChatApp(body) {
       source = CANNED[pickCanned(text)];
     }
     thinking.remove();
-    history.push({ role: 'user', content: text });
     history.push({ role: 'assistant', content: source.slice(0, 1200) });
+    await openFromSource(source, text, live);
+    if (!live) {
+      bubble('vibeos', failure === 'no model configured'
+        ? '<span class="part">That was a stock module — no model is configured here.</span>'
+        : `<span class="no">${failure}</span> — fell back to a stock module.`);
+    }
+  }
 
+  async function openFromSource(source, text, live) {
     const target = parseTarget(source);
     const title = parseTitle(source) || text.slice(0, 30);
     track(live ? 'app_generated' : 'app_stock', { target });
@@ -926,12 +1306,6 @@ function ChatApp(body) {
       };
       b.querySelector('#open').onclick = () => launchApp({ title, source, requires: parseRequires(source) });
       b.querySelector('#open').click();
-    }
-
-    if (!live) {
-      bubble('vibeos', failure === 'no model configured'
-        ? '<span class="part">That was a stock module — no model is configured here.</span>'
-        : `<span class="no">${failure}</span> — fell back to a stock module.`);
     }
   }
 
@@ -1769,19 +2143,25 @@ function ModelApp(body) {
           : Gen.key
             ? `Using your own <b>${Gen.provider}</b> key, stored in this browser only and sent
                straight to the provider. Model: <b>${Gen.model}</b>.`
-            : `No key set, so prompts fall back to stock modules.`}
+            : Gen.oauth
+              ? `Signed in with ChatGPT (<b>${Gen.provider}</b>). Model: <b>${Gen.model}</b>.`
+              : `No key set, so prompts fall back to stock modules.`}
       </p>
       <div class="row">
-        <button class="btn p sm" id="setkey">${Gen.key ? 'Replace key' : 'Add a key'}</button>
-        ${Gen.key ? '<button class="btn sm" id="clear">Forget it</button>' : ''}
+        <button class="btn p sm" id="setkey">${Gen.key || Gen.oauth ? 'Replace key' : 'Add a key'}</button>
+        ${Gen.key ? '<button class="btn sm" id="clear">Forget key</button>' : ''}
+        ${Gen.oauth ? '<button class="btn sm" id="clearoauth">Sign out</button>' : ''}
       </div>
       <p class="note" style="margin-top:12px">
-        The key never reaches vibeos.sh. It lives in <code>localStorage</code> and goes directly
-        to Anthropic or OpenAI from your browser.
+        ${Gen.oauth
+          ? 'ChatGPT tokens stay in <code>localStorage</code> and are sent to vibeos.sh only for proxied Codex inference.'
+          : 'API keys never reach vibeos.sh. They live in <code>localStorage</code> and go directly to Anthropic or OpenAI from your browser.'}
       </p>`;
-    body.querySelector('#setkey').onclick = () => { Gen.askForKey(); render(); };
+    body.querySelector('#setkey').onclick = async () => { await Gen.askForKey(); render(); };
     const c = body.querySelector('#clear');
     if (c) c.onclick = () => { Gen.saveKey(''); render(); };
+    const co = body.querySelector('#clearoauth');
+    if (co) co.onclick = () => { Gen.saveOAuth(null); render(); };
   };
   render();
 }
@@ -1873,16 +2253,24 @@ tick(); setInterval(tick, 1000);
 (async () => {
   await detectMode();
   await Gen.probe();
-  // No server holding a key and none saved here: ask once, on boot. Declining
-  // is fine — the desktop still works, prompts just fall back to stock modules.
-  if (!Gen.available) {
-    try { if (!localStorage.getItem('vibeos-asked')) { localStorage.setItem('vibeos-asked', '1'); Gen.askForKey(); } }
-    catch { Gen.askForKey(); }
-    track(Gen.available ? 'key_added' : 'key_declined');
-  }
-  // The VM is the system, so it starts with the page rather than on demand.
+  // Start the machine FIRST. The key modal is an in-page overlay that is
+  // awaited, so booting after it left the VM at 'off' until the user dealt with
+  // the modal — two slow things in series, with the desktop looking dead in
+  // between. The VM needs no key, so it must not wait for one.
   VM.available().then(ok => ok ? VM.boot() : VM.set('unavailable'));
   Sync.start();   // 60s by default; each tick no-ops until the VM and a folder exist
+
+  // Ask once, while the machine boots behind it. Declining is fine — the
+  // desktop still works, prompts just fall back to stock modules.
+  if (!Gen.available) {
+    try {
+      if (!localStorage.getItem('vibeos-asked')) {
+        localStorage.setItem('vibeos-asked', '1');
+        await Gen.askForKey();
+      }
+    } catch { await Gen.askForKey(); }
+  }
+  // The VM is the system, so it starts with the page rather than on demand.
   const state = await Workspace.restore();
   paintWorkspace();
   await paintDock();
