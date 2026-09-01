@@ -517,22 +517,22 @@ const Gen = {
       overlay.innerHTML = `
         <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="keyModalTitle">
           <h2 id="keyModalTitle">vibeOS needs AI features to work.</h2>
-          <p class="small dimmer" id="keyModalSubtitle" style="margin:0">Sign in with your OpenAI account to get started.</p>
+          <p class="small dimmer" id="keyModalSubtitle" style="margin:0">Sign in with your OpenAI account, or bring your own key.</p>
           <div class="key-modal-actions col">
             <div class="col" id="keyModalStep1">
               <button type="button" class="btn p" id="keyLoginBtn">Login with OpenAI</button>
               <div id="keyOAuthSlot"></div>
               <p class="note oauth-error" id="keyOAuthError" hidden style="margin:0;color:var(--no)"></p>
-              <button type="button" class="btn" id="keyOtherBtn">Other options</button>
-            </div>
-            <div class="col" id="keyModalStep2" hidden>
-              <button type="button" class="btn sm skip" id="keyBackBtn">← Back to sign in</button>
-              <button type="button" class="btn" id="keyPasteBtn">Paste an API key (OpenAI/Anthropic)</button>
+              <button type="button" class="btn" id="keyPasteBtn">Paste API key (OpenAI / Anthropic)</button>
               <div class="col" id="keyPasteForm" hidden>
                 <input type="password" id="keyInput" placeholder="sk-... or sk-ant-..." autocomplete="off" spellcheck="false">
                 <p class="tiny dimmer" style="margin:0">Stored only in this browser, sent straight to the provider — never to vibeos.sh.</p>
                 <button type="button" class="btn p sm" id="keySaveBtn">Save</button>
               </div>
+              <button type="button" class="btn" id="keyOtherBtn">Other options</button>
+            </div>
+            <div class="col" id="keyModalStep2" hidden>
+              <button type="button" class="btn sm skip" id="keyBackBtn">← Back</button>
               <button type="button" class="btn" id="keyCreateBtn">Create account</button>
               <p class="note" id="keyCreateNote" hidden style="margin:0">
                 Coming soon! <a href="/get-access">Subscribe to waitlist</a> to know it first.
@@ -556,22 +556,23 @@ const Gen = {
       overlay.querySelector('#keyOtherBtn').onclick = () => {
         overlay.querySelector('#keyModalStep1').hidden = true;
         overlay.querySelector('#keyModalStep2').hidden = false;
-        overlay.querySelector('#keyModalSubtitle').textContent =
-          'Paste your API key or pick an option below.';
+        overlay.querySelector('#keyModalSubtitle').textContent = 'Other ways in.';
       };
       overlay.querySelector('#keyBackBtn').onclick = () => {
         overlay.querySelector('#keyModalStep1').hidden = false;
         overlay.querySelector('#keyModalStep2').hidden = true;
-        overlay.querySelector('#keyPasteForm').hidden = true;
         overlay.querySelector('#keyCreateNote').hidden = true;
-        overlay.querySelector('#keyInput').value = '';
         overlay.querySelector('#keyModalSubtitle').textContent =
-          'Sign in with your OpenAI account to get started.';
+          'Sign in with your OpenAI account, or bring your own key.';
       };
       overlay.querySelector('#keyPasteBtn').onclick = () => {
         overlay.querySelector('#keyPasteForm').hidden = false;
         overlay.querySelector('#keyInput').focus();
+        track('paste_key_click');
       };
+      overlay.querySelector('#keyInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter') overlay.querySelector('#keySaveBtn').click();
+      });
       overlay.querySelector('#keySaveBtn').onclick = () => {
         const k = overlay.querySelector('#keyInput').value.trim();
         this.saveKey(k);
