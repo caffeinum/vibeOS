@@ -1557,7 +1557,10 @@ const VM = {
       }
     } catch (e) {
       this.set('failed', e.message);
-      track('vm_failed');
+      track('vm_failed', {
+        image: this.image,
+        seconds: Math.round((Date.now() - this.bootStarted) / 1000),
+      });
     }
   },
 
@@ -1663,6 +1666,9 @@ function imageSwitch() {
     <button class="btn p sm" id="swapImage">${other === 'debian' ? 'Install apt (switch to Debian)' : 'Back to BusyBox'}</button>
     <span class="tiny dimmer">${other === 'debian' ? 'streams ~1 GB lazily, needs a fresh reboot; apt installs live in memory and go away on reload' : 'restarts into the 7 MB image'}</span>`;
   box.querySelector('#swapImage').onclick = async (e) => {
+    // Whether anyone actually reaches for apt, and whether Debian boots for
+    // real people, was completely unmeasured — the switch shipped blind.
+    track('image_switch', { to: other });
     e.target.disabled = true; e.target.textContent = 'restarting…';
     track(other === 'debian' ? 'install_apt_click' : 'back_to_busybox_click');
     VM.setImage(other);
