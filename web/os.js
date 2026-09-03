@@ -1212,6 +1212,7 @@ const Agent = {
     }
     if (toolName === 'reload_os') {
       onStatus?.('reloading the desktop…');
+      window.__vibeosIntentionalUnload = true;   // our own reload must not trip the leave-page guard
       setTimeout(() => location.reload(), 400);
       return { ok: true, note: 'reloading' };
     }
@@ -3084,6 +3085,23 @@ document.getElementById('lxPill').onclick = () => {
 const tick = () => document.getElementById('clock').textContent =
   new Date().toLocaleTimeString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 tick(); setInterval(tick, 1000);
+
+// A reload key or a closed tab took a whole conversation with the agent with it.
+// The chat lives in memory until chat persistence lands, and even after, an
+// agent mid-turn is work in flight. Ask before leaving when there is something
+// to lose; our own reload_os sets the flag and is not asked about.
+window.__vibeosUnsaved = () => {
+  try {
+    if (window.__vibeosIntentionalUnload) return false;
+    const chat = document.querySelector('.win #log');
+    return !!(chat && chat.children.length > 1);   // more than the intro bubble
+  } catch { return false; }
+};
+window.addEventListener('beforeunload', (e) => {
+  if (!window.__vibeosUnsaved()) return;
+  e.preventDefault();
+  e.returnValue = '';   // the browser shows its own "leave page?" prompt; the text is not ours to set
+});
 
 (async () => {
   const recovering = window.__vibeosBoot.recovering;
