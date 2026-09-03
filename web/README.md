@@ -9,6 +9,11 @@ A build of vibeOS that runs entirely in a tab. Hosted at
 
 It is a static page. There is no server component and no build step.
 
+`index.html` is a small loader; the operating system is `os.js` (styles in
+`os.css`). If a workspace holds `system/os.js`, that copy boots instead — the
+agent's `edit_file` puts it there — and a copy that fails to boot is skipped
+on the next load in favour of the served one.
+
 Served this way the agent runs in **one-shot mode**: paste a key and it writes
 a window per request. The tool-using agent — list the workspace, run commands
 in the VM, restyle the desktop, search the web — needs the small API that
