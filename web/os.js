@@ -1372,20 +1372,50 @@ function launchApp(app) {
     title: app.title, badge: missing.length ? 'blocked' : 'app', w: 430, h: 320,
     render: async (body) => {
       const mount = createAppMount(body);
-      if (missing.length) return renderUpsell(mount, missing);
-      try { await runModule(app.source, mount, CAP); }
-      catch (e) { mount.innerHTML = `<p class="no small">${e.message}</p>`; }
+      const start = async () => {
+        try { await runModule(app.source, mount, CAP); }
+        catch (e) { mount.innerHTML = `<p class="no small">${e.message}</p>`; }
+      };
+      if (!missing.length) return start();
+      renderUpsell(mount, missing);
+      // Blocked only on the shell while the machine boots: open the app the
+      // moment it is ready instead of leaving a "blocked" window behind.
+      if (missing.every(c => c === 'shell') && VM.state !== 'failed' && VM.state !== 'unavailable') {
+        const off = VM.on(st => { if (st === 'ready' && mount.isConnected) { off(); start(); } });
+      }
     },
   });
 }
 
 // The limitation is the conversion moment, not a dead end.
 function renderUpsell(mount, missing) {
+  // "shell" is not a native-only capability: the VM provides it the moment it
+  // is ready. Saying "a browser tab cannot provide" it while the machine was
+  // still booting sent people (and the agent) away from kernel-backed apps —
+  // the exact apps this OS exists to run. Say what is actually true.
+  const vmCaps = missing.filter(c => c === 'shell');
+  const nativeOnly = missing.filter(c => c !== 'shell');
+  if (vmCaps.length && !nativeOnly.length) {
+    const why = VM.state === 'ready' ? 'ready'
+      : VM.state === 'failed' || VM.state === 'unavailable' ? `the machine is ${VM.state}${VM.detail ? ': ' + VM.detail : ''}`
+      : `the machine is still ${VM.state || 'starting'} — this window opens by itself when it is ready`;
+    mount.innerHTML = `
+      <div class="upsell">
+        <h3 style="margin:0 0 6px">Waiting for Linux</h3>
+        <p class="small muted" style="margin:0 0 10px">This app uses the <b>shell</b>, which the VM provides. Right now ${why}.</p>
+        ${VM.state === 'failed' || VM.state === 'unavailable'
+          ? '<button class="btn sm" id="upsellRestart">Restart the machine</button>'
+          : '<p class="tiny dimmer" style="margin:0">Settings &rsaquo; Machine shows the boot console.</p>'}
+      </div>`;
+    const rb = mount.querySelector('#upsellRestart');
+    if (rb) rb.onclick = () => VM.restart();
+    return;
+  }
   mount.innerHTML = `
     <div class="upsell">
       <h3 style="margin:0 0 6px">Needs the native build</h3>
       <p class="small muted" style="margin:0 0 10px">
-        This app requires <b>${missing.join(', ')}</b>, which a browser tab cannot provide.
+        This app requires <b>${nativeOnly.join(', ')}</b>, which a browser tab cannot provide.
       </p>
       <p class="small muted" style="margin:0">
         ${Workspace.open && !Workspace.private
