@@ -1,0 +1,21 @@
+web/index.html
+  s_eacdf770d99162::t_5176b4bc1c64b8 22-28,35,38,59,64,75-76,90,112,121,124,132-133,141,156,159,166,169,171,180-181,192,195,204,432-456,779,1008-1082,1208,1210-1215,1395-1414,1781,1834,1843-1844,2685,2878,2880,2979,3012,3088,3111,3113-3117,3126-3127,3158,3198,3305,3358-3363,3369-3373
+web/skills.js
+  s_eacdf770d99162::t_87c981f989f1fa 25,55-63,85,115-123,134-165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "47bfba5dd42d2a1dffd797e2511ff3d0a88c2916",
+  "prompts": {},
+  "sessions": {
+    "s_eacdf770d99162": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37e46d39-19cd-49f9-831e-7abcb9428a8d",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
