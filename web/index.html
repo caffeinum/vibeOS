@@ -12,6 +12,13 @@
     --line2: #2a3244; --text: #f2f3f5; --dim: #8e93a0; --dimmer: #6b7181;
     --accent: #9db4ff; --ok: #4ade80; --warn: #fbbf24; --no: #f87171;
     --desk1: #c9b7d8; --desk2: #e8b9a8; --desk3: #d99f8e;
+    /* chrome tokens — these were hardcoded hexes until light mode needed them */
+    --bar: #161a23; --barline: #262b38; --btn: #161922; --btntext: #c9d3e6;
+    --focus: #3a4560; --sel: #1d2536; --hover: #171b26;
+    --title1: #2b3146; --title2: #171b26; --titletext: #e8eaf0;
+    --pbtn: #f2f3f5; --pbtntext: #0a0a0c;
+    --winbg: rgba(16,18,25,.97); --scroll: rgba(255,255,255,.14);
+    --warnline: #4a3a1a; --up1: #141a2e; --up2: #101219; --upline: #2c3550;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -57,20 +64,20 @@
   .win {
     position: absolute; display: flex; flex-direction: column;
     min-width: 300px; min-height: 180px;
-    background: rgba(16,18,25,.97); color: var(--text);
+    background: var(--winbg); color: var(--text);
     border: 1px solid var(--line2); border-radius: 12px;
     box-shadow: 0 30px 70px -20px rgba(0,0,0,.75); overflow: hidden;
   }
   .win.min { display: none; }
   .titlebar {
     display: flex; align-items: center; gap: 8px; padding: 9px 12px;
-    background: #161a23; border-bottom: 1px solid #262b38;
+    background: var(--bar); border-bottom: 1px solid var(--barline);
     cursor: grab; user-select: none; flex: 0 0 auto;
   }
   .titlebar:active { cursor: grabbing; }
   .tl { width: 11px; height: 11px; border-radius: 50%; border: 0; padding: 0; }
   .tl.r { background: #ff5f57; } .tl.y { background: #febc2e; } .tl.g { background: #28c840; }
-  .title { margin-left: 4px; font-weight: 600; color: #c9d3e6; }
+  .title { margin-left: 4px; font-weight: 600; color: var(--btntext); }
   .badge {
     margin-left: auto; font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
     color: var(--dimmer); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px;
@@ -92,10 +99,10 @@
   .app-scroll {
     overflow: auto; min-height: 0;
     scrollbar-width: thin;
-    scrollbar-color: rgba(255,255,255,.14) transparent;
+    scrollbar-color: var(--scroll) transparent;
   }
   .app-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
-  .app-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 3px; }
+  .app-scroll::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 3px; }
   .resize {
     position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
     background: linear-gradient(135deg, transparent 50%, var(--line2) 50%);
@@ -110,16 +117,16 @@
     width: 46px; height: 46px; border: 0; border-radius: 12px; font-size: 19px;
     overflow: hidden;
     display: grid; place-items: center; transition: transform .12s;
-    background: linear-gradient(160deg, #2b3146, #171b26); color: #e8eaf0;
+    background: linear-gradient(160deg, var(--title1), var(--hover)); color: var(--titletext);
   }
   #dock button:hover { transform: translateY(-5px) scale(1.06); }
 
   .btn {
-    border: 1px solid var(--line2); background: #161922; color: #c9d3e6;
+    border: 1px solid var(--line2); background: var(--btn); color: var(--btntext);
     border-radius: 8px; padding: 7px 13px; font-size: 13px; font-weight: 500;
   }
-  .btn:hover { border-color: #3a4560; }
-  .btn.p { background: #f2f3f5; color: #0a0a0c; border-color: #f2f3f5; font-weight: 600; }
+  .btn:hover { border-color: var(--focus); }
+  .btn.p { background: var(--pbtn); color: var(--pbtntext); border-color: var(--pbtn); font-weight: 600; }
   .btn.sm { padding: 4px 9px; font-size: 12px; }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
   input[type=text], textarea {
@@ -127,19 +134,20 @@
     border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
     font-size: 13px; outline: none; font-family: inherit;
   }
-  input:focus, textarea:focus { border-color: #3a4560; }
+  input:focus, textarea:focus { border-color: var(--focus); }
   .row { display: flex; gap: 8px; align-items: center; }
   .col { display: flex; flex-direction: column; gap: 8px; }
   [hidden] { display: none !important; }
   .muted { color: var(--dim); } .dimmer { color: var(--dimmer); }
   .small { font-size: 12px; } .tiny { font-size: 11px; }
   h3 { margin: 0 0 8px; font-size: 15px; }
+  h4 { margin: 14px 0 4px; font-size: 12.5px; font-weight: 600; color: var(--dim); }
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #1c1f28; vertical-align: top; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--dimmer); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   .yes { color: var(--ok); } .no { color: var(--no); } .part { color: var(--warn); }
   .file { display: flex; gap: 8px; padding: 5px 7px; border-radius: 6px; cursor: pointer; align-items: center; }
-  .file:hover { background: #171b26; }
+  .file:hover { background: var(--hover); }
   pre.out {
     background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
     padding: 10px; font-size: 11.5px; overflow: auto; max-height: 240px; margin: 0;
@@ -152,8 +160,8 @@
   }
   .card.blocked { opacity: .55; }
   .req { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; border-radius: 4px; padding: 1px 5px; border: 1px solid var(--line2); color: var(--dimmer); }
-  .req.miss { color: var(--warn); border-color: #4a3a1a; }
-  .upsell { border: 1px solid #2c3550; background: linear-gradient(160deg,#141a2e,#101219); border-radius: 10px; padding: 12px; }
+  .req.miss { color: var(--warn); border-color: var(--warnline); }
+  .upsell { border: 1px solid var(--upline); background: linear-gradient(160deg,var(--up1),var(--up2)); border-radius: 10px; padding: 12px; }
   .key-modal-overlay {
     position: fixed; inset: 0; z-index: 9000;
     display: flex; align-items: center; justify-content: center;
@@ -161,7 +169,7 @@
   }
   .key-modal {
     width: min(420px, calc(100vw - 32px));
-    background: rgba(16,18,25,.97); color: var(--text);
+    background: var(--winbg); color: var(--text);
     border: 1px solid var(--line2); border-radius: 12px;
     padding: 20px 22px; box-shadow: 0 30px 70px -20px rgba(0,0,0,.75);
   }
@@ -197,7 +205,19 @@
   <div id="dock"></div>
 </div>
 
-<script src="/app/oauth.js"></script>
+<script>
+  // These two must load before the main script, and their location depends on
+  // where this page is served from: vibeos.sh/app (no trailing slash — /app/
+  // redirects to it), a local /app/, or the root of the open-source mirror.
+  // Absolute /app/ paths only ever worked on the first. Same derivation as BASE.
+  (function () {
+    var path = location.pathname;
+    var base = path.endsWith('/') ? path : /\.[a-z0-9]+$/i.test(path) ? path.replace(/[^/]*$/, '') : path + '/';
+    ['oauth.js', 'skills.js'].forEach(function (f) {
+      document.write('<script src="' + base + f + '"><\/script>');
+    });
+  })();
+</script>
 <script>
 /* =========================================================================
    vibeOS Web — capability-provider prototype
@@ -461,6 +481,23 @@ const Gen = {
   available: false,
   token: (location.hash.match(/token=([^&]+)/) || [])[1] || '',
   key: '', provider: '', model: '', viaServer: false,
+
+  // Which model aliases a ChatGPT account can reach is not knowable from here,
+  // so this is settable rather than guessed. Empty means "whatever the server
+  // defaults to".
+  codexModel: '',
+  loadCodexModel() {
+    try { this.codexModel = localStorage.getItem('vibeos-codex-model') || ''; } catch {}
+    return this.codexModel;
+  },
+  saveCodexModel(id) {
+    this.codexModel = (id || '').trim();
+    try {
+      this.codexModel ? localStorage.setItem('vibeos-codex-model', this.codexModel)
+                      : localStorage.removeItem('vibeos-codex-model');
+    } catch {}
+    this.setProvider();
+  },
   oauth: null,
 
   // Both Anthropic and OpenAI send CORS headers, so a hosted page can call
@@ -468,6 +505,7 @@ const Gen = {
   // ChatGPT Codex OAuth is stored locally and proxied through vibeos.sh.
   loadKey() {
     try { this.key = localStorage.getItem('vibeos-key') || ''; } catch {}
+    this.loadCodexModel();
     try { this.oauth = VibeOSOAuth.loadOAuthSession(); } catch { this.oauth = null; }
     this.setProvider();
     return this.key;
@@ -486,7 +524,7 @@ const Gen = {
     }
     if (this.oauth?.accessToken && this.oauth?.accountId) {
       this.provider = 'openai-codex';
-      this.model = VibeOSOAuth.CODEX_MODEL;
+      this.model = this.codexModel || VibeOSOAuth.CODEX_MODEL;
       this.available = true;
       return;
     }
@@ -594,7 +632,7 @@ const Gen = {
         try {
           const flow = await VibeOSOAuth.startOAuthDeviceFlow();
           slot.innerHTML = VibeOSOAuth.renderOAuthPanelHtml({ code: flow.code, url: flow.url, status: 'waiting' });
-          window.open(flow.url, '_blank', 'noopener');
+          VibeOSOAuth.wireOAuthPanel(slot, flow);
           const tokens = await VibeOSOAuth.pollOAuthUntilComplete(flow.id, {
             sleep: ms => new Promise(r => setTimeout(r, ms)),
             intervalMs: 5000,
@@ -662,10 +700,10 @@ const Gen = {
             'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }
         : { 'content-type': 'application/json', authorization: 'Bearer ' + this.key };
       const payload = this.provider === 'anthropic'
-        ? { model: this.model, max_tokens: 2000, system: forImage(PASTE_KEY_SYSTEM_PROMPT),
+        ? { model: this.model, max_tokens: 2000, system: withSkills(forImage(PASTE_KEY_SYSTEM_PROMPT)),
             messages: [...(history || []).slice(-6), { role: 'user', content: prompt }] }
         : { model: this.model, max_completion_tokens: 2000,
-            messages: [{ role: 'system', content: forImage(PASTE_KEY_SYSTEM_PROMPT) },
+            messages: [{ role: 'system', content: withSkills(forImage(PASTE_KEY_SYSTEM_PROMPT)) },
                        ...(history || []).slice(-6), { role: 'user', content: prompt }] };
 
       const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
@@ -684,6 +722,99 @@ const Gen = {
 
 // Paste-key path only — talks to the provider directly with one-shot codegen.
 // The prompts describe the BusyBox shell; swap that line for whatever is booted.
+/* ---------- the desktop's own appearance ------------------------------
+
+   Every colour in the chrome is a custom property on :root, so a theme is a
+   set of values rather than a stylesheet. That is what lets the agent restyle
+   the OS it is running inside: it changes state, not source. State has a reset
+   button; source does not.
+   -------------------------------------------------------------------- */
+
+const Theme = {
+  KEY: 'vibeos-theme',
+  id: VibeOSSkills.DEFAULT_THEME,
+  custom: null,
+
+  tokens() {
+    return Object.assign({}, VibeOSSkills.getTheme(this.id).tokens, this.custom || {});
+  },
+
+  // A token value is a colour, not CSS. Concatenating one into stylesheet text
+  // meant a value of "x; } * { display: none } :root { y" closed the rule and
+  // opened its own — a persistent white screen, reapplied at boot, hiding the
+  // very Settings pane that could undo it. setProperty cannot escape into a new
+  // rule, and the pattern keeps the value recognisable as a colour on the way in.
+  SAFE_VALUE: /^[#a-zA-Z0-9(),.%\s/-]{1,64}$/,
+
+  safeValue(v) {
+    return typeof v === 'string' && this.SAFE_VALUE.test(v);
+  },
+
+  paint() {
+    const root = document.documentElement;
+    for (const [k, v] of Object.entries(this.tokens())) {
+      if (this.safeValue(v)) root.style.setProperty(k, v);
+      else root.style.removeProperty(k);
+    }
+    root.style.colorScheme = this.id === 'vibeos-light' ? 'light' : 'dark';
+  },
+
+  load(opts) {
+    // ?safe=1 boots the stock theme without touching what is stored, so a bad
+    // saved theme is always one URL away from being escapable. This is the
+    // recovery path, so it must not depend on any UI a theme could hide.
+    let safeMode = (opts && opts.stock) || false;
+    try { safeMode = safeMode || new URLSearchParams(location.search).has('safe'); } catch {}
+    if (safeMode) { this.paint(); return; }
+
+    try {
+      const saved = JSON.parse(localStorage.getItem(this.KEY) || 'null');
+      if (saved && VibeOSSkills.THEMES[saved.id]) {
+        this.id = saved.id;
+        // Drop anything stored that no longer passes validation rather than
+        // applying it — a value saved before this check must not brick a boot.
+        const custom = {};
+        for (const [k, v] of Object.entries(saved.custom || {})) {
+          if (this.safeValue(v)) custom[k] = v;
+        }
+        this.custom = Object.keys(custom).length ? custom : null;
+      }
+    } catch {}
+    this.paint();
+  },
+
+  set(id, custom) {
+    if (id) VibeOSSkills.getTheme(id);   // throws on an unknown id, loudly
+    if (id) this.id = id;
+    if (custom !== undefined) {
+      // A token the desktop does not define would silently do nothing, so
+      // reject it rather than let the agent think it worked.
+      const known = VibeOSSkills.getTheme(this.id).tokens;
+      for (const [key, value] of Object.entries(custom || {})) {
+        if (!(key in known)) throw new Error('unknown theme token: ' + key);
+        if (!this.safeValue(value)) {
+          throw new Error('theme token ' + key + ' must be a plain colour value, got: ' + String(value).slice(0, 40));
+        }
+      }
+      this.custom = custom && Object.keys(custom).length ? custom : null;
+    }
+    this.paint();
+    try { localStorage.setItem(this.KEY, JSON.stringify({ id: this.id, custom: this.custom })); } catch {}
+    return { theme: this.id, custom: this.custom };
+  },
+
+  reset() {
+    this.id = VibeOSSkills.DEFAULT_THEME;
+    this.custom = null;
+    try { localStorage.removeItem(this.KEY); } catch {}
+    this.paint();
+  },
+};
+
+function withSkills(prompt) {
+  return VibeOSSkills.composePrompt(prompt, { theme: Theme.id });
+}
+
 function forImage(prompt) {
   const line = IMAGES[VM.bootedImage || VM.image].shellLine;
   return prompt.replace(IMAGES.busybox.shellLine, line);
@@ -701,13 +832,280 @@ mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (
 
 Layout rules (required): root width/height 100%, box-sizing:border-box, display:flex, flex-direction:column, overflow:hidden on mount. No document scroll, no min-height exceeding the window. Modest type and padding; empty states must fit. Scroll inner panes only (overflow:auto, scrollbar-width:thin), never mount.
 
-Plain JavaScript only, no JSX, no imports, no external URLs. Style inline for a dark UI: text #e8eaf0, panels #0c0e14, borders #23262f. Under 60 lines and it must work.
+Plain JavaScript only, no JSX, no imports, no external URLs. Under 60 lines and it must work.
 
 TARGET 2, a program inside the VM. Use when the request is about files, text processing or system tasks. Header exactly:
 // @title <Short Name>
 // @target vm
 // @file <name.sh>
 Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.`;
+
+/* ---------- the agent's eyes on the web -------------------------------
+
+   Both tools go through /api/proxy, so they inherit its SSRF blocks and its
+   limits: no scripts ever run, which means a site that renders entirely in
+   JavaScript returns nothing useful, and some sites refuse our egress outright.
+
+   Search is Marginalia. Measured through this proxy on 2026-09-02: DuckDuckGo
+   (all three endpoints) and Ecosia hard-403; Google and Bing answer 200 but
+   emit no plain result links, so nothing is parseable without running their
+   JS; Brave answered well once and then served a bot-check page for every
+   query after. Marginalia throttles with a "Wait For A Moment" page that
+   succeeds on retry, and it welcomes crawlers rather than fighting them —
+   a soft, retryable limit beats a hard block for something that runs
+   unattended from one datacenter address.
+   -------------------------------------------------------------------- */
+
+const WebTools = {
+  MAX_TEXT: 12000,
+
+  hostOf(url) { try { return new URL(url).host; } catch { return url; } },
+
+  async viaProxy(url) {
+    const r = await fetch(PROXY + encodeURIComponent(url), {
+      headers: { 'ngrok-skip-browser-warning': '1' },
+    });
+    const text = await r.text();
+    return { ok: r.ok, status: r.status, text, finalUrl: r.headers.get('x-final-url') || url,
+             type: r.headers.get('content-type') || '' };
+  },
+
+  toText(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('script,style,noscript,svg,template').forEach(n => n.remove());
+    // textContent alone welds block elements together — "Example DomainThis
+    // domain is for..." — which reads as one run-on sentence to the model.
+    // Give every block a line break of its own first.
+    doc.querySelectorAll('p,div,br,li,tr,h1,h2,h3,h4,h5,h6,section,article,header,footer,nav,td,pre,blockquote')
+      .forEach(n => n.after(doc.createTextNode('\n')));
+    return (doc.body ? doc.body.textContent : '').replace(/[ \t]+/g, ' ')
+      .replace(/\n\s*\n\s*\n+/g, '\n\n').trim();
+  },
+
+  async fetchPage(url) {
+    if (!/^https?:\/\//i.test(url)) return { ok: false, error: 'web_fetch needs an absolute http(s) URL.' };
+    const r = await this.viaProxy(url);
+    if (!r.ok) {
+      // Say who refused and why. The agent must report this, not paper over it
+      // with a plausible-sounding summary of a page it never read.
+      const why = (r.status === 403 || r.status === 429)
+        ? `${this.hostOf(url)} refuses requests from datacenter addresses, which is what this proxy is. The page could not be read.`
+        : (r.text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+      return { ok: false, status: r.status, error: `${this.hostOf(url)} returned ${r.status}. ${why}` };
+    }
+    const isHtml = r.type.includes('text/html');
+    const body = isHtml ? this.toText(r.text) : r.text;
+    let title = '';
+    if (isHtml) {
+      const m = r.text.match(/<title[^>]*>([\s\S]{0,200}?)<\/title>/i);
+      if (m) title = m[1].replace(/\s+/g, ' ').trim();
+    }
+    return {
+      ok: true, url: r.finalUrl, title,
+      text: body.slice(0, this.MAX_TEXT),
+      truncated: body.length > this.MAX_TEXT,
+      note: isHtml && body.length < 200
+        ? 'This page returned almost no text, which usually means it renders itself with JavaScript. Scripts never run here, so its content is not available.'
+        : undefined,
+    };
+  },
+
+  parseResults(html, engineDomain) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const seen = new Set(), out = [];
+    for (const a of doc.querySelectorAll('a[href^="http"]')) {
+      let u;
+      try { u = new URL(a.href); } catch { continue; }
+      if (u.host === engineDomain || u.host.endsWith('.' + engineDomain)) continue;
+      const title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+      // Results appear twice: once as a bare-URL anchor, once with the real
+      // title. Skip the bare one so the title we keep is the readable one.
+      if (title.length < 8 || /^https?:\/\//i.test(title)) continue;
+      const key = u.host + u.pathname;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ title: title.slice(0, 140), url: a.href });
+      if (out.length >= 8) break;
+    }
+    return out;
+  },
+
+  async search(query) {
+    const q = (query || '').trim();
+    if (!q) return { ok: false, error: 'web_search needs a query.' };
+    const host = 'old-search.marginalia.nu';
+    const url = `https://${host}/search?query=` + encodeURIComponent(q);
+
+    // The throttle clears in seconds, so back off and try again rather than
+    // handing the model an empty result it might be tempted to fill in.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await this.viaProxy(url);
+      if (!r.ok) return { ok: false, error: `search is unavailable — the engine returned ${r.status}.` };
+      if (/Wait For A Moment/i.test(r.text)) {
+        // Soft throttle, not a refusal. One retry, then admit it.
+        if (attempt < 2) { await new Promise(res => setTimeout(res, 1500 * (attempt + 1))); continue; }
+        return { ok: false, error: 'search is rate-limited right now. Say so rather than guessing at results.' };
+      }
+      const results = this.parseResults(r.text, 'marginalia.nu');
+      if (!results.length) return { ok: false, error: 'the search returned no readable results.' };
+      return { ok: true, engine: 'marginalia', query: q, results };
+    }
+    return { ok: false, error: 'search is rate-limited right now.' };
+  },
+};
+
+/* ---------- letting the guest drive the desktop -----------------------
+
+   The agent runs in the page, not in the VM, and that is the right way round:
+   five of its six tools are host-only — create_app ends in import(blobURL),
+   set_theme mutates the host document, the web tools go out through the page's
+   proxy. Moving the loop into the guest would turn five of six calls into
+   round-trips back out, to gain speed on the one that is already cheapest.
+
+   So the loop stays, and the guest gets a door instead. A process inside Linux
+   writes a request file; the write hook the desktop already installs fires;
+   the host runs the tool and writes the answer back. Same executeTool the
+   agent uses, so bash gets exactly the agent's abilities and no others.
+
+   This is deliberately open: anything running in the VM can use it. That was
+   an explicit call — the VM is trusted here — and it is worth being clear that
+   it means anything reaching the VM (curl'd, apt-installed, unpacked from an
+   archive) can create an app or restyle the desktop without a click.
+   -------------------------------------------------------------------- */
+
+const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'set_theme', 'web_fetch', 'web_search']);
+
+const GuestBridge = {
+  PREFIX: 'rpc-req-',
+  CLI: 'vibeos',
+  running: false,
+  _done: new Set(),
+
+  // One file per request, never reused. Rewriting a single shared file looked
+  // simpler and was wrong: a shorter write leaves the earlier, longer content's
+  // tail in place, so the host read valid JSON followed by the garbage of the
+  // last call. A fresh name per call sidesteps truncation entirely and lets
+  // two calls be in flight without colliding.
+  cli() {
+    return [
+      '#!/bin/sh',
+      '# vibeOS guest CLI — call the desktop from inside the VM.',
+      '# usage: vibeos <tool> [json]   e.g. vibeos set_theme \'{"theme":"vibeos-light"}\'',
+      'if [ -z "$1" ]; then echo "usage: vibeos <tool> [json]" >&2; exit 2; fi',
+      'ID=$$$(date +%s 2>/dev/null || echo 0)',
+      'REQ=/mnt/' + this.PREFIX + '$ID.json',
+      'RES=/mnt/rpc-res-$ID.json',
+      // NOT ${2:-{}} — the shell closes the expansion at the first brace and
+      // leaves a literal } behind, so every request arrived with one extra
+      // closing brace and failed to parse.
+      'INPUT="$2"',
+      'if [ -z "$INPUT" ]; then INPUT="{}"; fi',
+      'printf \'{"id":"%s","tool":"%s","input":%s}\' "$ID" "$1" "$INPUT" > "$REQ"',
+      'i=0',
+      'while [ $i -lt 600 ]; do',
+      '  if [ -f "$RES" ]; then cat "$RES"; echo; rm -f "$REQ" "$RES"; exit 0; fi',
+      '  i=$((i+1))',
+      '  sleep 0.1 2>/dev/null || sleep 1',
+      'done',
+      'rm -f "$REQ"',
+      'echo "vibeos: no answer from the desktop" >&2; exit 1',
+      '',
+    ].join('\n');
+  },
+
+  async install() {
+    if (!VM.ready()) return false;
+    await VM.writeQuietly(this.CLI, new TextEncoder().encode(this.cli()));
+    // /mnt is a 9p mount and not on PATH, so put a runnable copy where the
+    // shell looks. Verify rather than assume: this runs on two different images.
+    const out = await VM.exec(
+      'for d in /usr/bin /bin /usr/local/bin; do [ -d "$d" ] && cp /mnt/' + this.CLI + ' "$d/' + this.CLI +
+      '" 2>/dev/null && chmod +x "$d/' + this.CLI + '" 2>/dev/null && break; done; command -v ' + this.CLI + ' 2>/dev/null');
+    return /bin\/vibeos/.test(out);
+  },
+
+  start() {
+    if (this.running) return;
+    this.running = true;
+    // Undebounced: the request file is the whole point, and the 800ms sync
+    // debounce would be added to every call.
+    VM.onWrite(() => this.poll());
+  },
+
+  // A guest write arrives as more than one event — the file is created, then
+  // the data lands — so a poll that ran on the first event alone would read an
+  // empty file. A write during a poll marks the work dirty and the loop goes
+  // round again rather than being dropped.
+  async poll() {
+    if (!VM.ready()) return;
+    if (this._busy) { this._pending = true; return; }
+    this._busy = true;
+    try {
+      do {
+        this._pending = false;
+        await this.sweep();
+      } while (this._pending);
+    } finally { this._busy = false; }
+  },
+
+  async sweep() {
+    const files = VM.listFiles() || [];
+    for (const f of files) {
+      if (!f.name || !f.name.startsWith(this.PREFIX) || this._done.has(f.name)) continue;
+      let raw;
+      try { raw = await VM.readText(f.name); } catch { continue; }
+      if (!raw || !/}\s*$/.test(raw)) continue;   // still being written
+      this._done.add(f.name);
+      const id = f.name.slice(this.PREFIX.length).replace(/\.json$/, '');
+
+      let call;
+      try { call = JSON.parse(raw); }
+      catch (e) { await this.answer(id, { ok: false, error: 'request was not valid JSON: ' + e.message }); continue; }
+      if (!call || !call.tool) { await this.answer(id, { ok: false, error: 'request needs a "tool" field' }); continue; }
+      if (!GUEST_TOOLS.has(call.tool)) {
+        await this.answer(id, { ok: false, error: 'unknown tool: ' + call.tool, available: [...GUEST_TOOLS] });
+        continue;
+      }
+
+      track('guest_rpc', { tool: call.tool });
+      let result;
+      try { result = await Agent.executeTool({ toolName: call.tool, input: call.input || {} }); }
+      catch (e) { result = { ok: false, error: e.message }; }
+      await this.answer(id, result);
+    }
+    // The guest deletes its own files; forget names that are gone so the set
+    // cannot grow without bound in a long session.
+    if (this._done.size > 200) {
+      const live = new Set((VM.listFiles() || []).map(f => f.name));
+      for (const n of this._done) if (!live.has(n)) this._done.delete(n);
+    }
+  },
+
+  async answer(id, result) {
+    const body = JSON.stringify({ id, ...result });
+    // writeQuietly so the reply does not re-trigger the hook that called us.
+    try { await VM.writeQuietly('rpc-res-' + id + '.json', new TextEncoder().encode(body)); } catch {}
+  },
+};
+
+// Tool schemas for the paste-key path. lib/agent-tools.ts is the server's copy
+// and tests/agent-tools.test.ts pins the two name lists equal, so a tool added
+// on one side cannot quietly go missing on the other.
+const TOOL_SCHEMAS = [
+  { name: 'create_app', description: 'Create a vibeOS desktop window app or install a VM script. Pass complete source with the // @title, // @target and // @requires headers.',
+    parameters: { type: 'object', properties: { title: { type: 'string' }, source: { type: 'string' } }, required: ['title', 'source'] } },
+  { name: 'vm_exec', description: 'Run a shell command in the vibeOS Linux VM and return stdout.',
+    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
+  { name: 'list_apps', description: 'List apps already saved in the vibeOS workspace.',
+    parameters: { type: 'object', properties: {}, required: [] } },
+  { name: 'set_theme', description: 'Restyle the desktop itself: a theme id, or individual colour tokens.',
+    parameters: { type: 'object', properties: { theme: { type: 'string', enum: ['vibeos-dark', 'vibeos-light'] },
+                  tokens: { type: 'object', additionalProperties: { type: 'string' } } }, required: [] } },
+  { name: 'web_fetch', description: 'Read a web page as text.',
+    parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
+  { name: 'web_search', description: 'Search the web and get back result titles and URLs.',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+];
 
 const Agent = {
   MAX_STEPS: 5,
@@ -726,6 +1124,112 @@ const Agent = {
     return j;
   },
 
+  // The composed prompt, from the server, so the browser holds no fourth copy.
+  async systemPrompt() {
+    const key = (VM.bootedImage || VM.image) + '|' + Theme.id;
+    if (this._promptKey === key && this._prompt) return this._prompt;
+    const r = await fetch(`/api/agent/prompt?image=${encodeURIComponent(VM.bootedImage || VM.image)}&theme=${encodeURIComponent(Theme.id)}`);
+    const j = await r.json();
+    if (!r.ok || !j.prompt) throw new Error(j.error || 'could not load the agent prompt');
+    this._prompt = j.prompt; this._promptKey = key;
+    return this._prompt;
+  },
+
+  /* The same agent, against the user's own key, from the page.
+     A pasted key used to get one-shot codegen and no tools at all: it could
+     write a window, but could not look at the workspace, run anything in the
+     VM, or restyle the desktop — which made "bring your own key" a visibly
+     lesser product than signing in, for no reason anyone chose. */
+  async runWithKey(prompt, history, onStatus) {
+    let system;
+    try { system = await this.systemPrompt(); }
+    catch (e) {
+      // Static hosting (the open-source mirror) has no /api. That used to mean
+      // one-shot codegen with the local prompt, and it still does — the tools
+      // need the endpoint, the window does not. Say which mode this is.
+      onStatus?.('no agent endpoint here — one-shot mode');
+      const source = await Gen.generate(prompt, history, onStatus);
+      const title = parseTitle(source) || 'app';
+      const out = await this.executeTool({ toolName: 'create_app', input: { title, source } }, onStatus);
+      return { text: '', created: [out], steps: 1, oneShot: true };
+    }
+    const anthropic = Gen.provider === 'anthropic';
+    const created = [];
+    let msgs = [
+      ...(history || []).slice(-6).map(h => ({ role: h.role, content: h.content })),
+      { role: 'user', content: prompt },
+    ];
+    let lastText = '';
+
+    for (let step = 0; step < this.MAX_STEPS; step++) {
+      const res = anthropic ? await this.stepAnthropic(system, msgs) : await this.stepOpenAI(system, msgs);
+      lastText = res.text || lastText;
+      if (!res.calls.length) return { text: lastText, created, steps: step + 1 };
+
+      const results = [];
+      for (const call of res.calls) {
+        const output = await this.executeTool(call, onStatus);
+        if (call.toolName === 'create_app') created.push(output);
+        results.push({ id: call.id, output });
+      }
+      msgs = anthropic
+        ? [...msgs, { role: 'assistant', content: res.raw },
+           { role: 'user', content: results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: JSON.stringify(r.output).slice(0, 4000) })) }]
+        : [...msgs, res.raw,
+           ...results.map(r => ({ role: 'tool', tool_call_id: r.id, content: JSON.stringify(r.output).slice(0, 4000) }))];
+    }
+    return { text: lastText, created, steps: this.MAX_STEPS };
+  },
+
+  async stepOpenAI(system, msgs) {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + Gen.key },
+      body: JSON.stringify({
+        model: Gen.model, max_completion_tokens: 4000,
+        messages: [{ role: 'system', content: system }, ...msgs],
+        tools: TOOL_SCHEMAS.map(t => ({ type: 'function', function: t })),
+        // Required, not optional: gpt-5.6 refuses function tools on
+        // /v1/chat/completions unless reasoning is off — "use /v1/responses or
+        // set reasoning_effort to 'none'". The Codex path goes through the
+        // Responses API and keeps its reasoning; this one trades it for tools,
+        // which is the better half of that trade for an agent that mostly acts.
+        reasoning_effort: 'none',
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error?.message || ('openai returned ' + r.status));
+    const m = j.choices?.[0]?.message || {};
+    return {
+      text: m.content || '',
+      raw: m,
+      calls: (m.tool_calls || []).map(c => ({
+        id: c.id, toolName: c.function.name,
+        input: (() => { try { return JSON.parse(c.function.arguments || '{}'); } catch { return {}; } })(),
+      })),
+    };
+  },
+
+  async stepAnthropic(system, msgs) {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': Gen.key,
+                 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({
+        model: Gen.model, max_tokens: 4000, system, messages: msgs,
+        tools: TOOL_SCHEMAS.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters })),
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error?.message || ('anthropic returned ' + r.status));
+    const blocks = j.content || [];
+    return {
+      text: blocks.filter(b => b.type === 'text').map(b => b.text).join('').trim(),
+      raw: blocks,
+      calls: blocks.filter(b => b.type === 'tool_use').map(b => ({ id: b.id, toolName: b.name, input: b.input || {} })),
+    };
+  },
+
   async executeTool(call, onStatus) {
     const { toolName, input } = call;
     if (toolName === 'create_app') {
@@ -737,7 +1241,7 @@ const Agent = {
         const file = parseFile(source) || 'script.sh';
         let installed = false;
         if (VM.state === 'ready') {
-          try { await VM.emu.create_file(file, new TextEncoder().encode(source)); installed = true; } catch {}
+          try { await VM.writeText(file, source); installed = true; } catch {}
         }
         return { ok: true, kind: 'vm', title, file, installed, source };
       }
@@ -751,6 +1255,27 @@ const Agent = {
       if (VM.state !== 'ready') return { ok: false, error: 'Linux is not running yet.' };
       const output = await VM.exec(input.command);
       return { ok: true, output: output || '' };
+    }
+    if (toolName === 'set_theme') {
+      onStatus?.('restyling the desktop…');
+      try {
+        const applied = Theme.set(input.theme, input.tokens);
+        track('set_theme', { to: applied.theme });
+        return { ok: true, ...applied, note: 'The desktop is restyled. Open apps using var(--token) followed automatically.' };
+      } catch (e) {
+        return { ok: false, error: e.message, available: Object.keys(VibeOSSkills.THEMES) };
+      }
+    }
+    if (toolName === 'web_fetch') {
+      const url = String(input.url || '');
+      onStatus?.('reading ' + WebTools.hostOf(url) + '…');
+      track('web_fetch');
+      return WebTools.fetchPage(url);
+    }
+    if (toolName === 'web_search') {
+      onStatus?.('searching the web…');
+      track('web_search');
+      return WebTools.search(String(input.query || ''));
     }
     if (toolName === 'list_apps') {
       onStatus?.('listing apps…');
@@ -766,7 +1291,8 @@ const Agent = {
     let lastText = '';
 
     for (let step = 0; step < this.MAX_STEPS; step++) {
-      const body = Object.assign({ image: VM.bootedImage || VM.image },
+      const body = Object.assign({ image: VM.bootedImage || VM.image, theme: Theme.id },
+        Gen.codexModel ? { model: Gen.codexModel } : {},
         messages ? { messages } : { prompt, history: (history || []).slice(-6) });
       const j = await this.callServer(body);
       lastText = j.text || '';
@@ -1112,7 +1638,7 @@ export default function (mount) {
   notes: `// @title Notes
 // @requires none
 export default function (mount) {
-  mount.innerHTML = '<textarea style="width:100%;height:100%;box-sizing:border-box;background:#0c0e14;color:#e8eaf0;border:0;border-radius:0;padding:10px;font:13px ui-monospace,monospace;resize:none" placeholder="type; saved in this browser"></textarea>';
+  mount.innerHTML = '<textarea style="width:100%;height:100%;box-sizing:border-box;background:var(--panel2);color:var(--titletext);border:0;border-radius:0;padding:10px;font:13px ui-monospace,monospace;resize:none" placeholder="type; saved in this browser"></textarea>';
   const ta = mount.firstChild;
   ta.value = localStorage.getItem('vibeos-note') || '';
   ta.oninput = () => localStorage.setItem('vibeos-note', ta.value);
@@ -1121,14 +1647,14 @@ export default function (mount) {
 // @requires none
 export default function (mount) {
   let n = 0;
-  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px"><b style="font-size:40px">0</b><button style="padding:8px 18px;border-radius:8px;border:1px solid #2a3244;background:#161922;color:#c9d3e6;cursor:pointer">increment</button></div>';
+  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px"><b style="font-size:40px">0</b><button style="padding:8px 18px;border-radius:8px;border:1px solid var(--line2);background:var(--btn);color:var(--btntext);cursor:pointer">increment</button></div>';
   const b = mount.querySelector('b');
   mount.querySelector('button').onclick = () => b.textContent = ++n;
 }`,
   files: `// @title Folder listing
 // @requires files
 export default async function (mount, api) {
-  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;padding:8px"><p style="color:#8e93a0;font-size:13px;margin:0 0 6px">Reading your workspace…</p><div class="app-scroll" style="flex:1"></div></div>';
+  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;padding:8px"><p style="color:var(--dim);font-size:13px;margin:0 0 6px">Reading your workspace…</p><div class="app-scroll" style="flex:1"></div></div>';
   const list = mount.querySelector('.app-scroll');
   try {
     const items = await api.list();
@@ -1140,7 +1666,7 @@ export default async function (mount, api) {
       d.textContent = (i.dir ? '📁 ' : '📄 ') + i.name;
       list.appendChild(d);
     });
-  } catch (e) { mount.innerHTML = '<p style="color:#f87171;font-size:13px;padding:8px">' + e.message + '</p>'; }
+  } catch (e) { mount.innerHTML = '<p style="color:var(--no);font-size:13px;padding:8px">' + e.message + '</p>'; }
 }`,
   shell: `// @title Terminal
 // @requires shell
@@ -1172,9 +1698,9 @@ function ChatApp(body) {
   body.style.padding = '0';
   body.innerHTML = `
     <div id="log" style="padding:12px;display:flex;flex-direction:column;gap:10px"></div>
-    <div class="row" style="position:sticky;bottom:0;gap:6px;padding:8px 10px;border-top:1px solid #262b38;background:#12151d">
+    <div class="row" style="position:sticky;bottom:0;gap:6px;padding:8px 10px;border-top:1px solid var(--barline);background:var(--panel)">
       <input type="text" id="msg" placeholder="ask for a window, or a script for the VM"
-             style="flex:1;border:1px solid #23262f;border-radius:8px;background:#0c0e14;padding:7px 10px;font-size:13px" />
+             style="flex:1;border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:7px 10px;font-size:13px" />
       <button class="btn p sm" id="send">Send</button>
     </div>`;
   const log = body.querySelector('#log'), input = body.querySelector('#msg');
@@ -1183,17 +1709,27 @@ function ChatApp(body) {
   const bubble = (who, html) => {
     const d = document.createElement('div');
     d.style.cssText = who === 'you'
-      ? 'align-self:flex-end;max-width:85%;background:#1d2536;border:1px solid #2a3244;border-radius:10px 10px 2px 10px;padding:8px 11px;font-size:13px'
-      : 'align-self:flex-start;max-width:92%;background:#0c0e14;border:1px solid #23262f;border-radius:10px 10px 10px 2px;padding:8px 11px;font-size:13px';
+      ? 'align-self:flex-end;max-width:85%;background:var(--sel);border:1px solid var(--line2);border-radius:10px 10px 2px 10px;padding:8px 11px;font-size:13px'
+      : 'align-self:flex-start;max-width:92%;background:var(--panel2);border:1px solid var(--line);border-radius:10px 10px 10px 2px;padding:8px 11px;font-size:13px';
     d.innerHTML = html;
     log.appendChild(d);
     body.scrollTop = body.scrollHeight;
     return d;
   };
 
-  bubble('vibeos', Gen.available
-    ? `Ask for anything. I build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM — whichever fits.<br><span class="tiny dimmer">${Gen.model}</span>`
-    : `<b class="part">No model configured here.</b> Prompts fall back to stock modules. Serve this folder with <code>server.py</code> and a key to generate for real.`);
+  // The old copy here told you to run server.py, which is the local python demo
+  // and does not exist on vibeos.sh — it read as an error on the hosted build.
+  // Offer the two things that actually work, as a button rather than a chore.
+  const readyLine = () =>
+    `Ask for anything. I build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM — whichever fits.<br><span class="tiny dimmer">${Gen.model}</span>`;
+  const intro = bubble('vibeos', Gen.available ? readyLine()
+    : `<b class="part">No model connected yet.</b> Prompts fall back to stock modules until one is.<br>
+       <span class="row" style="margin-top:8px"><button class="btn p sm" id="chatConnect">Connect a model</button></span>`);
+  const connectBtn = intro.querySelector('#chatConnect');
+  if (connectBtn) connectBtn.onclick = async () => {
+    await Gen.askForKey();
+    if (Gen.available) intro.innerHTML = readyLine();
+  };
 
   async function send() {
     const text = input.value.trim();
@@ -1206,9 +1742,14 @@ function ChatApp(body) {
     let live = false, failure = '';
     history.push({ role: 'user', content: text });
 
-    if (Gen.oauth && Gen.available) {
+    // Both paths are the agent now. Signing in with ChatGPT proxies through
+    // vibeos.sh; a pasted key talks to the provider from this page. Same
+    // tools, same prompt, same loop.
+    if (Gen.available && (Gen.oauth || Gen.key)) {
       try {
-        const result = await Gen.generate(text, history, onStatus);
+        const result = Gen.oauth
+          ? await Gen.generate(text, history, onStatus)
+          : await Agent.runWithKey(text, history, onStatus);
         live = true;
         thinking.remove();
         const summary = result.text || result.created.map(c => c.title).join(', ') || 'done';
@@ -1310,7 +1851,7 @@ function ChatApp(body) {
       const file = parseFile(source) || 'script.sh';
       let installed = false;
       if (VM.state === 'ready') {
-        try { await VM.emu.create_file(file, new TextEncoder().encode(source)); installed = true; } catch {}
+        try { await VM.writeText(file, source); installed = true; } catch {}
       }
       const b = bubble('vibeos', `<b>${title}</b> <span class="req">vm script</span><br>
         <span class="tiny dimmer">${installed ? 'installed at <b>/mnt/' + file + '</b>' : 'not installed — the VM is not running'}</span>
@@ -1441,7 +1982,9 @@ const VM = {
   listeners: new Set(),
 
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
-  emit() { paintVM(); this.listeners.forEach(fn => { try { fn(this.state); } catch {} }); },
+  // No paintVM() here any more: the machine announces its state and does not
+  // know a DOM exists. The menu-bar painter subscribes like any other listener.
+  emit() { this.listeners.forEach(fn => { try { fn(this.state); } catch {} }); },
   set(state, detail) { this.state = state; this.detail = detail || ''; this.emit(); },
 
   async available() {
@@ -1497,7 +2040,7 @@ const VM = {
       this.screen = document.createElement('div');
       this.screen.tabIndex = 0;
       this.screen.style.cssText = 'background:#000;height:100%;overflow:auto;outline:none';
-      this.screen.innerHTML = `<div style="white-space:pre;font:14px/1.15 'JetBrains Mono',monospace;color:#e8eaf0;padding:6px"></div><canvas style="display:none"></canvas>`;
+      this.screen.innerHTML = `<div style="white-space:pre;font:14px/1.15 'JetBrains Mono',monospace;color:var(--titletext);padding:6px"></div><canvas style="display:none"></canvas>`;
       this.screen.addEventListener('click', () => this.screen.focus());
 
       const image = IMAGES[this.image];
@@ -1571,20 +2114,87 @@ const VM = {
   // which is the useful half of what a FUSE mount would give us. The other
   // half (folder -> VM on change) has no browser equivalent: there is no
   // directory-watch API, so that direction still polls.
+  // Kept for the boot path to call; the listeners decide what a write means.
   hookWrites() {
     const fs = this.emu && this.emu.fs9p;
     if (!fs || fs.__hooked) return;
     fs.__hooked = true;
     const schedule = () => {
       if (this.suppress) return;          // don't echo our own folder -> VM pushes
+      // Listeners first and unconditionally: a subscriber that wants to react
+      // to a specific file cannot afford the 800ms debounce meant for syncing.
+      this._writeListeners.forEach(f => { try { f(); } catch {} });
       clearTimeout(this._flush);
-      this._flush = setTimeout(() => Sync.flushFromVM(), 800);
+      this._flush = setTimeout(() => this._writeSettled.forEach(f => { try { f(); } catch {} }), 800);
     };
     for (const name of ['Write', 'Unlink', 'ChangeSize']) {
       const orig = fs[name];
       if (typeof orig !== 'function') continue;
       fs[name] = function (...args) { const r = orig.apply(this, args); schedule(); return r; };
     }
+  },
+
+  /* ---- the machine interface -------------------------------------------
+
+     Eight verbs is the whole of what the rest of the desktop needs from the
+     VM: exec, readFile, writeFile, listFiles, onWrite, state+events,
+     lifecycle, and screen. They were not written down before, so eight call
+     sites reached past this object into VM.emu or the window.__v86 global,
+     and a global back door is not an interface.
+
+     Every verb here is async and takes and returns bytes or strings, so the
+     whole surface could later sit behind postMessage without a single caller
+     changing. screen is the one member that cannot: it is a DOM node the
+     emulator owns and the UI adopts.
+     -------------------------------------------------------------------- */
+
+  _writeListeners: [],   // fire on every write, undebounced
+  _writeSettled: [],     // fire once writes stop, for sync-shaped work
+
+  ready() { return this.state === 'ready' && !!this.emu; },
+
+  async readFile(path) {
+    if (!this.emu) throw new Error('the VM is not running');
+    return this.emu.read_file(path);
+  },
+
+  async writeFile(path, bytes) {
+    if (!this.emu) throw new Error('the VM is not running');
+    return this.emu.create_file(path, bytes);
+  },
+
+  async readText(path) {
+    return new TextDecoder().decode(await this.readFile(path));
+  },
+
+  async writeText(path, text) {
+    return this.writeFile(path, new TextEncoder().encode(text));
+  },
+
+  // null, not [], when the machine cannot answer — callers already distinguish
+  // "no files" from "no VM" and would otherwise report an empty disk.
+  listFiles() {
+    const fs = this.emu && this.emu.fs9p;
+    if (!fs) return null;
+    const list = [];
+    try { fs.GetRecursiveList(0, list); } catch { return null; }
+    return list.filter(e => e.name && !/^\./.test(e.name));
+  },
+
+  onWrite(fn, { settled = false } = {}) {
+    const target = settled ? this._writeSettled : this._writeListeners;
+    target.push(fn);
+    return () => {
+      const i = target.indexOf(fn);
+      if (i >= 0) target.splice(i, 1);
+    };
+  },
+
+  // Writes we make ourselves must not look like the guest writing.
+  async writeQuietly(path, bytes) {
+    this.suppress = true;
+    try { return await this.writeFile(path, bytes); }
+    finally { setTimeout(() => { this.suppress = false; }, 50); }
   },
 
   // A real command, with output captured. A sentinel marks the end so we never
@@ -1608,12 +2218,20 @@ const VM = {
     for (;;) {
       const chunk = this.serial.slice(from);
       if (chunk.includes(mark + '\r\n') || /__VOS\d+__\r?\n/.test(chunk)) {
-        return chunk
-          .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')        // bash's bracketed-paste and colour escapes
+        const clean = chunk.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');   // colour and bracketed-paste
+        // Output ends where the shell echoes back the sentinel command we
+        // typed. CUT there rather than dropping the line containing it: a
+        // command whose output has no trailing newline — `cat` on almost any
+        // file — leaves the prompt and that echo on the SAME line as the last
+        // line of output, so dropping the line dropped the output with it and
+        // returned an empty string for a command that succeeded.
+        return clean
+          .split('echo ' + mark)[0]
           .split(/\r?\n/)
-          .filter(l => !l.includes(mark) && !l.includes('echo ' + mark) && l.trim() !== cmd.trim())
+          .filter(l => l.trim() !== cmd.trim())        // the terminal echoing what we typed
           .join('\n')
-          .replace(/(^|\n)[^\n]*~[%#$]\s*$/, '')       // the prompt: "~# " on BusyBox, "root@vibeos:~# " on Debian
+          // Strip only the prompt itself, not the line it sits on.
+          .replace(/(?:[\w.@()-]*:)?~[%#$]\s*$/, '')
           .trim();
       }
       if (Date.now() - t0 > timeoutMs) throw new Error(`timed out after ${timeoutMs / 1000}s`);
@@ -1658,7 +2276,7 @@ function paintVM() {
 // switching costs a restart and a slower boot, not a download.
 function imageSwitch() {
   const box = document.createElement('div');
-  box.style.cssText = 'padding:8px 10px;border-bottom:1px solid #262b38;display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+  box.style.cssText = 'padding:8px 10px;border-bottom:1px solid var(--barline);display:flex;gap:10px;align-items:center;flex-wrap:wrap';
   const running = IMAGES[VM.bootedImage || VM.image];
   const other = (VM.bootedImage || VM.image) === 'debian' ? 'busybox' : 'debian';
   box.innerHTML = `
@@ -1686,7 +2304,7 @@ function ConsoleApp(body) {
       body.innerHTML = '';
       const hint = document.createElement('div');
       hint.className = 'tiny dimmer';
-      hint.style.cssText = 'padding:6px 10px;border-bottom:1px solid #262b38';
+      hint.style.cssText = 'padding:6px 10px;border-bottom:1px solid var(--barline)';
       hint.textContent = 'Machine console — boot and kernel output. Run commands in the Terminal.';
       body.appendChild(hint);
       body.appendChild(imageSwitch());
@@ -1713,7 +2331,7 @@ function TerminalApp(body) {
   body.style.padding = '0';
   body.innerHTML = `
     <div id="tout" class="mono" style="padding:10px 12px;font-size:12.5px;line-height:1.45;white-space:pre-wrap;word-break:break-word"></div>
-    <div class="row" style="position:sticky;bottom:0;gap:6px;padding:8px 10px;border-top:1px solid #262b38;background:#12151d">
+    <div class="row" style="position:sticky;bottom:0;gap:6px;padding:8px 10px;border-top:1px solid var(--barline);background:var(--panel)">
       <span class="mono dimmer" style="font-size:12.5px">$</span>
       <input type="text" id="tin" autocomplete="off" spellcheck="false"
              style="flex:1;border:0;background:transparent;padding:2px 0;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--text)" />
@@ -1777,6 +2395,12 @@ const Sync = {
   onRun(fn) { this.watchers.add(fn); return () => this.watchers.delete(fn); },
 
   start(seconds = this.every) {
+    // The VM used to call Sync.flushFromVM by name from inside its write hook,
+    // which meant the machine knew about the sync layer. Now Sync asks the
+    // machine to tell it when writes settle, and the VM names nobody.
+    if (!this._subscribed) {
+      this._subscribed = VM.onWrite(() => this.flushFromVM(), { settled: true });
+    }
     this.every = seconds;
     clearInterval(this.timer); this.timer = null;
     if (!seconds) { this.watchers.forEach(f => f()); return; }
@@ -1791,13 +2415,7 @@ const Sync = {
     this.watchers.forEach(f => f());
   },
 
-  vmFiles() {
-    const emu = window.__v86;
-    if (!emu || !emu.fs9p) return null;
-    const list = [];
-    try { emu.fs9p.GetRecursiveList(0, list); } catch { return null; }
-    return list.filter(e => e.name && !/^\./.test(e.name));
-  },
+  vmFiles() { return VM.listFiles(); },
 
   async diff() {
     const vm = this.vmFiles();
@@ -1818,7 +2436,7 @@ const Sync = {
         // full compare is cheaper than maintaining a hash index.
         try {
           const a = await Workspace.readAny(name);
-          const b = await window.__v86.read_file(name);
+          const b = await VM.readFile(name);
           state = (a.length === b.length && a.every((v, i) => v === b[i])) ? 'same' : 'differs';
         } catch { state = 'differs'; }
       }
@@ -1850,12 +2468,10 @@ const Sync = {
 
   async push(name) {
     const bytes = await Workspace.readAny(name);
-    VM.suppress = true;
-    try { await VM.emu.create_file(name, bytes); }
-    finally { setTimeout(() => { VM.suppress = false; }, 50); }
+    await VM.writeQuietly(name, bytes);
   },
   async pull(name) {
-    const bytes = await window.__v86.read_file(name);
+    const bytes = await VM.readFile(name);
     await Workspace.writeAny(name, bytes);
   },
 
@@ -1882,22 +2498,34 @@ const Sync = {
    -------------------------------------------------------------------- */
 
 const Apps = {
-  get source() { return VM.state === 'ready' ? 'vm' : (Workspace.open ? 'folder' : 'none'); },
+  get source() {
+    const vm = VM.state === 'ready', folder = Workspace.open;
+    return vm && folder ? 'vm+folder' : vm ? 'vm' : folder ? 'folder' : 'none';
+  },
 
+  // BOTH sources, merged — not whichever is preferred. Preferring the VM meant
+  // that after a reload the dock was empty: the machine comes back blank, so
+  // every app the user had built was missing from the desktop while sitting
+  // safely in the folder on disk. They came back only when the 60s sync tick
+  // happened to push them in. Files are the durable copy; the VM is a cache of
+  // them, and a cold cache must not read as an empty disk.
   async list() {
+    const byName = new Map();
+
+    if (Workspace.open) {
+      for (const a of await Workspace.listApps().catch(() => [])) byName.set(a.name, a);
+    }
     if (VM.state === 'ready') {
-      const files = (Sync.vmFiles() || []).filter(f => f.name.endsWith('.js'));
-      const out = [];
-      for (const f of files) {
+      for (const f of (Sync.vmFiles() || []).filter(f => f.name.endsWith('.js'))) {
         try {
-          const src = new TextDecoder().decode(await VM.emu.read_file(f.name));
-          out.push({ name: f.name, source: src, requires: parseRequires(src),
-                     title: parseTitle(src) || f.name.replace(/\.js$/, '') });
+          const src = await VM.readText(f.name);
+          // The VM wins on a name collision: it is where the agent just wrote.
+          byName.set(f.name, { name: f.name, source: src, requires: parseRequires(src),
+                               title: parseTitle(src) || f.name.replace(/\.js$/, '') });
         } catch {}
       }
-      return out.sort((a, b) => a.name.localeCompare(b.name));
     }
-    return Workspace.listApps();
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
   },
 
   // Write to the VM first, then mirror to disk. Returns what actually happened
@@ -1906,7 +2534,7 @@ const Apps = {
     const file = (title || 'app').replace(/[^a-z0-9-_]+/gi, '-').toLowerCase().slice(0, 40) + '.js';
     const out = { file, vm: false, folder: false };
     if (VM.state === 'ready') {
-      try { await VM.emu.create_file(file, new TextEncoder().encode(source)); out.vm = true; } catch {}
+      try { await VM.writeText(file, source); out.vm = true; } catch {}
     }
     if (Workspace.open) {
       try { await Workspace.saveApp(title || 'app', source); out.folder = true; } catch {}
@@ -1923,7 +2551,7 @@ function SyncApp(body) {
       <button class="btn sm" id="pullall">← Pull all</button>
       <span class="sp" style="flex:1"></span>
       <label class="tiny dimmer">auto
-        <select id="every" style="background:#0c0e14;color:#c9d3e6;border:1px solid #23262f;border-radius:6px;padding:3px 6px;margin-left:4px">
+        <select id="every" style="background:var(--panel2);color:var(--btntext);border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin-left:4px">
           <option value="0">off</option><option value="5">5s</option><option value="60">60s</option><option value="300">5m</option>
         </select>
       </label>
@@ -2055,6 +2683,7 @@ const SETTINGS_TABS = [
   { id: 'caps',      label: 'Capabilities', render: CapsApp },
   { id: 'network',   label: 'Network',      render: NetworkApp },
   { id: 'model',     label: 'Model',        render: ModelApp },
+  { id: 'design',    label: 'Design',       render: DesignApp },
   { id: 'about',     label: 'About',        render: AboutApp },
 ];
 
@@ -2062,12 +2691,12 @@ function SettingsApp(body, win, opts) {
   body.style.padding = '0';
   body.style.display = 'flex';
   body.innerHTML = `
-    <nav id="tabs" style="flex:0 0 132px;border-right:1px solid #23262f;padding:8px;display:flex;flex-direction:column;gap:2px"></nav>
+    <nav id="tabs" style="flex:0 0 132px;border-right:1px solid var(--line);padding:8px;display:flex;flex-direction:column;gap:2px"></nav>
     <div id="pane" style="flex:1;overflow:auto;min-width:0"></div>`;
   const nav = body.querySelector('#tabs'), pane = body.querySelector('#pane');
 
   const show = (tab) => {
-    [...nav.children].forEach(b => b.style.background = b.dataset.id === tab.id ? '#1d2536' : 'transparent');
+    [...nav.children].forEach(b => b.style.background = b.dataset.id === tab.id ? 'var(--sel)' : 'transparent');
     pane.innerHTML = '';
     pane.style.padding = '';
     const holder = document.createElement('div');
@@ -2096,11 +2725,17 @@ function SettingsApp(body, win, opts) {
    CDP. So this re-serves instead of framing: fetch through the proxy, then
    render.
 
-   The page is rendered inside a SANDBOXED iframe with no allow-scripts and
-   no allow-same-origin. That matters more than it looks: this desktop holds
-   the user's API key in localStorage, so injecting a stranger's HTML into
-   our own origin would be handing it over. Scripts never run, and the frame
-   has no access to us.
+   The page is rendered inside a SANDBOXED iframe with NO allow-scripts. That
+   is the load-bearing part: this desktop holds the user's API key in
+   localStorage, and reading localStorage requires running a script. Without
+   allow-scripts nothing in the fetched page executes — not inline handlers,
+   not javascript: URLs, not a <script> that slipped past the regex strip.
+
+   allow-same-origin IS set, so the desktop can read the rendered document and
+   catch link clicks; without it, every link either died silently in the
+   sandbox or had to be thrown to the host browser, which is the one place a
+   browser app must never send you. It grants the frame our origin, but an
+   origin is only worth something to code, and no code runs here.
    -------------------------------------------------------------------- */
 
 const PROXY = '/api/proxy?url=';
@@ -2108,14 +2743,14 @@ const PROXY = '/api/proxy?url=';
 function BrowserApp(body) {
   body.style.padding = '0';
   body.innerHTML = `
-    <div class="row" style="gap:6px;padding:8px 10px;border-bottom:1px solid #262b38;background:#12151d">
+    <div class="row" style="gap:6px;padding:8px 10px;border-bottom:1px solid var(--barline);background:var(--panel)">
       <button class="btn sm" id="back" title="Back" disabled>←</button>
-      <input type="text" id="url" placeholder="example.com" spellcheck="false"
-             style="flex:1;border:1px solid #23262f;border-radius:8px;background:#0c0e14;padding:6px 10px;font-size:12.5px" />
+      <input type="text" id="url" placeholder="search, or type a url" spellcheck="false"
+             style="flex:1;border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:6px 10px;font-size:12.5px" />
       <button class="btn p sm" id="go">Go</button>
     </div>
     <div id="status" class="tiny dimmer" style="padding:5px 10px"></div>
-    <iframe id="page" sandbox="allow-popups allow-popups-to-escape-sandbox"
+    <iframe id="page" sandbox="allow-same-origin"
             referrerpolicy="no-referrer"
             style="width:100%;height:calc(100% - 74px);border:0;background:#fff"></iframe>`;
 
@@ -2157,10 +2792,34 @@ function BrowserApp(body) {
     .replace(/<\s*(iframe|object|embed|form)\b/gi, '<disabled-$1')
     .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
 
+  // What you typed is a URL if it looks like a host; anything else is a search.
+  // "california tax 2024" used to become https://california tax 2024 and fail.
+  const asUrl = (raw) => {
+    const text = raw.trim();
+    if (!text) return '';
+    if (/^https?:\/\//i.test(text)) return text;
+    if (/^[^\s/?#]+\.[a-z]{2,}(?::\d+)?([/?#].*)?$/i.test(text) || /^localhost(:\d+)?/i.test(text)) {
+      return 'https://' + text;
+    }
+    // Marginalia, after measuring the alternatives through this proxy on
+    // 2026-09-02. DuckDuckGo (all three endpoints) and Ecosia hard-403 us.
+    // Google and Bing answer 200 but emit no plain result links, so with
+    // scripts off there is nothing to render. Brave answered well once and
+    // then served a bot-check page for every query after — which is what a
+    // single datacenter address gets. Marginalia throttles softly, retries
+    // fine, and welcomes crawlers. See WebTools for the same reasoning.
+    return 'https://old-search.marginalia.nu/search?query=' + encodeURIComponent(text);
+  };
+
+  const errorPage = (title, detail) =>
+    `<!doctype html><meta charset="utf-8"><body style="margin:0;padding:28px;background:var(--panel2);color:var(--text);font:14px system-ui,-apple-system,sans-serif">
+       <p style="margin:0 0 6px;font-weight:600">${title}</p>
+       <p style="margin:0;color:var(--dim);font-size:13px;line-height:1.5">${detail}</p>
+     </body>`;
+
   async function open(target, push = true) {
-    let url = target.trim();
+    const url = asUrl(target);
     if (!url) return;
-    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
     input.value = url;
     status.textContent = 'fetching…';
     frame.removeAttribute('srcdoc');
@@ -2174,7 +2833,16 @@ function BrowserApp(body) {
       if (!r.ok) {
         let msg = text;
         try { msg = JSON.parse(text).error || text; } catch {}
-        status.innerHTML = `<span class="no">${msg.slice(0, 140)}</span>`;
+        msg = msg.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+        // A blank white frame reads as "vibeOS is broken". Say who refused and
+        // why — 403 and 429 here are almost always the site blocking datacenter
+        // egress, which is the proxy's address, not a bug in this browser.
+        const host = (() => { try { return new URL(url).host; } catch { return url; } })();
+        const hint = (r.status === 403 || r.status === 429)
+          ? `${host} refuses requests from datacenter addresses, and the proxy is one. Nothing here can change that — the site has to be reachable without a browser fingerprint.`
+          : (msg || 'No detail was returned.');
+        frame.srcdoc = errorPage(`${host} returned ${r.status}`, hint);
+        status.innerHTML = `<span class="no">${r.status} · ${host}</span>`;
         return;
       }
       if (push) { stack.push(url); back.disabled = stack.length < 2; }
@@ -2184,14 +2852,29 @@ function BrowserApp(body) {
         : `<pre style="white-space:pre-wrap;font:13px ui-monospace,monospace;padding:12px">${
              text.slice(0, 200000).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</pre>`;
 
-      // <base target="_blank"> so links leave the sandbox rather than dying
-      // silently inside it.
-      frame.srcdoc = `<!doctype html><meta charset="utf-8"><base href="${finalUrl}" target="_blank">${doc}`;
+      // No target="_blank": links used to leave for the host browser, which is
+      // the one place a browser app should never send you. The load handler
+      // below catches clicks and navigates here instead.
+      frame.srcdoc = `<!doctype html><meta charset="utf-8"><base href="${finalUrl}">${doc}`;
       status.innerHTML = `<span class="dimmer">${type.split(';')[0] || 'ok'} · ${(text.length / 1024).toFixed(0)} KB · scripts disabled</span>`;
     } catch (e) {
       status.innerHTML = `<span class="no">${e.message}</span>`;
     }
   }
+
+  // The frame is same-origin (scripts off), so its clicks are ours to handle.
+  frame.addEventListener('load', () => {
+    const doc = frame.contentDocument;
+    if (!doc) return;
+    doc.addEventListener('click', (e) => {
+      const a = e.target && e.target.closest && e.target.closest('a[href]');
+      if (!a) return;
+      const href = a.href;
+      if (!/^https?:/i.test(href)) return;   // mailto:, tel:, in-page anchors
+      e.preventDefault();
+      open(href);
+    });
+  });
 
   body.querySelector('#go').onclick = () => open(input.value);
   input.addEventListener('keydown', e => { if (e.key === 'Enter') open(input.value); });
@@ -2261,6 +2944,51 @@ function NetworkApp(body) {
   render();
 }
 
+function DesignApp(body) {
+  const render = () => DesignAppRender(body, render);
+  render();
+}
+
+function DesignAppRender(body, rerender) {
+  const skills = VibeOSSkills.installed().skills;
+  const theme = VibeOSSkills.getTheme(Theme.id);
+  const swatches = Object.entries(Theme.tokens()).map(([name, hex]) =>
+    `<div class="row" style="gap:7px;align-items:center">
+       <span style="width:14px;height:14px;border-radius:4px;border:1px solid var(--line2);background:${hex};flex:0 0 auto"></span>
+       <code class="tiny">${name}</code><span class="tiny dimmer">${hex}</span>
+     </div>`).join('');
+
+  const themeButtons = Object.values(VibeOSSkills.THEMES).map(t =>
+    `<button class="btn sm${t.id === Theme.id ? ' p' : ''}" data-theme="${t.id}">${t.title}</button>`).join('');
+
+  body.innerHTML = `
+    <h3>Design</h3>
+    <div class="row" style="gap:6px;margin-bottom:10px">${themeButtons}
+      ${Theme.custom ? '<button class="btn sm" id="themeReset">Clear overrides</button>' : ''}</div>
+    <p class="small muted" style="margin-top:0">
+      What the agent is told about looks and behaviour, on top of the build rules.
+      Both are appended to every prompt, whichever model you are using.
+    </p>
+
+    <h4 class="small" style="margin-bottom:4px">Theme &middot; ${theme.title}</h4>
+    <p class="tiny dimmer" style="margin-top:0">${theme.summary}</p>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 14px;margin-bottom:14px">${swatches}</div>
+
+    ${skills.map(sk => `
+      <h4 class="small" style="margin-bottom:4px">Skill &middot; ${sk.title}</h4>
+      <p class="tiny dimmer" style="margin-top:0">${sk.summary}</p>
+      <pre class="tiny app-scroll" style="max-height:150px;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px;white-space:pre-wrap;margin:0 0 12px">${sk.instructions.replace(/</g, '&lt;')}</pre>`).join('')}
+
+    <p class="note">The agent can change this itself &mdash; ask it for light mode. Apps mount inside this document, so the tokens above are inherited &mdash;
+    a generated app using <code>var(--text)</code> follows the desktop instead of drifting from it.</p>`;
+
+  body.querySelectorAll('[data-theme]').forEach(b => {
+    b.onclick = () => { Theme.set(b.dataset.theme); rerender(); };
+  });
+  const clear = body.querySelector('#themeReset');
+  if (clear) clear.onclick = () => { Theme.set(Theme.id, {}); rerender(); };
+}
+
 function ModelApp(body) {
   const render = () => {
     body.innerHTML = `
@@ -2280,6 +3008,19 @@ function ModelApp(body) {
         ${Gen.key ? '<button class="btn sm" id="clear">Forget key</button>' : ''}
         ${Gen.oauth ? '<button class="btn sm" id="clearoauth">Sign out</button>' : ''}
       </div>
+      ${Gen.oauth ? `
+        <h4>Model id</h4>
+        <p class="tiny dimmer" style="margin-top:0">
+          Which aliases your ChatGPT account can reach is not something this page can know.
+          Set one here to try it; a rejected id reports the reason OpenAI actually gave.
+        </p>
+        <div class="row" style="gap:6px">
+          <input type="text" id="modelId" spellcheck="false" value="${Gen.codexModel}"
+                 placeholder="${VibeOSOAuth.CODEX_MODEL} (default)"
+                 style="flex:1;border:1px solid var(--line);border-radius:8px;background:var(--panel2);padding:6px 10px;font-size:12.5px;font-family:'JetBrains Mono',ui-monospace,monospace" />
+          <button class="btn sm" id="modelSave">Use</button>
+          ${Gen.codexModel ? '<button class="btn sm" id="modelReset">Default</button>' : ''}
+        </div>` : ''}
       <p class="note" style="margin-top:12px">
         ${Gen.oauth
           ? 'ChatGPT tokens stay in <code>localStorage</code> and are sent to vibeos.sh only for proxied Codex inference.'
@@ -2290,6 +3031,10 @@ function ModelApp(body) {
     if (c) c.onclick = () => { Gen.saveKey(''); render(); };
     const co = body.querySelector('#clearoauth');
     if (co) co.onclick = () => { Gen.saveOAuth(null); render(); };
+    const save = body.querySelector('#modelSave');
+    if (save) save.onclick = () => { Gen.saveCodexModel(body.querySelector('#modelId').value); render(); };
+    const reset = body.querySelector('#modelReset');
+    if (reset) reset.onclick = () => { Gen.saveCodexModel(''); render(); };
   };
   render();
 }
@@ -2378,7 +3123,80 @@ const tick = () => document.getElementById('clock').textContent =
   new Date().toLocaleTimeString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 tick(); setInterval(tick, 1000);
 
+/* ---------- recovery ---------------------------------------------------
+
+   Persisted state is applied before the desktop paints, so a bad value can
+   brick every future load — and a white screen cannot tell you that ?safe=1
+   exists. The URL is the only artefact that survives a brick, and it carries
+   no hint, which makes a manual escape hatch the wrong primary.
+
+   So the escape is automatic. A flag is set before persisted state is applied
+   and cleared once the desktop is up. Finding it still set on the next load
+   means the previous boot never finished, and this one runs stock. Closing the
+   tab mid-boot trips it too — a false positive costs one plain boot and says
+   so, which is the right way round.
+
+   All of this lives in the served file, which the page has no way to write.
+   That is the whole reason it can be trusted.
+   -------------------------------------------------------------------- */
+
+const BOOT_FLAG = 'vibeos-boot-pending';
+
+function bootFailedLastTime() {
+  try {
+    if (localStorage.getItem(BOOT_FLAG)) { localStorage.removeItem(BOOT_FLAG); return true; }
+    localStorage.setItem(BOOT_FLAG, String(Date.now()));
+  } catch {}
+  return false;
+}
+
+function bootFinished() {
+  try { localStorage.removeItem(BOOT_FLAG); } catch {}
+}
+
+// Styled with literal colours on purpose: the thing it reports on may be the
+// theme, so it must not ask the theme how to look.
+function recoveryBar(message, detail) {
+  if (document.getElementById('recoveryBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'recoveryBar';
+  bar.style.cssText = 'position:fixed;inset:0 0 auto 0;z-index:99999;background:#7f1d1d;color:#fff;' +
+    'font:13px system-ui,-apple-system,sans-serif;padding:9px 12px;display:flex;gap:10px;align-items:center';
+  bar.innerHTML =
+    '<span style="flex:1;min-width:0"><b></b> <span class="d" style="opacity:.8"></span></span>' +
+    '<button style="flex:0 0 auto;border:0;border-radius:6px;padding:5px 10px;cursor:pointer;background:#fff;color:#7f1d1d;font-weight:600">Reload plain</button>' +
+    '<button class="x" style="flex:0 0 auto;border:0;background:transparent;color:#fff;cursor:pointer;font-size:16px">&times;</button>';
+  bar.querySelector('b').textContent = message;
+  bar.querySelector('.d').textContent = (detail || '').slice(0, 200);
+  bar.querySelector('button').onclick = () => { location.search = '?safe=1'; };
+  bar.querySelector('.x').onclick = () => bar.remove();
+  (document.body || document.documentElement).appendChild(bar);
+}
+
+// Nothing caught these before: an exception on the way up left an empty desktop
+// with no chat window, so there was no way to even ask the agent what broke.
+window.addEventListener('error', e => recoveryBar('vibeOS hit an error.', e.message));
+window.addEventListener('unhandledrejection', e => {
+  const r = e.reason;
+  recoveryBar('vibeOS hit an error.', (r && r.message) || String(r));
+});
+
 (async () => {
+  const recovering = bootFailedLastTime();
+  // Paint the saved theme before anything else, or a light-mode desktop
+  // flashes dark for the length of the first two awaits.
+  Theme.load({ stock: recovering });
+  VM.on(paintVM);   // the VM used to call this itself; now it just announces
+  paintVM();
+  VM.on(async s => {
+    if (s !== 'ready') return;
+    GuestBridge.start();
+    await GuestBridge.install();   // the CLI lives in the VM's RAM, so re-add it each boot
+    // A fresh machine has none of the user's files. Sync once now rather than
+    // waiting up to a minute for the timer — until this runs, the workspace
+    // exists on disk but not in the VM the agent is about to run commands in.
+    if (Workspace.open) { try { await Sync.auto(); paintDock(); } catch {} }
+  });
   await detectMode();
   await Gen.probe();
   // Start the machine FIRST. The key modal is an in-page overlay that is
@@ -2405,5 +3223,10 @@ tick(); setInterval(tick, 1000);
   VM.on(s => { if (s === 'ready') paintDock(); });
   // open the agent, not a settings panel — vibeOS is the app.
   openWindow(SHELL.chat);
+  bootFinished();
+  if (recovering) {
+    recoveryBar('The last boot did not finish, so this one skipped your saved theme.',
+                'Your theme is still stored. Set it again from Settings > Design, or ignore this.');
+  }
 })();
 </script>

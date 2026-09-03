@@ -9,6 +9,12 @@ A build of vibeOS that runs entirely in a tab. Hosted at
 
 It is a static page. There is no server component and no build step.
 
+Served this way the agent runs in **one-shot mode**: paste a key and it writes
+a window per request. The tool-using agent — list the workspace, run commands
+in the VM, restyle the desktop, search the web — needs the small API that
+vibeos.sh hosts alongside this page (`/api/agent/prompt`, and the ChatGPT
+sign-in relay). The page detects which it has and says so.
+
 ## What it actually is
 
 A real x86 VM boots in the background (v86, BSD-licensed) and is the system of
