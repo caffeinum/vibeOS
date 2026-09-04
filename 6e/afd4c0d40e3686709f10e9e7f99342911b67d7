@@ -1,0 +1,25 @@
+Dockerfile
+  s_5e83b0922092c9::t_a01ec006a725e2 81
+  s_5e83b0922092c9::t_175deecd5a9c40 87
+src/server/cdp.ts
+  s_5e83b0922092c9::t_8e5dee9af866b9 3,29
+scripts/browser-supervise.sh
+  s_5e83b0922092c9::t_175deecd5a9c40 1-58,60-70
+  s_5e83b0922092c9::t_8e5dee9af866b9 59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6eafd4c0d40e3686709f10e9e7f99342911b67d7",
+  "prompts": {},
+  "sessions": {
+    "s_5e83b0922092c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aac9fd07-cba9-4a58-9d86-8bcf27c81bdb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
