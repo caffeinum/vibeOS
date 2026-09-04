@@ -2689,7 +2689,7 @@ const IMAGES = {
     // and a connect to 127.0.0.1 hangs until curl's --max-time, so the
     // Browser's localhost never answered on the default image.
     loopback: 'ifconfig lo up',
-    shellLine: 'Then a POSIX shell script for Alpine Linux 3.20 (BusyBox ash, musl). apk works (run apk update first; the network is on): apk add <pkg>. Installed: busybox sh grep sed awk find, curl wget ca-certificates, git nano less. No bash, no glibc — a glibc binary will not run without gcompat. The workspace is at /mnt. Print results to stdout.',
+    shellLine: 'Then a POSIX shell script for Alpine Linux 3.20 (BusyBox ash, musl). apk works (run apk update first; the network is on): apk add <pkg>. Installed: busybox sh grep sed awk find, curl wget ca-certificates, git nano less — the BusyBox versions, so no GNU-only flags (no find -printf, no ls --time-style, no sed -z; list a directory with ls -1p). No bash, no glibc — a glibc binary will not run without gcompat. The workspace is at /mnt. Print results to stdout.',
   },
   busybox: {
     id: 'busybox', label: 'BusyBox', blurb: 'tiny: bundled 7 MB ISO, boots in about 10 s, no package manager',
