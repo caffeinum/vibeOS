@@ -864,7 +864,7 @@ async function jsonOf(r, who) {
    subscription; vibeOS supplies the tools and the machine. A tab cannot
    listen, so both ends dial the relay (app/api/mcp/[token]) and it pairs them
    by token and copies frames. The contract between the two ends is in
-   packages/vibeos-mcp/README.md; the relay reads none of it but the hello.
+   the README of github.com/caffeinum/vibeos-mcp; the relay reads none of it but the hello.
 
    The token is root on this desktop — edit_file on system/kernel/*.js and
    vm_exec are in the tool set — so it lives in a module variable, never in
