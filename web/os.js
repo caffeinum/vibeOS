@@ -1049,8 +1049,25 @@ const GuestBridge = {
       try { call = JSON.parse(raw); }
       catch (e) { await this.answer(id, { ok: false, error: 'request was not valid JSON: ' + e.message }); continue; }
       if (!call || !call.tool) { await this.answer(id, { ok: false, error: 'request needs a "tool" field' }); continue; }
+      if (call.tool === 'js') {
+        // `vibeos js '<code>'` runs in the desktop's own origin and returns the
+        // value (awaited) as JSON. The machine is trusted and the agent can
+        // already rewrite os.js through write_file, so this is not a new power,
+        // only a shorter path to it: a script in the VM can open a window, read
+        // VM.state, or call any desktop function without editing a file first.
+        track('guest_rpc', { tool: 'js' });
+        let result;
+        try {
+          const code = call.input && call.input.code;
+          if (typeof code !== 'string' || !code.trim()) throw new Error('js needs {"code": "<javascript>"}');
+          const value = await (0, eval)(`(async () => (${code}))()`).catch(async () => (0, eval)(`(async () => { ${code} })()`));
+          result = { ok: true, value: value === undefined ? null : JSON.parse(JSON.stringify(value)) };
+        } catch (e) { result = { ok: false, error: e.message }; }
+        await this.answer(id, result);
+        continue;
+      }
       if (!GUEST_TOOLS.has(call.tool)) {
-        await this.answer(id, { ok: false, error: 'unknown tool: ' + call.tool, available: [...GUEST_TOOLS] });
+        await this.answer(id, { ok: false, error: 'unknown tool: ' + call.tool, available: [...GUEST_TOOLS, 'js'] });
         continue;
       }
 
@@ -1115,6 +1132,26 @@ function parseError(js) {
   try { new Function(js); return null; }
   catch (e) { return e.name + ': ' + e.message; }
 }
+
+// An app is an ES module, which new Function rejects on its `export`. The
+// export keywords are dropped for the check only — the file that is saved is
+// untouched — so a truncated or unbalanced module is caught before launch.
+// apt and wget redraw a progress line with bare carriage returns; painted as
+// text, every redraw survived and "Reading package lists... 0%Reading package
+// lists... 60%..." filled the Terminal. A \r starts the line over, as on a tty.
+function crCollapse(text) {
+  return String(text).split('\n').map(l => l.slice(l.lastIndexOf('\r') + 1)).join('\n');
+}
+
+function moduleParseError(js) {
+  const asScript = String(js)
+    .replace(/^\s*export\s+default\s+/m, 'const __vibeos_default = ')
+    .replace(/^\s*export\s+(?=(const|let|var|function|class|async)\b)/gm, '')
+    .replace(/^\s*import\s[^\n]*$/gm, '');
+  return parseError(asScript);
+}
+
+const CUT_OFF = "the model's reply was cut off at the token limit (16000) before it finished; ask for something smaller, or for the app in parts";
 
 /* Read a JSON reply, or say what came back instead. Vercel answers a request
    body over 4.5 MB with a 413 as text/plain before the route ever runs, so
@@ -1223,7 +1260,7 @@ const Agent = {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + Gen.key },
       body: JSON.stringify({
-        model: Gen.model, max_completion_tokens: 4000,
+        model: Gen.model, max_completion_tokens: 16000,
         messages: [{ role: 'system', content: system }, ...msgs],
         tools: TOOL_SCHEMAS.map(t => ({ type: 'function', function: t })),
         // Required, not optional: gpt-5.6 refuses function tools on
@@ -1236,14 +1273,23 @@ const Agent = {
     });
     const j = await jsonOf(r, 'openai');
     if (!r.ok) throw new Error(j.error?.message || ('openai returned ' + r.status));
-    const m = j.choices?.[0]?.message || {};
+    const choice = j.choices?.[0] || {};
+    const m = choice.message || {};
+    // A reply cut at the token limit used to arrive here as a tool call whose
+    // arguments were half a JSON object; the parse failed silently to {} and
+    // create_app then wrote an empty module that failed at import with
+    // "Unexpected end of input" — a window with an error in it and nothing
+    // to say why. The cause has a name; say it.
+    if (choice.finish_reason === 'length') throw new Error(CUT_OFF);
     return {
       text: m.content || '',
       raw: m,
-      calls: (m.tool_calls || []).map(c => ({
-        id: c.id, toolName: c.function.name,
-        input: (() => { try { return JSON.parse(c.function.arguments || '{}'); } catch { return {}; } })(),
-      })),
+      calls: (m.tool_calls || []).map(c => {
+        let input;
+        try { input = JSON.parse(c.function.arguments || '{}'); }
+        catch (e) { throw new Error(`the model's ${c.function.name} call carried arguments that are not JSON (${e.message})`); }
+        return { id: c.id, toolName: c.function.name, input };
+      }),
     };
   },
 
@@ -1253,12 +1299,13 @@ const Agent = {
       headers: { 'content-type': 'application/json', 'x-api-key': Gen.key,
                  'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({
-        model: Gen.model, max_tokens: 4000, system, messages: msgs,
+        model: Gen.model, max_tokens: 16000, system, messages: msgs,
         tools: TOOL_SCHEMAS.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters })),
       }),
     });
     const j = await jsonOf(r, 'anthropic');
     if (!r.ok) throw new Error(j.error?.message || ('anthropic returned ' + r.status));
+    if (j.stop_reason === 'max_tokens') throw new Error(CUT_OFF);
     const blocks = j.content || [];
     return {
       text: blocks.filter(b => b.type === 'text').map(b => b.text).join('').trim(),
@@ -1287,6 +1334,15 @@ const Agent = {
       if (lint) {
         track('lint_reject', { rule: lint.rule });
         return { ok: false, kind: 'window', title, error: lint.error };
+      }
+      // A module that does not parse would be saved to the dock, launched, and
+      // die at import inside its own window. Refuse it here with the parser's
+      // message so the model fixes the source instead of the person reading
+      // "Unexpected end of input" in a Terminal that never existed.
+      const syntax = moduleParseError(source);
+      if (syntax) {
+        track('lint_reject', { rule: 'syntax' });
+        return { ok: false, kind: 'window', title, error: 'the module does not parse: ' + syntax };
       }
       const saved = await Apps.save(title, source).catch(e => ({ error: e.message }));
       paintDock();
@@ -1512,6 +1568,46 @@ function openWindow({ id = '', title, badge = '', w = 560, h = 380, render }) {
 
 // Two chat windows were two copies of one log, and the last writer won. The
 // dock raises the one that is open instead of opening another.
+// The agent answers in light markdown — code spans, fences, bullets, bold —
+// and it was painted as raw text with the backticks showing. This builds DOM
+// nodes for that subset and nothing else: no innerHTML, so a reply that
+// quotes a fetched page cannot carry markup into the desktop's origin.
+function renderMd(el, text) {
+  el.textContent = '';
+  const inline = (parent, line) => {
+    const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)/g; let last = 0, m;
+    while ((m = re.exec(line))) {
+      if (m.index > last) parent.appendChild(document.createTextNode(line.slice(last, m.index)));
+      const node = document.createElement(m[1] ? 'code' : 'b');
+      node.textContent = m[1] ? m[1].slice(1, -1) : m[2].slice(2, -2);
+      parent.appendChild(node); last = m.index + m[0].length;
+    }
+    if (last < line.length) parent.appendChild(document.createTextNode(line.slice(last)));
+  };
+  const lines = String(text).split('\n');
+  let i = 0, list = null, para = null;
+  const closeAll = () => { list = null; para = null; };
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      closeAll(); const pre = document.createElement('pre'); const buf = [];
+      for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) buf.push(lines[i]);
+      pre.textContent = buf.join('\n'); el.appendChild(pre); i++; continue;
+    }
+    const li = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (li) {
+      para = null;
+      if (!list) { list = document.createElement('ul'); el.appendChild(list); }
+      const item = document.createElement('li'); inline(item, li[1]); list.appendChild(item); i++; continue;
+    }
+    if (!line.trim()) { closeAll(); i++; continue; }
+    list = null;
+    if (!para) { para = document.createElement('p'); el.appendChild(para); }
+    else para.appendChild(document.createElement('br'));
+    inline(para, line); i++;
+  }
+}
+
 function focusOrOpen(spec) {
   const open = document.querySelector(`.win[data-app="${spec.id}"]`);
   if (!open) return openWindow(spec);
@@ -2088,7 +2184,7 @@ function ChatApp(body) {
   const bubble = (who, html) => {
     const d = document.createElement('div');
     d.style.cssText = who === 'you'
-      ? 'align-self:flex-end;max-width:85%;background:var(--sel);border:1px solid var(--line2);border-radius:var(--radius-win) 10px 2px 10px;padding:8px 11px;font-size:13px'
+      ? 'align-self:flex-end;max-width:85%;background:var(--sel);color:var(--seltext);border:1px solid var(--line2);border-radius:var(--radius-win) 10px 2px 10px;padding:8px 11px;font-size:13px'
       : 'align-self:flex-start;max-width:92%;background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius-win) 10px 10px 2px;padding:8px 11px;font-size:13px';
     d.innerHTML = html;
     log.appendChild(d);
@@ -2159,7 +2255,7 @@ function ChatApp(body) {
     }
     if (t.reload) return paintReload(t.reload);
     (t.cards || []).forEach(paintCard);
-    if (t.said) bubble('vibeos', '<span></span>').querySelector('span').textContent = t.said;
+    if (t.said) renderMd(bubble('vibeos', '<span></span>').querySelector('span'), t.said);
     if (t.failure === 'no model configured') line('that was a stock module — no model was configured');
     else if (t.failure) { const b = bubble('vibeos', '<span class="no"></span> — fell back to a stock module.'); b.querySelector('.no').textContent = t.failure; }
     else if (!t.text) line('the page was closed before this turn finished');
@@ -2353,7 +2449,7 @@ function ChatApp(body) {
         }
 
         if (result.text) {
-          bubble('vibeos', result.created.length ? '<span class="tiny dimmer"></span>' : '<span></span>').firstChild.textContent = result.text;
+          renderMd(bubble('vibeos', result.created.length ? '<span class="tiny dimmer"></span>' : '<span></span>').firstChild, result.text);
         }
       } catch (e) {
         failure = e.message;
@@ -2522,8 +2618,10 @@ const IMAGES = {
       initrd:  { url: DEBIAN_BASE + 'initrd' },
       // console-getty races the autologin serial getty for ttyS0 and sometimes
       // wins, leaving a login: prompt the desktop cannot get past. Mask it here
-      // as well as in the image so an older image still boots usably.
-      cmdline: 'root=/dev/sda rw console=ttyS0 net.ifnames=0 loglevel=3 systemd.mask=console-getty.service systemd.hostname=vibeos',
+      // as well as in the image so an older image still boots usably. getty@tty1
+      // is the VGA console: its login: prompt sat in the Machine pane after a
+      // boot that had already succeeded on ttyS0, and read as a machine stuck.
+      cmdline: 'root=/dev/sda rw console=ttyS0 net.ifnames=0 loglevel=3 systemd.mask=console-getty.service systemd.mask=getty@tty1.service systemd.hostname=vibeos',
       hda: { url: DEBIAN_BASE + 'chunk.img.zst', async: true, use_parts: true,
              fixed_chunk_size: 128 * 1024, size: 1024 * 1024 * 1024 },
     }),
@@ -3300,7 +3398,7 @@ function TerminalApp(body) {
       // the user's to wait on, and Ctrl-C below is the way out of it.
       const res = await VM.exec(cmd, 600000);
       pending.remove();
-      if (res) line(res);
+      if (res) line(crCollapse(res));
     } catch (e) { pending.remove(); if (!e.interrupted) line(e.message, 'no'); }
   }
 
@@ -4315,7 +4413,7 @@ const ICONS = {
 const SHELL = {
   chat:     { id: 'chat', title: 'vibeOS', badge: 'agent', render: ChatApp, w: 580, h: 500 },
   browser:  { title: 'Browser',  badge: 'proxied',  render: BrowserApp,  w: 820, h: 560 },
-  settings: { title: 'Settings', badge: '',         render: SettingsApp, w: 720, h: 480 },
+  settings: { id: 'settings', title: 'Settings', badge: '', render: SettingsApp, w: 720, h: 480 },
 };
 
 const brand = document.getElementById('brandIcon');
@@ -4358,7 +4456,7 @@ async function paintDock() {
   const sep2 = document.createElement('span');
   sep2.style.cssText = 'width:1px;background:rgba(0,0,0,.18);margin:4px 2px';
   dock.appendChild(sep2);
-  add(ICONS.settings, 'Settings', () => openWindow(SHELL.settings));
+  add(ICONS.settings, 'Settings', () => focusOrOpen(SHELL.settings));
 }
 
 const openSettings = (tab) => openWindow(Object.assign({}, SHELL.settings, {
