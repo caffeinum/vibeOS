@@ -67,27 +67,57 @@ function bootFinished() {
 }
 
 // Styled with literal colours on purpose: the thing it reports on may be the
-// theme, so it must not ask the theme how to look.
-function recoveryBar(message, detail) {
-  if (document.getElementById('recoveryBar')) return;
-  const bar = document.createElement('div');
-  bar.id = 'recoveryBar';
-  bar.style.cssText = 'position:fixed;inset:0 0 auto 0;z-index:99999;background:#7f1d1d;color:#fff;' +
-    'font:13px system-ui,-apple-system,sans-serif;padding:9px 12px;display:flex;gap:10px;align-items:center';
-  bar.innerHTML =
-    '<span style="flex:1;min-width:0"><b></b> <span class="d" style="opacity:.8"></span></span>' +
-    '<button style="flex:0 0 auto;border:0;border-radius:var(--radius-sm);padding:5px 10px;cursor:pointer;background:#fff;color:#7f1d1d;font-weight:600">Reload plain</button>' +
-    '<button class="x" style="flex:0 0 auto;border:0;background:transparent;color:#fff;cursor:pointer;font-size:16px">&times;</button>';
-  bar.querySelector('b').textContent = message;
-  bar.querySelector('.d').textContent = (detail || '').slice(0, 200);
-  bar.querySelector('button').onclick = () => { location.search = '?safe=1'; };
-  bar.querySelector('.x').onclick = () => bar.remove();
-  (document.body || document.documentElement).appendChild(bar);
+// theme, so it must not ask the theme how to look. One bar, many rows: the
+// first cut kept only the first message, so a permanent notice (a legacy
+// os.js) hid every later one — a broken kernel file in the same workspace
+// went unreported. The same message twice is one row. `action` is an
+// optional { label, run } button for a row that has a fix to offer.
+function recoveryBar(message, detail, action) {
+  let bar = document.getElementById('recoveryBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'recoveryBar';
+    bar.style.cssText = 'position:fixed;inset:0 0 auto 0;z-index:99999;background:#7f1d1d;color:#fff;' +
+      'font:13px system-ui,-apple-system,sans-serif;padding:9px 12px;display:flex;gap:10px;align-items:center';
+    bar.innerHTML =
+      '<div class="rows" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"></div>' +
+      '<button style="flex:0 0 auto;border:0;border-radius:var(--radius-sm);padding:5px 10px;cursor:pointer;background:#fff;color:#7f1d1d;font-weight:600">Reload plain</button>' +
+      '<button class="x" style="flex:0 0 auto;border:0;background:transparent;color:#fff;cursor:pointer;font-size:16px">&times;</button>';
+    bar.querySelector('button').onclick = () => { location.search = '?safe=1'; };
+    bar.querySelector('.x').onclick = () => bar.remove();
+    (document.body || document.documentElement).appendChild(bar);
+  }
+  const text = (detail || '').slice(0, 200);
+  const rows = bar.querySelector('.rows');
+  if ([...rows.children].some(r => r.dataset.message === message && r.dataset.detail === text)) return;
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.dataset.message = message; row.dataset.detail = text;
+  row.innerHTML = '<b></b> <span class="d" style="opacity:.8"></span>';
+  row.querySelector('b').textContent = message;
+  row.querySelector('.d').textContent = text;
+  if (action) {
+    const btn = document.createElement('button');
+    btn.className = 'act';
+    btn.style.cssText = 'margin-left:8px;border:0;border-radius:4px;padding:3px 8px;cursor:pointer;background:rgba(255,255,255,.9);color:#7f1d1d;font-weight:600';
+    btn.textContent = action.label;
+    btn.onclick = () => Promise.resolve().then(action.run).catch(e => recoveryBar(action.label + ' failed.', e.message));
+    row.appendChild(btn);
+  }
+  rows.appendChild(row);
 }
 
 // Nothing caught these before: an exception on the way up left an empty desktop
 // with no chat window, so there was no way to even ask the agent what broke.
-window.addEventListener('error', e => recoveryBar('vibeOS hit an error.', e.message));
+// A stored kernel file runs from a blob URL, and a parse error in one reaches
+// only this handler (script.onerror is for a load that failed), with the blob
+// URL as its filename; kernelBlobs maps it back so the bar names the file.
+const kernelBlobs = {};
+window.addEventListener('error', e => {
+  const f = kernelBlobs[e.filename];
+  if (f) recoveryBar('Your edited system/' + f + ' failed to load.', e.message + ' — reloading will boot the stock one.');
+  else recoveryBar('vibeOS hit an error.', e.message);
+});
 window.addEventListener('unhandledrejection', e => {
   const r = e.reason;
   recoveryBar('vibeOS hit an error.', (r && r.message) || String(r));
@@ -97,11 +127,23 @@ window.addEventListener('unhandledrejection', e => {
 
    Everything above this line is the trusted core: it lives in the served file,
    which the page cannot write, so it is always there. Everything below is the
-   operating system, and the OS is a file. If system/os.js exists in the
-   workspace and the last boot of it finished, it boots; otherwise the served
-   os.js does. That is how the agent gets root on itself without being able
-   to lock itself out.
+   operating system, and the OS is files: os.css, the kernel scripts in
+   KERNEL_FILES, run in that order, and the ui modules in UI_FILES, which the
+   kernel's registry imports. Each one boots from system/<name> in the
+   workspace when a copy exists there and the last boot finished; otherwise
+   the served file does. That is how the agent gets root on itself without
+   being able to lock itself out.
+
+   The kernel is classic scripts because the machine, the workspace and the
+   agent are globals the rest reaches by name; the ui is ES modules because a
+   module can be imported again from new text under a running kernel, which
+   is what reload_ui does. system/os.js, the whole OS once, loads nothing
+   now and is reported below when a workspace still holds one.
    -------------------------------------------------------------------- */
+
+const KERNEL_FILES = ['kernel/machine.js', 'kernel/workspace.js', 'kernel/agent.js', 'kernel/boot.js'];
+const UI_FILES = ['ui/windows.js', 'ui/dock.js', 'ui/chat.js', 'ui/browser.js', 'ui/settings.js'];
+const OS_FILES = ['os.css', ...KERNEL_FILES, ...UI_FILES];
 
 const BASE = (() => {
   const path = location.pathname;
@@ -136,6 +178,82 @@ function loaderIdbGet(key) {
   });
 }
 
+// A loaded file's handle under system/, through its subdirectory
+// ('kernel/machine.js' is system/kernel/machine.js).
+async function systemHandle(sys, name, create) {
+  const parts = name.split('/');
+  let dir = sys;
+  for (const seg of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(seg, { create });
+  return dir.getFileHandle(parts[parts.length - 1], { create });
+}
+async function readSystem(sys, name) {
+  try { return await (await (await systemHandle(sys, name, false)).getFile()).text(); } catch { return null; }
+}
+async function removeSystem(sys, name) {
+  const parts = name.split('/');
+  let dir = sys;
+  for (const seg of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(seg);
+  await dir.removeEntry(parts[parts.length - 1]);
+}
+
+// Move system/<name> to <name>.bak beside itself with a line saying why,
+// never over an earlier .bak. Shared by "Take the update" and the legacy
+// os.js retirement: a fork is set aside, not deleted, so the agent can still
+// read it and bring back what mattered.
+async function setAside(sys, name, note, text) {
+  const when = new Date().toISOString();
+  const bak = (name.endsWith('.css') ? `/* ${note} */` : `// ${note}`) + '\n' + text;
+  let bakName = name + '.bak';
+  try { await systemHandle(sys, bakName, false); bakName = `${name}.${when.replace(/[:.]/g, '-')}.bak`; } catch {}
+  const fh = await systemHandle(sys, bakName, true);
+  const w = await fh.createWritable(); await w.write(bak); await w.close();
+  await removeSystem(sys, name);
+  return bakName;
+}
+
+// system/os.js was the whole OS once and loads nothing now. Everyone who
+// forked before the split has one, and the desktop refused the two ways
+// the first bar suggested: a non-empty write is refused and there is no
+// delete tool, so on a private workspace the person had no way out at all.
+// The loader retires it itself when it may write, and offers a button that
+// asks for the permission when it may not.
+async function retireLegacy(stored) {
+  const text = await readSystem(stored.sys, 'os.js');
+  if (text === null) throw new Error('system/os.js vanished before it could be set aside');
+  const note = `vibeOS: your fork of os.js, set aside at ${new Date().toISOString()}. Nothing loads system/os.js since the OS became system/kernel/*.js and system/ui/*.js; ask the agent to bring over what mattered.`;
+  return setAside(stored.sys, 'os.js', note, text);
+}
+async function reportLegacy(stored) {
+  const what = 'system/os.js is no longer loaded.';
+  let writable = true;
+  if (stored.root.queryPermission) {
+    try { writable = (await stored.root.queryPermission({ mode: 'readwrite' })) === 'granted'; } catch { writable = false; }
+  }
+  if (!writable) {
+    recoveryBar(what, 'vibeOS is system/kernel/*.js and system/ui/*.js now, and your os.js copy is ignored. Set it aside as os.js.bak, or ask the agent to write it empty.',
+      { label: 'Set it aside', run: async () => {
+        if ((await stored.root.requestPermission({ mode: 'readwrite' })) !== 'granted') throw new Error('write access to the workspace was refused');
+        const bak = await retireLegacy(stored);
+        recoveryBar('system/os.js was set aside as system/' + bak + '.', 'Ask the agent to bring over what mattered from it.');
+      } });
+    return;
+  }
+  try {
+    const bak = await retireLegacy(stored);
+    recoveryBar('system/os.js is no longer loaded, so it was set aside as system/' + bak + '.',
+      'vibeOS is system/kernel/*.js and system/ui/*.js now. Ask the agent to bring over what mattered from the .bak.');
+  } catch (e) {
+    recoveryBar(what + ' It could not be set aside.', e.message);
+  }
+}
+
+// { root, sys, files: { '<name>': text | null }, legacy } for a workspace
+// holding a copy of any loaded file, else null. Each file forks on its own: a
+// wallpaper is an edit to os.css alone, and a boot that only looked for the
+// script ran the served desktop over a fork it never read — the agent said
+// "wallpaper changed", the desktop did not. A blank copy is no copy: that is
+// how write_file('') un-forks. `legacy` is a non-blank system/os.js, which
+// nothing loads any more and which is reported rather than skipped.
 async function storedOS() {
   let root = await loaderIdbGet('workspace');
   if (root && root.queryPermission) {
@@ -145,34 +263,37 @@ async function storedOS() {
     try { root = await navigator.storage.getDirectory(); } catch { root = null; }
   }
   if (!root) return null;
-  // Each file forks on its own: a wallpaper is an edit to os.css alone, and
-  // a boot that only looked for os.js ran the served desktop over a fork it
-  // never read — the agent said "wallpaper changed", the desktop did not.
   let sys;
   try { sys = await root.getDirectoryHandle('system'); } catch { return null; }
-  const read = async (name) => { try { return await (await (await sys.getFileHandle(name)).getFile()).text(); } catch { return null; } };
-  const js = await read('os.js'), css = await read('os.css');
-  const hasJs = js !== null && js.trim() !== '', hasCss = css !== null && css.trim() !== '';
-  if (!hasJs && !hasCss) return null;
-  return { root, sys, js: hasJs ? js : null, css: hasCss ? css : null };
+  const files = {};
+  let any = false;
+  for (const name of OS_FILES) {
+    const text = await readSystem(sys, name);
+    files[name] = text !== null && text.trim() !== '' ? text : null;
+    if (files[name] !== null) any = true;
+  }
+  const legacy = await readSystem(sys, 'os.js');
+  const out = { root, sys, files, legacy: legacy !== null && legacy.trim() !== '' };
+  if (!any && !out.legacy) return null;
+  return out;
 }
 
 /* ---------- fork versioning -----------------------------------------------
 
-   A fork pins the OS to the day it was made: once system/os.js exists, the
-   served os.js is never looked at again, and updates stop reaching that
+   A fork pins a file to the day it was made: once system/kernel/x.js exists,
+   the served kernel/x.js is never looked at again, and updates stop reaching that
    browser without anyone being told. So the served copy carries a version,
    the fork records the version it came from, and a boot of the fork compares
    the two.
 
    The version is a hash of the served text, computed here at boot, not a
    number written by a build step: there is no build step, and a version file
-   next to os.js would be one hand-edit, mirror sync or half-deployed CDN away
+   next to the file would be one hand-edit, mirror sync or half-deployed CDN away
    from describing a file it no longer matches. A hash of the bytes the loader
    just fetched cannot go stale. FNV-1a over the string, because it is three
    lines, synchronous, and works on plain http:// where crypto.subtle does not.
-   Same function, same text, on both sides: os.js calls this one to write the
-   record, so the two can only disagree when the file did.
+   Same function, same text, on both sides: kernel/workspace.js calls this one
+   to write the record, so the two can only disagree when the file did.
    -------------------------------------------------------------------- */
 
 function versionId(text) {
@@ -182,10 +303,9 @@ function versionId(text) {
 }
 
 const FORK_DISMISSED = 'vibeos-fork-dismissed';
-const OS_FILES = ['os.js', 'os.css'];
 
 // no-cache is a conditional GET, not a bypass: a version probe must see what
-// the server has now, and a heuristically cached os.js would say "unchanged"
+// the server has now, and a heuristically cached file would say "unchanged"
 // for as long as the browser felt like it.
 async function fetchServed(name) {
   const r = await fetch(BASE + name, { cache: 'no-cache' });
@@ -193,8 +313,9 @@ async function fetchServed(name) {
   return r.text();
 }
 
-// The record is { "os.js": { base, at }, "os.css": { base, at } }, one entry
-// per forked file, written by Workspace.writePath on the first write of each.
+// The record is { "<name>": { base, at } } — "kernel/boot.js", "os.css" —
+// one entry per forked file, written by Workspace.writePath on the first
+// write of each.
 // Anything else is reported, not skipped: a record that cannot be read is the
 // one case where "no news" would be wrong news.
 function parseVersionRecord(text, files) {
@@ -210,12 +331,12 @@ function parseVersionRecord(text, files) {
 }
 
 async function forkCheck(stored) {
-  const files = OS_FILES.filter(f => stored[f === 'os.js' ? 'js' : 'css'] !== null);
-  const servedText = {}, served = {};
-  for (const f of files) { servedText[f] = await fetchServed(f); served[f] = versionId(servedText[f]); }
+  const files = OS_FILES.filter(f => stored.files[f] !== null);
+  const servedText = {}, served = {}, storedText = {};
+  for (const f of files) { servedText[f] = await fetchServed(f); served[f] = versionId(servedText[f]); storedText[f] = stored.files[f]; }
   const id = files.map(f => f + '=' + served[f]).join(' ');
   const fork = { files, served, id, base: null, at: null, moved: false, error: '', dismissed: false,
-                 stored, storedText: { 'os.js': stored.js, 'os.css': stored.css }, servedText };
+                 stored, storedText, servedText };
   let text = null;
   try { text = await (await (await stored.sys.getFileHandle('os.version.json')).getFile()).text(); }
   catch { fork.error = 'system/os.version.json is missing: this copy was forked before versions were recorded, or copied in by hand'; }
@@ -250,7 +371,7 @@ function forkBar(fork) {
     : 'vibeOS updated since your copy was forked.';
   const movedFiles = fork.base ? fork.files.filter(f => fork.base[f] !== fork.served[f]) : [];
   bar.querySelector('.d').textContent = (fork.error
-    ? fork.error + '. The served vibeOS is ' + fork.served['os.js'] + '.'
+    ? fork.error + '. The served vibeOS is ' + fork.files.map(f => f + '=' + fork.served[f]).join(' ') + '.'
     : movedFiles.map(f => 'Your system/' + f + ' came from ' + fork.base[f] + (fork.at[f] ? ' on ' + fork.at[f].slice(0, 10) : '') +
       '; the served one is now ' + fork.served[f] + '.').join(' ')).slice(0, 260);
   bar.querySelector('.keep').onclick = () => window.__vibeosFork.keep();
@@ -298,7 +419,7 @@ function lineDiff(a, b) {
 // wants to know. Nested functions are not tracked; the nearest top-level wins.
 function regionName(lines, idx) {
   for (let i = Math.min(idx, lines.length - 1); i >= 0; i--) {
-    const m = /^(?:async\s+)?function\s+(\w+)|^(?:const|let|var)\s+(\w+)\s*=/.exec(lines[i]);
+    const m = /^(?:export\s+)?(?:async\s+)?function\s+(\w+)|^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=/.exec(lines[i]);
     if (m) return m[1] || m[2];
   }
   return '(top)';
@@ -351,14 +472,14 @@ window.__vibeosFork = {
     fork.dismissed = true;
     const bar = document.getElementById('forkBar'); if (bar) bar.remove();
   },
-  // Not a delete: the fork moves to os.js.bak (with a line saying when and
-  // from what), the record goes, and the served copy boots on reload. The
-  // agent can still read the .bak and re-apply what mattered.
+  // Not a delete: each fork moves to <name>.bak beside itself (with a line
+  // saying when and from what), the record goes, and the served copies boot
+  // on reload. The agent can still read the .bak and re-apply what mattered.
   async take() {
     const b = window.__vibeosBoot;
     const fork = b.fork;
     // The stored handles are stashed at boot, so this works even when the
-    // version check could not run (served os.js unreachable): Settings
+    // version check could not run (a served file unreachable): Settings
     // promised it would, and a promise that throws is the worse outcome.
     const stored = (fork && fork.stored) || b.stored;
     if (!stored || !stored.root) throw new Error('nothing to take: this boot ran the served OS');
@@ -367,22 +488,16 @@ window.__vibeosFork = {
     if (root.requestPermission && (await root.requestPermission({ mode: 'readwrite' })) !== 'granted')
       throw new Error('write access to the workspace was refused');
     const when = new Date().toISOString();
-    const files = fork ? fork.files : (await Promise.all(['os.js', 'os.css'].map(async f => {
-      try { await sys.getFileHandle(f); return f; } catch { return null; }
+    const files = fork && fork.files.length ? fork.files : (await Promise.all(OS_FILES.map(async f => {
+      try { await systemHandle(sys, f, false); return f; } catch { return null; }
     }))).filter(Boolean);
-    if (!files.length) throw new Error('nothing to take: no system/os.js or os.css in the workspace');
+    if (!files.length) throw new Error('nothing to take: no copy of a loaded file (' + OS_FILES.join(', ') + ') under system/ in the workspace');
     for (const f of files) {
       const base = fork && fork.base ? fork.base[f] : 'unknown';
       const servedV = fork && fork.served ? fork.served[f] : 'unknown';
-      const text = fork && fork.storedText ? fork.storedText[f] : await (await (await sys.getFileHandle(f)).getFile()).text();
+      const text = fork && fork.storedText ? fork.storedText[f] : await (await (await systemHandle(sys, f, false)).getFile()).text();
       const note = `vibeOS: your fork of ${f}, set aside by "Take the update" at ${when}. Forked from version ${base}; the served version was ${servedV} when this was written.`;
-      const bak = (f.endsWith('.css') ? `/* ${note} */` : `// ${note}`) + '\n' + text;
-      // A second Take must not overwrite the first fork's .bak: suffix instead.
-      let name = f + '.bak';
-      try { await sys.getFileHandle(name); name = `${f}.${when.replace(/[:.]/g, '-')}.bak`; } catch {}
-      const fh = await sys.getFileHandle(name, { create: true });
-      const w = await fh.createWritable(); await w.write(bak); await w.close();
-      await sys.removeEntry(f);
+      await setAside(sys, f, note, text);
     }
     try { await sys.removeEntry('os.version.json'); } catch {}
     try { localStorage.removeItem(FORK_DISMISSED); } catch {}
@@ -417,46 +532,59 @@ window.__vibeosFork = {
 
 (async () => {
   const b = window.__vibeosBoot;
-  let stored = null;
-  if (!b.recovering && !b.safe) stored = await storedOS();
-  if (b.recovering && await storedOS()) b.storedFailed = true;
+  // On a recovery boot nothing stored runs, but a legacy os.js alone never
+  // ran either: a workspace holding only that must not be told its edited
+  // OS failed, and its os.js is set aside on this boot, not the one after.
+  const probe = b.safe ? null : await storedOS();
+  const stored = b.recovering ? null : probe;
+  if (b.recovering && probe && OS_FILES.some(f => probe.files[f] !== null)) b.storedFailed = true;
+  if (probe && probe.legacy) await reportLegacy(probe);
 
   const link = document.getElementById('osStyle');
-  if (stored) {
-    // source says which os.js runs; css says which stylesheet. A css-only
-    // fork boots the served os.js under the stored os.css.
-    b.source = stored.js === null ? 'served' : 'stored';
-    b.css = stored.css === null ? 'served' : 'stored';
+  // files says where each loaded file came from this boot; source sums the
+  // kernel up ('stored' if any kernel file is), css the stylesheet. A
+  // css-only fork boots the served kernel under the stored os.css; the ui
+  // files' sources are the registry's (UI.source), decided from the same
+  // texts handed over in b.stored.
+  b.files = Object.fromEntries(OS_FILES.map(f => [f, stored && stored.files[f] !== null ? 'stored' : 'served']));
+  b.source = KERNEL_FILES.some(f => b.files[f] === 'stored') ? 'stored' : 'served';
+  b.css = b.files['os.css'];
+  if (b.css === 'stored') {
     link.remove();
     const st = document.createElement('style'); st.id = 'osStyle';
-    st.textContent = stored.css === null ? await fetchServed('os.css') : stored.css;
+    st.textContent = stored.files['os.css'];
     document.head.appendChild(st);
-    const s = document.createElement('script');
-    if (stored.js === null) s.src = BASE + 'os.js';
-    else {
-      s.src = URL.createObjectURL(new Blob([stored.js], { type: 'text/javascript' }));
-      s.onerror = () => recoveryBar('Your edited OS failed to load.', 'Reloading will boot the stock one.');
-    }
-    document.body.appendChild(s);
-    // The check runs after the fork is booting, never in its way: a served
-    // copy that cannot be fetched is reported and the fork runs regardless.
-    // b.fork is undefined until the check has an answer, null if it has none.
-    b.stored = stored;   // take() needs the handles even if the check below fails
-    try {
-      const fork = await forkCheck(stored);
-      b.fork = fork;
-      if ((fork.moved || fork.error) && !fork.dismissed) forkBar(fork);
-    } catch (e) {
-      b.fork = null;
-      recoveryBar('vibeOS could not check whether your copy is current.', e.message);
-    }
   } else {
-    b.fork = null;
-    b.css = 'served';
     link.href = BASE + 'os.css';
+  }
+  // In order, and async=false so a dynamically inserted script keeps that
+  // order: each kernel file reads the globals of the one before it.
+  for (const f of KERNEL_FILES) {
     const s = document.createElement('script');
-    s.src = BASE + 'os.js';
+    s.async = false;
+    if (b.files[f] === 'served') s.src = BASE + f;
+    else {
+      s.src = URL.createObjectURL(new Blob([stored.files[f]], { type: 'text/javascript' }));
+      kernelBlobs[s.src] = f;
+      s.onerror = () => recoveryBar('Your edited system/' + f + ' failed to load.', 'Reloading will boot the stock one.');
+    }
     document.body.appendChild(s);
+  }
+  if (!stored) { b.fork = null; return; }
+  b.stored = stored;   // take() needs the handles even if the check below fails
+  // A legacy os.js alone is not a fork of anything that loads: no version
+  // check, no bar saying the record is missing for an empty list of files.
+  if (!OS_FILES.some(f => stored.files[f] !== null)) { b.fork = null; return; }
+  // The check runs after the fork is booting, never in its way: a served
+  // copy that cannot be fetched is reported and the fork runs regardless.
+  // b.fork is undefined until the check has an answer, null if it has none.
+  try {
+    const fork = await forkCheck(stored);
+    b.fork = fork;
+    if ((fork.moved || fork.error) && !fork.dismissed) forkBar(fork);
+  } catch (e) {
+    b.fork = null;
+    recoveryBar('vibeOS could not check whether your copy is current.', e.message);
   }
 })();
 </script>
