@@ -145,13 +145,16 @@ async function storedOS() {
     try { root = await navigator.storage.getDirectory(); } catch { root = null; }
   }
   if (!root) return null;
-  try {
-    const sys = await root.getDirectoryHandle('system');
-    const js = await (await (await sys.getFileHandle('os.js')).getFile()).text();
-    let css = null;
-    try { css = await (await (await sys.getFileHandle('os.css')).getFile()).text(); } catch {}
-    return js.trim() ? { root, sys, js, css } : null;
-  } catch { return null; }
+  // Each file forks on its own: a wallpaper is an edit to os.css alone, and
+  // a boot that only looked for os.js ran the served desktop over a fork it
+  // never read — the agent said "wallpaper changed", the desktop did not.
+  let sys;
+  try { sys = await root.getDirectoryHandle('system'); } catch { return null; }
+  const read = async (name) => { try { return await (await (await sys.getFileHandle(name)).getFile()).text(); } catch { return null; } };
+  const js = await read('os.js'), css = await read('os.css');
+  const hasJs = js !== null && js.trim() !== '', hasCss = css !== null && css.trim() !== '';
+  if (!hasJs && !hasCss) return null;
+  return { root, sys, js: hasJs ? js : null, css: hasCss ? css : null };
 }
 
 /* ---------- fork versioning -----------------------------------------------
@@ -207,7 +210,7 @@ function parseVersionRecord(text, files) {
 }
 
 async function forkCheck(stored) {
-  const files = stored.css === null ? ['os.js'] : OS_FILES;
+  const files = OS_FILES.filter(f => stored[f === 'os.js' ? 'js' : 'css'] !== null);
   const servedText = {}, served = {};
   for (const f of files) { servedText[f] = await fetchServed(f); served[f] = versionId(servedText[f]); }
   const id = files.map(f => f + '=' + served[f]).join(' ');
@@ -420,14 +423,20 @@ window.__vibeosFork = {
 
   const link = document.getElementById('osStyle');
   if (stored) {
-    b.source = 'stored';
+    // source says which os.js runs; css says which stylesheet. A css-only
+    // fork boots the served os.js under the stored os.css.
+    b.source = stored.js === null ? 'served' : 'stored';
+    b.css = stored.css === null ? 'served' : 'stored';
     link.remove();
     const st = document.createElement('style'); st.id = 'osStyle';
     st.textContent = stored.css === null ? await fetchServed('os.css') : stored.css;
     document.head.appendChild(st);
     const s = document.createElement('script');
-    s.src = URL.createObjectURL(new Blob([stored.js], { type: 'text/javascript' }));
-    s.onerror = () => recoveryBar('Your edited OS failed to load.', 'Reloading will boot the stock one.');
+    if (stored.js === null) s.src = BASE + 'os.js';
+    else {
+      s.src = URL.createObjectURL(new Blob([stored.js], { type: 'text/javascript' }));
+      s.onerror = () => recoveryBar('Your edited OS failed to load.', 'Reloading will boot the stock one.');
+    }
     document.body.appendChild(s);
     // The check runs after the fork is booting, never in its way: a served
     // copy that cannot be fetched is reported and the fork runs regardless.
@@ -443,6 +452,7 @@ window.__vibeosFork = {
     }
   } else {
     b.fork = null;
+    b.css = 'served';
     link.href = BASE + 'os.css';
     const s = document.createElement('script');
     s.src = BASE + 'os.js';

@@ -81,7 +81,7 @@ const BrowserProvider = {
   async read(handle) { return (await handle.getFile()).text(); },
   // Real, once the background Linux is up — but it is the VM's shell, on the
   // VM's disk. Never the user's machine. The capability table says so.
-  async shell(cmd, timeoutMs = 20000) { checkTimeout(timeoutMs); return VM.exec(cmd, timeoutMs); },
+  async shell(cmd, timeoutMs = 600000) { checkTimeout(timeoutMs); return VM.exec(cmd, timeoutMs); },
 };
 
 const NativeProvider = {
@@ -95,7 +95,7 @@ const NativeProvider = {
     catch { return false; } finally { clearTimeout(t); }
   },
   async list(path='~') { return (await (await fetch(`${this.base}/fs?path=${encodeURIComponent(path)}`)).json()); },
-  async shell(cmd, timeoutMs = 20000) {
+  async shell(cmd, timeoutMs = 600000) {
     checkTimeout(timeoutMs);
     const r = await fetch(this.base + '/exec', { method:'POST',
       headers: {'content-type':'application/json'}, body: JSON.stringify({ cmd, timeoutMs }) });
@@ -851,7 +851,7 @@ TARGET 1, a desktop window (default). Header exactly:
 Caps: files (read the workspace), shell (run commands in the VM). Use none unless needed.
 Then: export default function (mount, api) { ... }
 mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size.
-api.shell(cmd, timeoutMs = 20000) -> Promise<string> (needs shell): stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted. List a directory with ls -1p. Anything that can run past ~15 s (apk add, apt-get, git clone, a build) needs a bigger timeout — api.shell(cmd, 600000) — or goes to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
+api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone — and the built-in Terminal's Ctrl-C frees the line. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted. List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
 
 Layout rules (required): root width/height 100%, box-sizing:border-box, display:flex, flex-direction:column, overflow:hidden on mount. No document scroll, no min-height exceeding the window. Modest type and padding; empty states must fit. Scroll inner panes only (overflow:auto, scrollbar-width:thin), never mount.
 
