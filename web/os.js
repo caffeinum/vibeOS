@@ -3993,6 +3993,7 @@ function BrowserApp(body) {
 
   // What you typed is a URL if it looks like a host; anything else is a search.
   // "california tax 2024" used to become https://california tax 2024 and fail.
+  const SEARCH = 'https://old-search.marginalia.nu/search?query=';
   const asUrl = (raw) => {
     const text = raw.trim();
     if (!text) return '';
@@ -4009,7 +4010,7 @@ function BrowserApp(body) {
     // then served a bot-check page for every query after — which is what a
     // single datacenter address gets. Marginalia throttles softly, retries
     // fine, and welcomes crawlers. See WebTools for the same reasoning.
-    return 'https://old-search.marginalia.nu/search?query=' + encodeURIComponent(text);
+    return SEARCH + encodeURIComponent(text);
   };
 
   // Escaped: the title carries the typed host and the detail carries what a
@@ -4061,9 +4062,14 @@ function BrowserApp(body) {
     frame.removeAttribute('srcdoc');
     const guest = isGuestHost(url);
     const host = (() => { try { return new URL(url).host; } catch { return url; } })();
+    // What people do in the Browser, host-level only: a search, a site, or the
+    // machine's own dev server — never the path or the query, which is theirs.
+    const kind = guest ? 'localhost' : url.startsWith(SEARCH) ? 'search' : 'site';
+    const t0 = Date.now();
     try {
-      track('browser_open', { guest });
+      track('browser_open', { kind, host: kind === 'search' ? 'search' : host, guest, how: push ? 'nav' : 'history' });
       const r = await (guest ? guestFetch(url) : proxyFetch(url));
+      track('browser_result', { kind, ok: r.ok, status: r.status, seconds: Math.round((Date.now() - t0) / 1000) });
       const { type, finalUrl, text } = r;
       if (!r.ok) {
         let msg = text;
@@ -4098,6 +4104,7 @@ function BrowserApp(body) {
       status.querySelector('.dimmer').textContent = `${type.split(';')[0] || 'ok'} · ${(text.length / 1024).toFixed(0)} KB · `
         + (guest ? `served from inside the machine (${r.via}) · scripts off · assets not loaded` : 'scripts disabled');
     } catch (e) {
+      track('browser_result', { kind, ok: false, status: 0, seconds: Math.round((Date.now() - t0) / 1000) });
       // Not a blank frame: the guest case is the one where a person is
       // waiting for their own server, and "nothing is listening" is the answer.
       frame.srcdoc = errorPage(guest ? `${host} inside the machine` : host, e.message);
@@ -4412,7 +4419,7 @@ const ICONS = {
 
 const SHELL = {
   chat:     { id: 'chat', title: 'vibeOS', badge: 'agent', render: ChatApp, w: 580, h: 500 },
-  browser:  { title: 'Browser',  badge: 'proxied',  render: BrowserApp,  w: 820, h: 560 },
+  browser:  { id: 'browser', title: 'Browser', badge: 'proxied', render: BrowserApp, w: 820, h: 560 },
   settings: { id: 'settings', title: 'Settings', badge: '', render: SettingsApp, w: 720, h: 480 },
 };
 
