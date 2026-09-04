@@ -90,6 +90,10 @@ export function ChatApp(body, win) {
       await Gen.askForKey();
       if (Gen.available) intro.innerHTML = readyLine();
     };
+    // A remote agent (vibeos-mcp) is driven from its own window, not this
+    // box; this chat's agent keeps working beside it. The name is the MCP
+    // client's own string: textContent.
+    if (RemoteBridge.state === 'connected') line(`${RemoteBridge.detail} is connected through vibeos-mcp and drives this desktop — talk to it in its own window. This chat keeps working alongside it; edits can come from either.`);
   };
 
   const paintReload = ({ note, files, source }) => {
@@ -241,6 +245,7 @@ export function ChatApp(body, win) {
     }
   });
   Windows.onDispose(win, off);
+  Windows.onDispose(win, RemoteBridge.on(paint));
   paint();
   paintChips();
   setTimeout(() => input.focus(), 50);

@@ -392,7 +392,9 @@ TARGET 2, a program inside the VM. Use when the request is about files, text pro
 // @title <Short Name>
 // @target vm
 // @file <name.sh>
-Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.`;
+Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.
+
+A remote agent (someone's own Claude Code, Cursor or Codex, through vibeos-mcp) may be connected to this desktop and edits or commands can come from it in parallel: a stale anchor in edit_file is refused, so re-read before you edit rather than assume the file is as you left it.`;
 
 
 const PROXY = '/api/proxy?url=';
@@ -635,6 +637,35 @@ const BUILTIN_APPS = () => Object.entries(UI.stable().SHELL).map(([id, s]) => ({
   source: 'system/' + s.file, hint: `search_file system/${s.file} for "function ${s.render}"; reload_ui applies the edit live`,
 }));
 
+// One gate for every door into the desktop that is not the built-in agent:
+// the guest CLI (a file in /mnt) and a remote agent (a frame over the relay)
+// get exactly the agent's tools plus the js verb, and nothing else. `event`
+// is the analytics name: guest_rpc or mcp_call. Never throws — a caller
+// writes or sends whatever comes back.
+async function bridgeCall(call, event) {
+  if (!call || typeof call !== 'object' || !call.tool) return { ok: false, error: 'request needs a "tool" field' };
+  if (call.tool === 'js') {
+    // `vibeos js '<code>'` runs in the desktop's own origin and returns the
+    // value (awaited) as JSON. The machine is trusted and the agent can
+    // already rewrite the kernel through write_file, so this is not a new
+    // power, only a shorter path to it: a script in the VM can open a window,
+    // read VM.state, or call any desktop function without editing a file first.
+    track(event, { tool: 'js' });
+    try {
+      const code = call.input && call.input.code;
+      if (typeof code !== 'string' || !code.trim()) throw new Error('js needs {"code": "<javascript>"}');
+      let value;
+      try { value = await (0, eval)(`(async () => (${code}))()`); }
+      catch { value = await (0, eval)(`(async () => { ${code} })()`); }
+      return { ok: true, value: value === undefined ? null : JSON.parse(JSON.stringify(value)) };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
+  if (!GUEST_TOOLS.has(call.tool)) return { ok: false, error: 'unknown tool: ' + call.tool, available: [...GUEST_TOOLS, 'js'] };
+  track(event, { tool: call.tool });
+  try { return await Agent.executeTool({ toolName: call.tool, input: call.input || {} }); }
+  catch (e) { return { ok: false, error: e.message }; }
+}
+
 const GuestBridge = {
   PREFIX: 'rpc-req-',
   CLI: 'vibeos',
@@ -721,34 +752,7 @@ const GuestBridge = {
       let call;
       try { call = JSON.parse(raw); }
       catch (e) { await this.answer(id, { ok: false, error: 'request was not valid JSON: ' + e.message }); continue; }
-      if (!call || !call.tool) { await this.answer(id, { ok: false, error: 'request needs a "tool" field' }); continue; }
-      if (call.tool === 'js') {
-        // `vibeos js '<code>'` runs in the desktop's own origin and returns the
-        // value (awaited) as JSON. The machine is trusted and the agent can
-        // already rewrite os.js through write_file, so this is not a new power,
-        // only a shorter path to it: a script in the VM can open a window, read
-        // VM.state, or call any desktop function without editing a file first.
-        track('guest_rpc', { tool: 'js' });
-        let result;
-        try {
-          const code = call.input && call.input.code;
-          if (typeof code !== 'string' || !code.trim()) throw new Error('js needs {"code": "<javascript>"}');
-          const value = await (0, eval)(`(async () => (${code}))()`).catch(async () => (0, eval)(`(async () => { ${code} })()`));
-          result = { ok: true, value: value === undefined ? null : JSON.parse(JSON.stringify(value)) };
-        } catch (e) { result = { ok: false, error: e.message }; }
-        await this.answer(id, result);
-        continue;
-      }
-      if (!GUEST_TOOLS.has(call.tool)) {
-        await this.answer(id, { ok: false, error: 'unknown tool: ' + call.tool, available: [...GUEST_TOOLS, 'js'] });
-        continue;
-      }
-
-      track('guest_rpc', { tool: call.tool });
-      let result;
-      try { result = await Agent.executeTool({ toolName: call.tool, input: call.input || {} }); }
-      catch (e) { result = { ok: false, error: e.message }; }
-      await this.answer(id, result);
+      await this.answer(id, await bridgeCall(call, 'guest_rpc'));
     }
     // The guest deletes its own files; forget names that are gone so the set
     // cannot grow without bound in a long session.
@@ -788,7 +792,7 @@ const TOOL_SCHEMAS = [
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
   { name: 'reload_ui', description: 'Re-import the ui — system/ui/*.js — under the running kernel, live: the machine, the workspace, the chat log and this turn all stay, open windows are repainted by the new ui, and the turn goes on, so say what changed after it. A ui that does not parse, fails to import or throws while painting is refused with the error and the previous ui keeps running. Refuses when no system/ui file has been edited.',
     parameters: { type: 'object', properties: {}, required: [] } },
-  { name: 'reload_os', description: 'Reload the page so edits to system/kernel/*.js or system/os.css take effect (a system/ui edit needs only reload_ui). The reload ends this turn — nothing you say after it reaches the user — so make every edit first, call it once, last, and pass a note: it is shown in the chat after boot. Refuses when nothing has been edited. If the edited OS fails to boot, the stock one runs next time and says so — you cannot lock yourself out.',
+  { name: 'reload_os', description: 'Reload the page so edits to system/kernel/*.js or system/os.css take effect (a system/ui edit needs only reload_ui). The reload ends this turn — nothing you say after it reaches the user — so make every edit first, call it once, last, and pass a note: it is shown in the chat after boot. Refuses when nothing has been edited. If the edited OS fails to boot, the stock one runs next time and says so — you cannot lock yourself out. Through vibeos-mcp the reload ends the pairing as well: the token dies with the page, the package is told it was revoked, and driving the desktop again needs a new token from Settings > Capabilities.',
     parameters: { type: 'object', properties: { note: { type: 'string', description: 'One line shown in the chat after the reboot, e.g. what changed' } }, required: [] } },
   { name: 'web_fetch', description: 'Read a web page as text.',
     parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
@@ -852,6 +856,302 @@ async function jsonOf(r, who) {
   try { return JSON.parse(text); }
   catch { throw new Error(`${who} returned ${r.status}: ${text.trim().slice(0, 200) || '(empty body)'}`); }
 }
+
+/* ---------- bring your own agent ---------------------------------------
+
+   The alternative login. Claude Code, Cursor or Codex runs `npx vibeos-mcp
+   --token <token>` and drives this desktop with its own model and its own
+   subscription; vibeOS supplies the tools and the machine. A tab cannot
+   listen, so both ends dial the relay (app/api/mcp/[token]) and it pairs them
+   by token and copies frames. The contract between the two ends is in
+   packages/vibeos-mcp/README.md; the relay reads none of it but the hello.
+
+   The token is root on this desktop — edit_file on system/kernel/*.js and
+   vm_exec are in the tool set — so it lives in a module variable, never in
+   storage or a URL, is minted here with getRandomValues, and dies with the
+   tab. Revoke closes the socket, forgets it, and tells the relay so the
+   package holding it gets 4003 and then 4002 on every call.
+
+   Transport-agnostic on purpose: RemoteBridge speaks frames to whatever
+   RemoteSocket dials. Today that is the vibeos.sh relay (or the URL under
+   `vibeos-mcp-relay` in localStorage — the e2e's local relay); a local helper
+   on 127.0.0.1 is one more URL, not a second bridge.
+   -------------------------------------------------------------------- */
+
+let remoteToken = null;
+
+// The relay's one post-hello frame, byte for byte (lib/mcp-relay.ts REVOKE_FRAME).
+const MCP_REVOKE_FRAME = '{"revoke":true}';
+const MCP_TOKEN_RE = /^[0-9a-f]{64}$/;
+
+// A WebSocket that redials in place, the shape of RelaySocket without the
+// WISP stream bookkeeping: the relay is a serverless function that ends at
+// its maxDuration (800 s), so a healthy socket closes every ~13 minutes and
+// the hello has to be the first frame on every dial. Frames sent in a gap are
+// held and flushed. Five failed dials, or a close the relay means (4001
+// replaced, 4003 revoked), end it; the bridge says which.
+class RemoteSocket {
+  static delays = [500, 1000, 2000, 2000, 2000];
+
+  constructor(url, { hello, onOpen, onFrame, onGap, onEnd }) {
+    this.url = url;
+    this.hello = hello;
+    this.onOpen = onOpen; this.onFrame = onFrame; this.onGap = onGap; this.onEnd = onEnd;
+    this.__inner = null;            // the native socket of the moment; a test hook, and named so
+    this.opened = false;
+    this.ended = false;
+    this.attempt = 0;
+    this.redials = 0;
+    this.timer = null;
+    this.held = [];
+    this.dial();
+  }
+
+  dial() {
+    const inner = new WebSocket(this.url);
+    this.__inner = inner;
+    inner.addEventListener('open', () => {
+      if (inner !== this.__inner) return;
+      this.attempt = 0;
+      if (this.opened) this.redials++;
+      this.opened = true;
+      inner.send(JSON.stringify(this.hello()));
+      for (const frame of this.held.splice(0)) inner.send(frame);
+      this.onOpen();
+    });
+    inner.addEventListener('message', e => { if (inner === this.__inner) this.onFrame(e.data); });
+    inner.addEventListener('close', e => { if (inner === this.__inner) this.closed_(e); });
+  }
+
+  closed_(e) {
+    if (this.ended) return;
+    const meant = e.code === 4001 || e.code === 4003;
+    const delay = RemoteSocket.delays[this.attempt];
+    if (meant || delay === undefined) {
+      this.ended = true;
+      this.held = [];
+      this.onEnd({ code: e.code, reason: e.reason, gaveUp: !meant });
+      return;
+    }
+    if (this.attempt === 0) this.onGap();
+    this.attempt++;
+    this.timer = setTimeout(() => { this.timer = null; this.dial(); }, delay);
+  }
+
+  get open() { return !this.ended && this.__inner.readyState === 1; }
+
+  send(frame) {
+    if (this.ended) throw new Error('RemoteSocket: send after close');
+    if (this.open) this.__inner.send(frame); else this.held.push(frame);
+  }
+
+  close(code, reason) {
+    if (this.ended) return;
+    this.ended = true;
+    clearTimeout(this.timer);
+    this.held = [];
+    if (this.__inner.readyState < 2) this.__inner.close(code, reason);
+  }
+}
+
+const RemoteBridge = {
+  RELAY_KEY: 'vibeos-mcp-relay',
+  KEEPALIVE_MS: 30000,
+  // off | pairing | waiting | connected | error. `detail` is the agent's name
+  // when connected, the message when error, the reason while pairing.
+  state: 'off',
+  detail: '',
+  socket: null,
+  agentName: '',
+  calls: 0,
+  keepalive: null,
+  listeners: new Set(),
+
+  on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
+  emit() { this.listeners.forEach(fn => { try { fn(this.state, this.detail); } catch (e) { console.error('RemoteBridge listener failed:', e); } }); },
+  set(state, detail = '') {
+    if (state === this.state && detail === this.detail) return;
+    this.state = state; this.detail = detail;
+    this.emit();
+  },
+
+  get token() { return remoteToken; },
+  command() {
+    if (!remoteToken) throw new Error('RemoteBridge.command: no token — pair first');
+    return 'npx vibeos-mcp --token ' + remoteToken;
+  },
+
+  mint() {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+    if (!MCP_TOKEN_RE.test(hex)) throw new Error('minted a token that is not 64 hex');
+    return hex;
+  },
+
+  relayUrl() {
+    let override = null;
+    try { override = localStorage.getItem(this.RELAY_KEY); } catch {}
+    if (override) return override;
+    return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/mcp/relay';
+  },
+
+  // Pairing inside a host shell is refused: a remote agent with root on the
+  // page would have root on the machine the shell runs on, not on a VM.
+  refusal() {
+    if (typeof window.__TAURI__ !== 'undefined') return 'not inside a host shell: this page is running with native powers, and an agent with this token would have them too — pair from a browser tab instead.';
+    return null;
+  },
+
+  // The static mirror has no /api. Ask, the way runWithKey asks for the
+  // prompt endpoint: a 404 on the relay's URL is "no relay here", said in
+  // the pane instead of five failed dials behind a spinner.
+  async available() {
+    if (this.probe) return this.probe;
+    const url = this.relayUrl().replace(/^ws/, 'http');
+    let r;
+    try { r = await fetch(url, { method: 'HEAD' }); }
+    catch (e) { return { ok: false, reason: 'the relay at ' + url + ' did not answer: ' + e.message }; }
+    if (r.status === 404) this.probe = { ok: false, reason: 'this copy of vibeOS is served without /api, so there is no relay to pair through — open vibeos.sh/app to bring your own agent.' };
+    else this.probe = { ok: true };
+    return this.probe;
+  },
+
+  async pair() {
+    const refusal = this.refusal();
+    if (refusal) { this.set('error', refusal); return false; }
+    if (remoteToken) return true;
+    const probe = await this.available();
+    if (!probe.ok) { this.set('error', probe.reason); return false; }
+    remoteToken = this.mint();
+    this.agentName = '';
+    this.set('pairing', 'dialing the relay');
+    this.dial();
+    return true;
+  },
+
+  // The same token, a fresh dialer: after the relay gave up on us, without
+  // making the person paste a new command into their agent.
+  retry() {
+    if (!remoteToken) return this.pair();
+    if (this.socket) return true;
+    this.set('pairing', 'dialing the relay');
+    this.dial();
+    return true;
+  },
+
+  dial() {
+    this.socket = new RemoteSocket(this.relayUrl(), {
+      hello: () => ({ hello: 'tab', token: remoteToken }),
+      onOpen: () => {
+        // Unsolicited, for an agent already waiting; the package also asks on
+        // every connect of its own, and `want` is answered every time.
+        this.socket.send(JSON.stringify({ tools: TOOL_SCHEMAS }));
+        this.set('waiting');
+      },
+      onFrame: raw => this.handle(raw),
+      onGap: () => this.set('pairing', 'the relay dropped the socket; redialing'),
+      onEnd: ({ code, reason, gaveUp }) => {
+        this.socket = null;
+        this.stopKeepalive();
+        if (code === 4003) { remoteToken = null; this.set('off'); return; }
+        if (code === 4001) { this.set('error', 'another tab paired with this token and took its place; revoke here, or pair again there'); return; }
+        if (!gaveUp) throw new Error('RemoteSocket ended on a code it does not mean: ' + code);
+        this.set('error', `the relay closed the socket (${code}${reason ? ' ' + reason : ''}) and five redials failed — retry, or check the network`);
+      },
+    });
+    this.startKeepalive();
+  },
+
+  // The relay only says "peer not connected" when we send something, so a
+  // frame every 30 s is how the pane learns the agent left. The package
+  // ignores a frame with no id, tools or error.
+  startKeepalive() {
+    this.stopKeepalive();
+    this.keepalive = setInterval(() => { if (this.socket && this.socket.open) this.socket.send(JSON.stringify({ ping: Date.now() })); }, this.KEEPALIVE_MS);
+  },
+  stopKeepalive() { clearInterval(this.keepalive); this.keepalive = null; },
+
+  handle(raw) {
+    let msg;
+    try { msg = JSON.parse(raw); } catch (e) { console.error('RemoteBridge: a frame that is not JSON from the relay:', raw); return; }
+    if (!msg || typeof msg !== 'object') return;
+    if ('paired' in msg) { if (msg.paired) this.connected(); else this.set('waiting'); return; }
+    if (msg.want === 'tools') {
+      this.connected(typeof msg.agent === 'string' ? msg.agent.slice(0, 80) : '');
+      this.socket.send(JSON.stringify({ tools: TOOL_SCHEMAS }));
+      return;
+    }
+    if (msg.error && msg.code === 4002) { this.set('waiting'); return; }
+    if (msg.id != null && typeof msg.tool === 'string') { this.call(msg); return; }
+  },
+
+  connected(name = '') {
+    if (name) this.agentName = name;
+    const label = this.agentName || 'an agent';
+    if (this.state !== 'connected') track('mcp_paired');
+    this.set('connected', label);
+  },
+
+  async call(msg) {
+    this.calls++;
+    this.connected();
+    this.emit();
+    const result = await bridgeCall({ tool: msg.tool, input: msg.input }, 'mcp_call');
+    // The socket may have been cut or revoked while the tool ran: a held frame
+    // goes out on the redial (the package answers or has already failed the
+    // call by id); after a revoke there is nowhere to send and nothing owed.
+    if (!this.socket) return;
+    const frame = result && result.ok === false
+      ? { id: msg.id, error: result.error + (result.available ? ' (available: ' + result.available.join(', ') + ')' : '') }
+      : { id: msg.id, result };
+    this.socket.send(JSON.stringify(frame));
+  },
+
+  revoke() {
+    if (!remoteToken) return;
+    track('mcp_revoked');
+    const token = remoteToken;
+    const s = this.socket;
+    this.socket = null;
+    this.stopKeepalive();
+    remoteToken = null;
+    this.agentName = '';
+    if (s && s.open) { s.send(MCP_REVOKE_FRAME); s.close(1000, 'revoked'); }
+    else { if (s) s.close(1000, 'revoked'); this.deliverRevoke(token); }
+    this.set('off');
+  },
+
+  // A revoke clicked in a gap (the 800 s cut, any drop) used to forget the
+  // token here and nowhere else: the relay kept the agent side attached, the
+  // package read every later call as "peer not connected" — an outage, not a
+  // decision — and the token stayed resolvable for anyone holding it. One
+  // fresh dial carries the frame; the relay answers 4003 to both ends.
+  deliverRevoke(token) {
+    const ws = new WebSocket(this.relayUrl());
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify({ hello: 'tab', token }));
+      ws.send(MCP_REVOKE_FRAME);
+    });
+    ws.addEventListener('error', () => console.error('RemoteBridge: the relay did not take the revoke; the token is forgotten here, and the package will read peer not connected until the relay function ends'));
+  },
+
+  // The token dies with the tab, so the pairing must too: without this a
+  // closed or reloaded tab (reload_os included) left the agent side attached
+  // and the package answering "peer not connected" for good, with no way
+  // back but a new token pasted into its config.
+  unload() {
+    if (!remoteToken) return;
+    const s = this.socket;
+    if (s && s.open) s.send(MCP_REVOKE_FRAME);
+    else this.deliverRevoke(remoteToken);
+    this.socket = null;
+    this.stopKeepalive();
+    remoteToken = null;
+    this.agentName = '';
+    this.set('off');
+  },
+};
+window.addEventListener('pagehide', () => RemoteBridge.unload());
 
 const Agent = {
   // 5 was one read, one search, one edit, one reload and nothing left over for
@@ -1119,6 +1419,10 @@ const Agent = {
     }
     if (toolName === 'edit_file') {
       onStatus?.('editing ' + input.path + '…');
+      // Two edits of one file at once (the chat and a remote agent) are read →
+      // replace → write each; unserialized, both matched their anchor on the
+      // same text and the second write erased the first with ok:true.
+      return Workspace.exclusive(input.path, async () => {
       try {
         const text = await Workspace.readPath(input.path);
         const old = String(input.old ?? '');
@@ -1141,6 +1445,7 @@ const Agent = {
         track('edit_file', { os: /^system\//.test(input.path) });
         return { ok: true, path: input.path, note: applyNote(input.path) };
       } catch (e) { return { ok: false, error: e.message }; }
+      });
     }
     if (toolName === 'write_file') {
       onStatus?.('writing ' + input.path + '…');

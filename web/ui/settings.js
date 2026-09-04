@@ -354,7 +354,7 @@ export function FilesApp(body) {
   };
 }
 
-export function CapsApp(body) {
+export function CapsApp(body, win) {
   const rows = [
     ['Workspace storage',     'files',    'A real folder, or private browser storage as a fallback.'],
     ['Your actual disk',      'disk',     'Needs a picker: Chromium, and never inside a cross-origin frame.'],
@@ -382,7 +382,67 @@ export function CapsApp(body) {
     <p class="note" style="margin-top:12px">
       Everything marked <span class="no"><b>no</b></span> flips to yes when this same page is served
       by the local vibeOS binary. The UI code does not change — only the provider behind it.
-    </p>`;
+    </p>
+    <h3 style="margin:18px 0 6px">Bring your own agent</h3>
+    <p class="small muted" style="margin:0 0 8px">
+      Claude Code, Cursor or Codex can drive this desktop through <b>vibeos-mcp</b> with their own
+      model and subscription, instead of a pasted key. Pair, then add the command to your agent.
+    </p>
+    <p class="small" id="mcpState" style="margin:0 0 8px"></p>
+    <div class="row" id="mcpCmd" hidden style="gap:6px;align-items:center;margin:0 0 8px;flex-wrap:wrap">
+      <code id="mcpCommand" style="font-size:11px;word-break:break-all;user-select:all"></code>
+      <button class="btn sm" id="mcpCopy">copy</button>
+    </div>
+    <p class="note" id="mcpTrust" style="margin:0 0 10px"></p>
+    <div class="row" style="gap:6px">
+      <button class="btn p sm" id="mcpPair">Pair an agent</button>
+      <button class="btn sm" id="mcpRetry" hidden>Retry</button>
+      <button class="btn sm" id="mcpRevoke" hidden>Revoke</button>
+    </div>`;
+  mcpPane(body, win);
+}
+
+// The relay sees every call and the token is root: the pane says both in
+// plain words. Every string here — the state, the agent's name, an error,
+// the command — lands through textContent, never markup: the agent's name
+// is whatever the MCP client called itself.
+function mcpPane(body, win) {
+  const state = body.querySelector('#mcpState'), cmd = body.querySelector('#mcpCmd'), code = body.querySelector('#mcpCommand');
+  const trust = body.querySelector('#mcpTrust'), pair = body.querySelector('#mcpPair'), retry = body.querySelector('#mcpRetry'), revoke = body.querySelector('#mcpRevoke'), copy = body.querySelector('#mcpCopy');
+  trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token lives in this tab only and dies with it.';
+  const refusal = RemoteBridge.refusal();
+  let probe = null;
+  const paint = () => {
+    const st = RemoteBridge.state, d = RemoteBridge.detail;
+    state.className = 'small ' + (st === 'connected' ? 'yes' : st === 'error' ? 'no' : st === 'off' ? 'dimmer' : 'part');
+    state.textContent =
+      refusal ? 'Pairing is refused here — ' + refusal
+      : st === 'off' && probe && !probe.ok ? probe.reason
+      : st === 'off' ? 'No agent paired. Pairing mints a token for this tab.'
+      : st === 'pairing' ? 'Pairing — ' + d + '…'
+      : st === 'waiting' ? 'Waiting for an agent: paste the command into your MCP client. Talk to your agent in its own window; it drives this desktop, and the built-in chat keeps working alongside it.'
+      : st === 'connected' ? d + ' is connected and driving this desktop (' + RemoteBridge.calls + ' call' + (RemoteBridge.calls === 1 ? '' : 's') + '). Talk to it in its own window.'
+      : 'Not connected — ' + d;
+    const hasToken = !!RemoteBridge.token;
+    cmd.hidden = !hasToken;
+    if (hasToken) code.textContent = RemoteBridge.command();
+    pair.hidden = hasToken || !!refusal;
+    pair.disabled = !!refusal || (probe !== null && !probe.ok);
+    revoke.hidden = !hasToken;
+    retry.hidden = !(st === 'error' && hasToken && !RemoteBridge.socket);
+  };
+  pair.onclick = async () => { pair.disabled = true; await RemoteBridge.pair(); paint(); };
+  retry.onclick = () => { RemoteBridge.retry(); paint(); };
+  revoke.onclick = () => { RemoteBridge.revoke(); paint(); };
+  copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(RemoteBridge.command()); copy.textContent = 'copied'; }
+    catch (e) { copy.textContent = 'select the line and copy it (' + e.message + ')'; }
+  };
+  Windows.onDispose(win, RemoteBridge.on(paint));
+  paint();
+  // The static mirror has no /api: say so up front rather than after a
+  // click that dials nothing. A refused pane skips the probe.
+  if (!refusal && !RemoteBridge.token) RemoteBridge.available().then(r => { probe = r; paint(); });
 }
 
 export function SyncApp(body, win) {

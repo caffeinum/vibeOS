@@ -245,6 +245,16 @@ const Workspace = {
     if (typeof versionId !== 'function') throw new Error('versionId is missing: os.js must boot from the vibeOS loader');
     return { text, version: versionId(text) };
   },
+  // One read-modify-write of a path at a time: the chain is keyed by path
+  // and dropped when it drains, so a rejected step never wedges the next.
+  _exclusive: new Map(),
+  exclusive(path, fn) {
+    const prev = this._exclusive.get(path) || Promise.resolve();
+    const run = prev.catch(() => {}).then(fn);
+    const tail = run.catch(() => {}).then(() => { if (this._exclusive.get(path) === tail) this._exclusive.delete(path); });
+    this._exclusive.set(path, tail);
+    return run;
+  },
   async writePath(path, text) {
     if (!this.open) throw new Error('no workspace is open');
     const refused = this.refusedSystemWrite(path, text);
