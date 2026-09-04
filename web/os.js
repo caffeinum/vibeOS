@@ -320,13 +320,16 @@ const Workspace = {
     return out;
   },
 
+  // Raw sources only; Apps.list decides which of them are apps, so both
+  // stores are judged by the one rule. A file that cannot be read is
+  // returned with its error rather than dropped, for the same reason.
   async listApps() {
     if (!this.open) return [];
     const out = [];
     for await (const [name, h] of this.apps.entries()) {
       if (h.kind !== 'file' || !name.endsWith('.js')) continue;
-      const source = await (await h.getFile()).text();
-      out.push({ name, source, requires: parseRequires(source), title: parseTitle(source) || name.replace(/\.js$/, '') });
+      try { out.push({ name, source: await (await h.getFile()).text() }); }
+      catch (e) { out.push({ name, error: e.message }); }
     }
     return out.sort((a, b) => a.name.localeCompare(b.name));
   },
@@ -343,6 +346,51 @@ function parseRequires(src) {
 function parseTitle(src) {
   const m = /^\s*\/\/\s*@title\s+(.+)$/m.exec(src);
   return m ? m[1].trim() : null;
+}
+
+// A .js file is a dock app only if it carries the header the agent always
+// writes. Before this gate, any .js that reached /mnt or apps/ by any route —
+// curl, apt, an unpacked archive — was listed in the dock under its filename
+// and blob-imported in-origin next to the user's API key, authored by nobody.
+// A refused file is not hidden: it comes back with the reason, so Settings
+// can show it and the agent can add the header when asked. That includes a
+// file that could not be read at all — v86 rejects an empty file with "File
+// not found", and a .js in a /mnt subdirectory is listed by its basename and
+// so cannot be read by it; both used to vanish into a catch {}.
+//
+// This is trust by convention, not a security boundary: any curl'd file with
+// a "// @title" line on any line is a dock app under whatever title that line
+// says. The gate stops a file from becoming an app by accident, not on
+// purpose. What it must guarantee instead is that nothing about such a file —
+// name, title, requires, reason — is ever interpreted as HTML by the desktop.
+const NOT_AN_APP = {
+  header: 'not an app (no // @title header)',
+  vm:     'not an app (// @target vm — a VM script, not a window)',
+  read:   'could not be read: ',
+};
+function classifyApp(name, { source, error }) {
+  if (error !== undefined) return { name, reason: NOT_AN_APP.read + error };
+  const title = parseTitle(source);
+  if (!title) return { name, reason: NOT_AN_APP.header };
+  if (parseTarget(source) === 'vm') return { name, reason: NOT_AN_APP.vm };
+  return { name, source, title, requires: parseRequires(source) };
+}
+
+// What the gate above checks for, guaranteed on every save. create_app used
+// to write a headerless source verbatim and report it saved: the window opened
+// once, and the file then sat in unlisted forever while the chat said "saved".
+// Returns the source actually written and which header lines were added.
+function ensureHeader(title, source) {
+  const added = [];
+  const line = (tag, value, present) => {
+    if (present) return;
+    source = `// @${tag} ${value}\n` + source;
+    added.unshift(tag);
+  };
+  line('requires', 'none', /^\s*\/\/\s*@requires\s/m.test(source));
+  line('target', 'browser', /^\s*\/\/\s*@target\s/m.test(source));
+  line('title', String(title || 'app').replace(/\s+/g, ' ').trim() || 'app', !!parseTitle(source));
+  return { source, added };
 }
 const missingCaps = reqs => reqs.filter(r => !CAP.supports[r]);
 
@@ -975,7 +1023,7 @@ const TOOL_SCHEMAS = [
     parameters: { type: 'object', properties: { title: { type: 'string' }, source: { type: 'string' } }, required: ['title', 'source'] } },
   { name: 'vm_exec', description: 'Run a shell command in the vibeOS Linux VM and return stdout.',
     parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
-  { name: 'list_apps', description: 'List apps already saved in the vibeOS workspace.',
+  { name: 'list_apps', description: 'List apps already saved in the vibeOS workspace. .js files without a // @title header are not apps and come back under unlisted with the reason; add the header with edit_file if the user wants one in the dock.',
     parameters: { type: 'object', properties: {}, required: [] } },
   { name: 'set_theme', description: 'Restyle the desktop itself: a theme id, or individual colour tokens.',
     parameters: { type: 'object', properties: { theme: { type: 'string', enum: ['vibeos-dark', 'vibeos-light', 'win95'] },
@@ -1134,10 +1182,15 @@ const Agent = {
         }
         return { ok: true, kind: 'vm', title, file, installed, source };
       }
-      const saved = await Apps.save(title, source).catch(() => ({}));
+      const saved = await Apps.save(title, source).catch(e => ({ error: e.message }));
       paintDock();
-      launchApp({ title, source, requires: parseRequires(source) });
-      return { ok: true, kind: 'window', title, saved };
+      // Launch what was written, not what was passed: they differ when the
+      // header had to be added, and the window must match the file.
+      const written = saved.source || source;
+      launchApp({ title, source: written, requires: parseRequires(written) });
+      const { source: _written, ...report } = saved;
+      return { ok: true, kind: 'window', title, saved: report,
+               ...(saved.headerAdded?.length ? { note: `the source had no ${saved.headerAdded.map(t => '// @' + t).join(', ')} line; it was prepended so the file is a dock app and not unlisted` } : {}) };
     }
     if (toolName === 'vm_exec') {
       onStatus?.('running in vm…');
@@ -1168,11 +1221,13 @@ const Agent = {
     }
     if (toolName === 'list_apps') {
       onStatus?.('listing apps…');
-      const apps = await Apps.list();
+      const { apps, unlisted } = await Apps.list();
       // Built-ins listed too, marked. Without this the agent had no way to
       // know the Browser existed, and answered "add a Back button to the
-      // browser" by editing the nearest app it could see.
-      return { ok: true, apps: apps.map(a => ({ title: a.title, name: a.name, builtin: false })), builtin: BUILTIN_APPS() };
+      // browser" by editing the nearest app it could see. Unlisted files are
+      // reported with their reason so "why is X not in the dock" has an
+      // answer, and edit_file can add the header if the user wants it there.
+      return { ok: true, apps: apps.map(a => ({ title: a.title, name: a.name, builtin: false })), unlisted, builtin: BUILTIN_APPS() };
     }
     if (toolName === 'read_file') {
       onStatus?.('reading ' + input.path + '…');
@@ -1416,7 +1471,7 @@ function renderUpsell(mount, missing) {
     <div class="upsell">
       <h3 style="margin:0 0 6px">Needs the native build</h3>
       <p class="small muted" style="margin:0 0 10px">
-        This app requires <b>${nativeOnly.join(', ')}</b>, which a browser tab cannot provide.
+        This app requires <b></b>, which a browser tab cannot provide.
       </p>
       <p class="small muted" style="margin:0">
         ${Workspace.open && !Workspace.private
@@ -1428,6 +1483,8 @@ function renderUpsell(mount, missing) {
           : `Open a workspace first, and your apps become ordinary files the native build can open.`}
       </p>
     </div>`;
+  // @requires is a header line in a file the guest can write: text, not html.
+  mount.querySelector('b').textContent = nativeOnly.join(', ');
 }
 
 /* ---------- apps ------------------------------------------------------ */
@@ -1470,7 +1527,7 @@ function WorkspaceApp(body) {
       return;
     }
 
-    const apps = await Apps.list();
+    const { apps, unlisted } = await Apps.list();
     body.innerHTML = `
       <div class="row" style="margin-bottom:10px">
         <h3 style="margin:0;flex:1">apps <span class="tiny dimmer">· from ${Apps.source === 'vm' ? 'the VM' : Workspace.label}</span></h3>
@@ -1488,17 +1545,38 @@ function WorkspaceApp(body) {
         </p>
       </div>`;
     const list = body.querySelector('#list');
-    if (!apps.length) list.innerHTML = '<p class="small dimmer">No apps yet — build one in the Agent window.</p>';
+    if (!apps.length && !unlisted.length) list.innerHTML = '<p class="small dimmer">No apps yet — build one in the Agent window.</p>';
+    // Every string on these cards — name, title, requires, reason — comes from
+    // a file the guest can write, so none of it goes through innerHTML. A
+    // filename of `<img src=x onerror=…>` in /mnt ran in-origin, next to the
+    // key, the moment Settings opened.
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    const label = (top, topCls, bottom, bottomCls) => {
+      const s = el('span'); s.style.flex = '1';
+      s.append(el('span', topCls, top), el('br'), el('span', bottomCls, bottom));
+      return s;
+    };
     apps.forEach(a => {
       const missing = missingCaps(a.requires);
-      const card = document.createElement('div');
-      card.className = 'card' + (missing.length ? ' blocked' : '');
-      card.innerHTML = `
-        <span>${missing.length ? '🔒' : '📦'}</span>
-        <span style="flex:1">${a.title}<br><span class="tiny dimmer mono">${a.name}</span></span>
-        ${a.requires.map(r => `<span class="req ${CAP.supports[r] ? '' : 'miss'}">${r}</span>`).join('')}
-        <button class="btn sm">${missing.length ? 'Why?' : 'Open'}</button>`;
-      card.querySelector('button').onclick = () => launchApp(a);
+      const card = el('div', 'card' + (missing.length ? ' blocked' : ''));
+      card.append(el('span', '', missing.length ? '🔒' : '📦'), label(a.title, '', a.name, 'tiny dimmer mono'));
+      a.requires.forEach(r => card.append(el('span', 'req' + (CAP.supports[r] ? '' : ' miss'), r)));
+      const open = el('button', 'btn sm', missing.length ? 'Why?' : 'Open');
+      open.onclick = () => launchApp(a);
+      card.append(open);
+      list.appendChild(card);
+    });
+    // Shown, not hidden: a file that silently never appears looks like a lost
+    // file. There is no Open button because opening is exactly what the gate
+    // refuses.
+    unlisted.forEach(u => {
+      const card = el('div', 'card blocked');
+      card.append(el('span', '', '📄'), label(u.name, 'mono', u.reason, 'tiny dimmer'));
       list.appendChild(card);
     });
     body.querySelector('#change').onclick = async () => {
@@ -1531,12 +1609,15 @@ function FilesApp(body) {
     items.slice(0, 300).forEach(it => {
       const row = document.createElement('div');
       row.className = 'file';
-      row.innerHTML = `<span>${it.dir ? '📁' : '📄'}</span><span>${it.name}</span>`;
+      // Names are the guest's to choose once Sync has pulled its files here.
+      row.innerHTML = `<span>${it.dir ? '📁' : '📄'}</span><span></span>`;
+      row.lastChild.textContent = it.name;
       row.onclick = async () => {
         if (it.dir) return show(it.handle, label + '/' + it.name);
         try {
           const text = await CAP.read(it.handle);
-          view.innerHTML = `<h3 style="margin-top:12px">${it.name}</h3>`;
+          view.innerHTML = '<h3 style="margin-top:12px"></h3>';
+          view.firstChild.textContent = it.name;
           const pre = document.createElement('pre');
           pre.className = 'out'; pre.textContent = text.slice(0, 4000) || '(empty)';
           view.appendChild(pre);
@@ -1722,13 +1803,15 @@ function ChatApp(body) {
         for (const item of result.created) {
           if (item.kind === 'vm') {
             track('app_generated', { target: 'vm' });
-            const b = bubble('vibeos', `<b>${item.title}</b> <span class="req">vm script</span><br>
-              <span class="tiny dimmer">${item.installed ? 'installed at <b>/mnt/' + item.file + '</b>' : 'not installed — the VM is not running'}</span>
+            const b = bubble('vibeos', `<b></b> <span class="req">vm script</span><br>
+              <span class="tiny dimmer">${item.installed ? 'installed at <b></b>' : 'not installed — the VM is not running'}</span>
               <div class="row" style="margin-top:8px">
                 <button class="btn sm" id="run" ${item.installed ? '' : 'disabled'}>Run it</button>
                 <button class="btn sm" id="src">Source</button>
               </div>
               <pre class="out" id="res" style="display:none;margin-top:8px"></pre>`);
+            b.querySelector('b').textContent = item.title;
+            if (item.installed) b.querySelector('.dimmer b').textContent = '/mnt/' + item.file;
             const res = b.querySelector('#res');
             b.querySelector('#src').onclick = () => { res.style.display = 'block'; res.textContent = item.source; };
             if (item.installed) b.querySelector('#run').onclick = async () => {
@@ -1739,8 +1822,10 @@ function ChatApp(body) {
           } else {
             track('app_generated', { target: 'browser' });
             const where = [item.saved && item.saved.vm && 'the VM', item.saved && item.saved.folder && Workspace.label].filter(Boolean).join(' and ');
-            bubble('vibeos', `<b>${item.title}</b> <span class="req">window</span><br>
-              <span class="tiny dimmer">${where ? 'saved to ' + where : 'opened on the desktop'}</span>`);
+            const headed = item.saved && item.saved.headerAdded && item.saved.headerAdded.length ? ' (header added)' : '';
+            bubble('vibeos', `<b></b> <span class="req">window</span><br>
+              <span class="tiny dimmer">${where ? 'saved to ' + where + headed : 'opened on the desktop'}</span>`)
+              .querySelector('b').textContent = item.title;
           }
         }
 
@@ -1817,13 +1902,15 @@ function ChatApp(body) {
       if (VM.state === 'ready') {
         try { await VM.writeText(file, source); installed = true; } catch {}
       }
-      const b = bubble('vibeos', `<b>${title}</b> <span class="req">vm script</span><br>
-        <span class="tiny dimmer">${installed ? 'installed at <b>/mnt/' + file + '</b>' : 'not installed — the VM is not running'}</span>
+      const b = bubble('vibeos', `<b></b> <span class="req">vm script</span><br>
+        <span class="tiny dimmer">${installed ? 'installed at <b></b>' : 'not installed — the VM is not running'}</span>
         <div class="row" style="margin-top:8px">
           <button class="btn sm" id="run" ${installed ? '' : 'disabled'}>Run it</button>
           <button class="btn sm" id="src">Source</button>
         </div>
         <pre class="out" id="res" style="display:none;margin-top:8px"></pre>`);
+      b.querySelector('b').textContent = title;
+      if (installed) b.querySelector('.dimmer b').textContent = '/mnt/' + file;
       const res = b.querySelector('#res');
       b.querySelector('#src').onclick = () => { res.style.display = 'block'; res.textContent = source; };
       if (installed) b.querySelector('#run').onclick = async () => {
@@ -1834,18 +1921,20 @@ function ChatApp(body) {
     } else {
       const saved = await Apps.save(title, source).catch(() => ({}));
       paintDock();
+      const written = saved.source || source;
       const where = [saved.vm && 'the VM', saved.folder && Workspace.label].filter(Boolean).join(' and ');
-      const b = bubble('vibeos', `<b>${title}</b> <span class="req">window</span><br>
-        <span class="tiny dimmer">${where ? 'saved to ' + where : 'not saved — no VM and no workspace'}</span>
+      const b = bubble('vibeos', `<b></b> <span class="req">window</span><br>
+        <span class="tiny dimmer">${where ? 'saved to ' + where : 'not saved — no VM and no workspace'}${saved.headerAdded?.length ? ' (header added)' : ''}</span>
         <div class="row" style="margin-top:8px">
           <button class="btn sm" id="open">Open</button>
           <button class="btn sm" id="src">Source</button>
         </div>
         <pre class="out" id="res" style="display:none;margin-top:8px"></pre>`);
+      b.querySelector('b').textContent = title;
       b.querySelector('#src').onclick = () => {
-        const r = b.querySelector('#res'); r.style.display = 'block'; r.textContent = source;
+        const r = b.querySelector('#res'); r.style.display = 'block'; r.textContent = written;
       };
-      b.querySelector('#open').onclick = () => launchApp({ title, source, requires: parseRequires(source) });
+      b.querySelector('#open').onclick = () => launchApp({ title, source: written, requires: parseRequires(written) });
       b.querySelector('#open').click();
     }
   }
@@ -2468,35 +2557,44 @@ const Apps = {
   // safely in the folder on disk. They came back only when the 60s sync tick
   // happened to push them in. Files are the durable copy; the VM is a cache of
   // them, and a cold cache must not read as an empty disk.
+  //
+  // Returns { apps, unlisted }: apps carry the header the agent writes and go
+  // in the dock; unlisted are .js files without one, or that could not be
+  // read, each with the reason.
   async list() {
     const byName = new Map();
 
     if (Workspace.open) {
-      for (const a of await Workspace.listApps().catch(() => [])) byName.set(a.name, a);
+      for (const f of await Workspace.listApps().catch(() => [])) byName.set(f.name, f);
     }
     if (VM.state === 'ready') {
       for (const f of (Sync.vmFiles() || []).filter(f => f.name.endsWith('.js'))) {
-        try {
-          const src = await VM.readText(f.name);
-          // The VM wins on a name collision: it is where the agent just wrote.
-          byName.set(f.name, { name: f.name, source: src, requires: parseRequires(src),
-                               title: parseTitle(src) || f.name.replace(/\.js$/, '') });
-        } catch {}
+        // The VM wins on a name collision: it is where the agent just wrote.
+        try { byName.set(f.name, { source: await VM.readText(f.name) }); }
+        catch (e) { byName.set(f.name, { error: e.message }); }
       }
     }
-    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const apps = [], unlisted = [];
+    for (const [name, f] of byName) {
+      const c = classifyApp(name, f);
+      (c.reason ? unlisted : apps).push(c);
+    }
+    const byNameAsc = (a, b) => a.name.localeCompare(b.name);
+    return { apps: apps.sort(byNameAsc), unlisted: unlisted.sort(byNameAsc) };
   },
 
   // Write to the VM first, then mirror to disk. Returns what actually happened
-  // rather than a boolean, so the UI can say so instead of implying both.
+  // rather than a boolean, so the UI can say so instead of implying both —
+  // including the source as written, since the header may have been added.
   async save(title, source) {
     const file = (title || 'app').replace(/[^a-z0-9-_]+/gi, '-').toLowerCase().slice(0, 40) + '.js';
-    const out = { file, vm: false, folder: false };
+    const headed = ensureHeader(title, source);
+    const out = { file, vm: false, folder: false, headerAdded: headed.added, source: headed.source };
     if (VM.state === 'ready') {
-      try { await VM.writeText(file, source); out.vm = true; } catch {}
+      try { await VM.writeText(file, headed.source); out.vm = true; } catch {}
     }
     if (Workspace.open) {
-      try { await Workspace.saveApp(title || 'app', source); out.folder = true; } catch {}
+      try { await Workspace.saveApp(title || 'app', headed.source); out.folder = true; } catch {}
     }
     return out;
   },
@@ -2538,11 +2636,12 @@ function SyncApp(body) {
       const [label, cls, action] = LABEL[r.state];
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td class="mono tiny">${r.name}</td>
+        <td class="mono tiny"></td>
         <td>${r.inWs ? '●' : '<span class="dimmer">—</span>'}</td>
         <td>${r.inVm ? '●' : '<span class="dimmer">—</span>'}</td>
         <td class="${cls}">${label}</td>
         <td style="text-align:right">${action ? `<button class="btn sm">${action}</button>` : ''}</td>`;
+      tr.firstElementChild.textContent = r.name;   // a VM filename, so never markup
       const btn = tr.querySelector('button');
       if (btn) btn.onclick = async () => {
         try { r.state === 'push' ? await Sync.push(r.name) : await Sync.pull(r.name); await paint(); }
@@ -3051,7 +3150,7 @@ async function paintDock() {
   add('🌐', 'Browser', () => openWindow(SHELL.browser));
 
   let apps = [];
-  try { apps = await Apps.list(); } catch {}
+  try { apps = (await Apps.list()).apps; } catch {}
   if (apps.length) {
     const sep = document.createElement('span');
     sep.style.cssText = 'width:1px;background:rgba(0,0,0,.18);margin:4px 2px';
@@ -3059,8 +3158,9 @@ async function paintDock() {
   }
   apps.slice(0, 8).forEach(a => {
     const missing = missingCaps(a.requires);
-    const b = add(a.title.slice(0, 2).toUpperCase(), a.title + (missing.length ? ' (needs ' + missing.join(', ') + ')' : ''),
-                  () => launchApp(a));
+    // The title is a header line in a file the guest can write: text, not html.
+    const b = add('', a.title + (missing.length ? ' (needs ' + missing.join(', ') + ')' : ''), () => launchApp(a));
+    b.textContent = a.title.slice(0, 2).toUpperCase();
     b.style.fontSize = '13px';
     b.style.fontWeight = '700';
     if (missing.length) b.style.opacity = '.5';
