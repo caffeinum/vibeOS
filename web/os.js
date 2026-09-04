@@ -47,6 +47,12 @@ const inCrossOriginFrame = (() => {
 const canPickDirectory = ('showDirectoryPicker' in window) && !inCrossOriginFrame;
 const canStoreWorkspace = canPickDirectory || !!(navigator.storage && navigator.storage.getDirectory);
 
+// null, a string, NaN and 0 all used to run with whatever setTimeout made of
+// them; a timeout that is not a number is a bug in the caller, so say so.
+const checkTimeout = (timeoutMs) => {
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive integer');
+};
+
 const BrowserProvider = {
   name: 'browser', label: 'Browser',
   supports: {
@@ -75,7 +81,7 @@ const BrowserProvider = {
   async read(handle) { return (await handle.getFile()).text(); },
   // Real, once the background Linux is up — but it is the VM's shell, on the
   // VM's disk. Never the user's machine. The capability table says so.
-  async shell(cmd) { return VM.exec(cmd); },
+  async shell(cmd, timeoutMs = 20000) { checkTimeout(timeoutMs); return VM.exec(cmd, timeoutMs); },
 };
 
 const NativeProvider = {
@@ -89,9 +95,10 @@ const NativeProvider = {
     catch { return false; } finally { clearTimeout(t); }
   },
   async list(path='~') { return (await (await fetch(`${this.base}/fs?path=${encodeURIComponent(path)}`)).json()); },
-  async shell(cmd) {
+  async shell(cmd, timeoutMs = 20000) {
+    checkTimeout(timeoutMs);
     const r = await fetch(this.base + '/exec', { method:'POST',
-      headers: {'content-type':'application/json'}, body: JSON.stringify({ cmd }) });
+      headers: {'content-type':'application/json'}, body: JSON.stringify({ cmd, timeoutMs }) });
     return (await r.json()).stdout;
   },
 };
@@ -293,6 +300,17 @@ const Workspace = {
     const w = await fh.createWritable(); await w.write(text); await w.close();
   },
 
+  // Which OS files the loader would boot from. A blank os.js counts as none:
+  // the loader reads it as "stock" (that is how write_file('') un-forks), so a
+  // reload after one would come back the same and say nothing.
+  async forkedSystem() {
+    const out = [];
+    for (const name of ['os.js', 'os.css']) {
+      try { if ((await this.readSystem(name)).trim()) out.push('system/' + name); } catch {}
+    }
+    return out;
+  },
+
   // Generated code lives in apps/, everything else in data/. The VM's 9p mount
   // is flat, so map by extension rather than inventing a second tree inside it.
   dirFor(name) { return name.endsWith('.js') ? this.apps : this.dataDir; },
@@ -354,8 +372,9 @@ function parseTitle(src) {
 // A refused file is not hidden: it comes back with the reason, so Settings
 // can show it and the agent can add the header when asked. That includes a
 // file that could not be read at all — v86 rejects an empty file with "File
-// not found", and a .js in a /mnt subdirectory is listed by its basename and
-// so cannot be read by it; both used to vanish into a catch {}.
+// not found", which used to vanish into a catch {}. A .js in a /mnt
+// subdirectory is not here at all: the mirror is flat (Sync.vmFiles), so it
+// stays in the machine and the Sync pane names the directory as not mirrored.
 //
 // This is trust by convention, not a security boundary: any curl'd file with
 // a "// @title" line on any line is a dock app under whatever title that line
@@ -392,6 +411,25 @@ function ensureHeader(title, source) {
   return { source, added };
 }
 const missingCaps = reqs => reqs.filter(r => !CAP.supports[r]);
+
+// A "terminal" that is a JavaScript switch on "ls" / "echo" / "help" opens,
+// prints a prompt and runs nothing — it passed every check the desktop had
+// because it is a valid window app. Both rules below are provable from the
+// source alone, so they can refuse before Apps.save; the fix is in the
+// message because the model reads it as the tool result and tries again.
+// A "Console log viewer" with @requires none is the accepted false positive:
+// it is refused too, and the message says what to change.
+function lintApp(title, requires, source) {
+  if (/api\.shell\s*\(/.test(source)) return null;
+  const machine = `The machine is ${VM.state}.`;
+  if (/\b(terminal|term|shell|console)\b/i.test(title)) {
+    return { rule: 'fake_terminal', error: `a terminal must drive the Linux VM: declare // @requires shell and run each line with api.shell(line). ${machine}` };
+  }
+  if (requires.includes('shell')) {
+    return { rule: 'unused_shell', error: `declares // @requires shell but never calls api.shell(). Run commands through api.shell(cmd) or drop the requirement. ${machine}` };
+  }
+  return null;
+}
 
 
 /* ---------- the model, when a server is holding a key ------------------ */
@@ -714,7 +752,13 @@ const Theme = {
       // reject it rather than let the agent think it worked.
       const known = VibeOSSkills.getTheme(this.id).tokens;
       for (const [key, value] of Object.entries(custom || {})) {
-        if (!(key in known)) throw new Error('unknown theme token: ' + key);
+        if (!(key in known)) {
+          // There is no wallpaper token, on purpose: an image is an edit to
+          // the #desktop rule, and the error says where rather than letting
+          // the model guess a fourth name for it.
+          const hint = /wallpaper|bg|background/i.test(key) ? ' Wallpaper is an edit to system/os.css (#desktop rule).' : '';
+          throw new Error('unknown theme token: ' + key + hint);
+        }
         if (!this.safeValue(value)) {
           throw new Error('theme token ' + key + ' must be a plain colour value, got: ' + String(value).slice(0, 40));
         }
@@ -751,7 +795,8 @@ TARGET 1, a desktop window (default). Header exactly:
 // @requires <space-separated caps, or none>
 Caps: files (read the workspace), shell (run commands in the VM). Use none unless needed.
 Then: export default function (mount, api) { ... }
-mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.shell(cmd) -> stdout (needs shell). api.onResize((w,h) => ...) when layout depends on size.
+mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size.
+api.shell(cmd, timeoutMs = 20000) -> Promise<string> (needs shell): stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted. List a directory with ls -1p. Anything that can run past ~15 s (apk add, apt-get, git clone, a build) needs a bigger timeout — api.shell(cmd, 600000) — or goes to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
 
 Layout rules (required): root width/height 100%, box-sizing:border-box, display:flex, flex-direction:column, overflow:hidden on mount. No document scroll, no min-height exceeding the window. Modest type and padding; empty states must fit. Scroll inner panes only (overflow:auto, scrollbar-width:thin), never mount.
 
@@ -900,6 +945,18 @@ const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'set_theme', 
 
 // What the agent is told about the shell's own apps. They are functions in
 // os.js, so "change the Browser" is an edit to system/os.js — not a request.
+// One sentence, said wherever the agent or the person looks at /mnt, so a
+// directory made in the guest is not discovered missing from the folder later.
+const MOUNT_MAPPING = '/mnt is the workspace, flat: /mnt/<name> is data/<name> and /mnt/<name>.js is apps/<name>.js; system/ is not in /mnt and subdirectories under /mnt are not mirrored, nor are symlinks or special files — only regular files at the root of /mnt (the rest is listed under unmirrored).';
+
+// S_IFMT classes of a 9p inode mode, named so a filter reads as what it keeps.
+const INODE_TYPES = { 0x8000: 'file', 0x4000: 'dir', 0xA000: 'symlink', 0x1000: 'fifo', 0xC000: 'socket', 0x2000: 'chardev', 0x6000: 'blockdev' };
+function inodeType(mode) {
+  const t = INODE_TYPES[mode & 0xF000];
+  if (!t) throw new Error(`unknown 9p inode mode ${mode.toString(8)}`);
+  return t;
+}
+
 const BUILTIN_APPS = () => Object.entries(SHELL).map(([id, s]) => ({
   id, title: s.title, builtin: true,
   source: 'system/os.js', hint: `search_file system/os.js for "function ${s.render.name}"`,
@@ -1024,9 +1081,9 @@ const GuestBridge = {
 const TOOL_SCHEMAS = [
   { name: 'create_app', description: 'Create a vibeOS desktop window app or install a VM script. Pass complete source with the // @title, // @target and // @requires headers.',
     parameters: { type: 'object', properties: { title: { type: 'string' }, source: { type: 'string' } }, required: ['title', 'source'] } },
-  { name: 'vm_exec', description: 'Run a shell command in the vibeOS Linux VM and return stdout.',
-    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
-  { name: 'list_apps', description: 'List apps already saved in the vibeOS workspace. .js files without a // @title header are not apps and come back under unlisted with the reason; add the header with edit_file if the user wants one in the dock.',
+  { name: 'vm_exec', description: 'Run a shell command in the vibeOS Linux VM and return its output (stdout and stderr, ANSI stripped). Waits 20 s by default; pass timeout_s (up to 600) for an install or a build, or background it (cmd > /mnt/job.log 2>&1 &) and tail the log.',
+    parameters: { type: 'object', properties: { command: { type: 'string' }, timeout_s: { type: 'integer', minimum: 1, maximum: 600, description: 'Seconds to wait before the command is interrupted with Ctrl-C and the call fails. Default 20.' } }, required: ['command'] } },
+  { name: 'list_apps', description: 'List apps already saved in the vibeOS workspace. .js files without a // @title header are not apps and come back under unlisted with the reason; add the header with edit_file if the user wants one in the dock. The reply also carries the /mnt mapping: the mount is flat and subdirectories under /mnt are not mirrored, and unmirrored names the root entries the mirror skipped (directories, symlinks, special files).',
     parameters: { type: 'object', properties: {}, required: [] } },
   { name: 'set_theme', description: 'Restyle the desktop itself: a theme id, or individual colour tokens.',
     parameters: { type: 'object', properties: { theme: { type: 'string', enum: ['vibeos-dark', 'vibeos-light', 'win95'] },
@@ -1039,13 +1096,25 @@ const TOOL_SCHEMAS = [
     parameters: { type: 'object', properties: { path: { type: 'string' }, old: { type: 'string' }, new: { type: 'string' } }, required: ['path', 'old', 'new'] } },
   { name: 'write_file', description: 'Write a whole workspace file (apps/*.js, data/*, system/os.js, system/os.css). Prefer edit_file for changes.',
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
-  { name: 'reload_os', description: 'Reload the desktop so edits to system/os.js or system/os.css take effect. If the edited OS fails to boot, the stock one runs next time and says so — you cannot lock yourself out.',
-    parameters: { type: 'object', properties: {}, required: [] } },
+  { name: 'reload_os', description: 'Reload the desktop so edits to system/os.js or system/os.css take effect. The reload ends this turn — nothing you say after it reaches the user — so make every edit first, call it once, last, and pass a note: it is shown in the chat after boot. Refuses when nothing has been edited. If the edited OS fails to boot, the stock one runs next time and says so — you cannot lock yourself out.',
+    parameters: { type: 'object', properties: { note: { type: 'string', description: 'One line shown in the chat after the reboot, e.g. what changed' } }, required: [] } },
   { name: 'web_fetch', description: 'Read a web page as text.',
     parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
   { name: 'web_search', description: 'Search the web and get back result titles and URLs.',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
 ];
+
+// reload_os kills the page mid-turn, so whatever the model says after it never
+// arrives. The note it passed is parked here and the next boot's chat reads it.
+const RELOAD_NOTE = 'vibeos-reload-note';
+
+// os.js is a classic script and the loader boots the stored copy as one; a
+// function body parses the same text, so this catches a syntax error before it
+// costs a failed boot and a recovery. Nothing runs: new Function only compiles.
+function parseError(js) {
+  try { new Function(js); return null; }
+  catch (e) { return e.name + ': ' + e.message; }
+}
 
 /* Read a JSON reply, or say what came back instead. Vercel answers a request
    body over 4.5 MB with a 413 as text/plain before the route ever runs, so
@@ -1058,7 +1127,9 @@ async function jsonOf(r, who) {
 }
 
 const Agent = {
-  MAX_STEPS: 5,
+  // 5 was one read, one search, one edit, one reload and nothing left over for
+  // a refusal; every guard below hands the model an error it should act on.
+  MAX_STEPS: 8,
 
   /* One user turn, in the dialect of whichever transport carries it. Three
      transports, three shapes for the same picture: chat completions wants
@@ -1211,6 +1282,12 @@ const Agent = {
         }
         return { ok: true, kind: 'vm', title, file, installed, source };
       }
+      const requires = parseRequires(source);
+      const lint = lintApp(`${title} ${parseTitle(source) || ''}`, requires, source);
+      if (lint) {
+        track('lint_reject', { rule: lint.rule });
+        return { ok: false, kind: 'window', title, error: lint.error };
+      }
       const saved = await Apps.save(title, source).catch(e => ({ error: e.message }));
       paintDock();
       // Launch what was written, not what was passed: they differ when the
@@ -1223,9 +1300,26 @@ const Agent = {
     }
     if (toolName === 'vm_exec') {
       onStatus?.('running in vm…');
-      if (VM.state !== 'ready') return { ok: false, error: 'Linux is not running yet.' };
-      const output = await VM.exec(input.command);
-      return { ok: true, output: output || '' };
+      if (VM.state !== 'ready') {
+        // The model's other move when the machine is booting is to call
+        // vm_exec in a loop until it answers. Say how long it has been and
+        // that a shell app opens itself when the machine is up.
+        const since = VM.bootStarted ? ` (${Math.round((Date.now() - VM.bootStarted) / 1000)}s)` : '';
+        return { ok: false, error: `the machine is ${VM.state}${since}. Do not poll it: build the app with // @requires shell and it opens itself when ready.` };
+      }
+      const s = input.timeout_s;
+      if (s !== undefined && !(Number.isInteger(s) && s >= 1 && s <= 600)) {
+        return { ok: false, error: `timeout_s must be an integer from 1 to 600, got ${JSON.stringify(s)}` };
+      }
+      // A timeout is the model's to act on, not the loop's to die of: it comes
+      // back as a tool error that names the fix.
+      try {
+        const output = await VM.exec(input.command, s && s * 1000);
+        return { ok: true, output: output || '' };
+      } catch (e) {
+        return { ok: false, error: e.message + (/timed out/.test(e.message)
+          ? '. For an install or a build pass timeout_s (up to 600), or background it: cmd > /mnt/job.log 2>&1 & then tail the log.' : '') };
+      }
     }
     if (toolName === 'set_theme') {
       onStatus?.('restyling the desktop…');
@@ -1256,7 +1350,7 @@ const Agent = {
       // browser" by editing the nearest app it could see. Unlisted files are
       // reported with their reason so "why is X not in the dock" has an
       // answer, and edit_file can add the header if the user wants it there.
-      return { ok: true, apps: apps.map(a => ({ title: a.title, name: a.name, builtin: false })), unlisted, builtin: BUILTIN_APPS() };
+      return { ok: true, apps: apps.map(a => ({ title: a.title, name: a.name, builtin: false })), unlisted, builtin: BUILTIN_APPS(), mount: MOUNT_MAPPING, unmirrored: Sync.unmirrored() };
     }
     if (toolName === 'read_file') {
       onStatus?.('reading ' + input.path + '…');
@@ -1281,10 +1375,25 @@ const Agent = {
       onStatus?.('editing ' + input.path + '…');
       try {
         const text = await Workspace.readPath(input.path);
-        const n = text.split(input.old).length - 1;
-        if (n === 0) return { ok: false, error: 'old text not found in ' + input.path + ' — read or search the file and copy it exactly' };
+        const old = String(input.old ?? '');
+        const n = text.split(old).length - 1;
+        if (n === 0) {
+          // read_file numbers every line as "12: "; pasted back verbatim, the
+          // anchor can never match. Two numbered lines is the read_file shape;
+          // one could be data. Only checked when the text is not found, so a
+          // file that really contains "1: a" stays editable.
+          if ((old.match(/^\d+: /gm) || []).length >= 2) {
+            return { ok: false, error: 'old contains read_file line-number prefixes ("12: ") — strip them, they are not in the file' };
+          }
+          return { ok: false, error: 'old text not found in ' + input.path + ' — read or search the file and copy it exactly' };
+        }
         if (n > 1) return { ok: false, error: `old text occurs ${n} times in ${input.path}; include more context so it is unique` };
-        await Workspace.writePath(input.path, text.replace(input.old, () => input.new));
+        const next = text.replace(old, () => input.new);
+        if (input.path.replace(/^\/+/, '') === 'system/os.js') {
+          const err = parseError(next);
+          if (err) return { ok: false, error: 'not saved: that edit makes system/os.js unparsable — ' + err + ' (a parse-clean edit can still fail at boot; recovery covers that)' };
+        }
+        await Workspace.writePath(input.path, next);
         track('edit_file', { os: /^system\//.test(input.path) });
         return { ok: true, path: input.path, note: /^system\//.test(input.path) ? 'saved — call reload_os to apply' : 'saved' };
       } catch (e) { return { ok: false, error: e.message }; }
@@ -1295,10 +1404,15 @@ const Agent = {
       catch (e) { return { ok: false, error: e.message }; }
     }
     if (toolName === 'reload_os') {
+      if (!Workspace.open) return { ok: false, error: 'no workspace is open' };
+      const forked = await Workspace.forkedSystem();
+      if (!forked.length) return { ok: false, error: 'nothing to reload: no system/os.js or system/os.css has been edited' };
+      const note = String(input.note ?? '').trim();
+      try { localStorage.setItem(RELOAD_NOTE, JSON.stringify({ note, files: forked, at: Date.now() })); } catch {}
       onStatus?.('reloading the desktop…');
       window.__vibeosIntentionalUnload = true;   // our own reload must not trip the leave-page guard
       setTimeout(() => location.reload(), 400);
-      return { ok: true, note: 'reloading' };
+      return { ok: true, note: 'reloading ' + forked.join(' and ') + ' — this turn ends here; the chat shows your note after boot', reloading: forked };
     }
     throw new Error('unknown tool: ' + toolName);
   },
@@ -1353,9 +1467,10 @@ const Agent = {
 };
 
 let z = 10, offset = 0;
-function openWindow({ title, badge = '', w = 560, h = 380, render }) {
+function openWindow({ id = '', title, badge = '', w = 560, h = 380, render }) {
   const el = document.createElement('div');
   el.className = 'win';
+  if (id) el.dataset.app = id;
   Object.assign(el.style, {
     left: (60 + (offset % 5) * 34) + 'px', top: (60 + (offset % 5) * 28) + 'px',
     width: w + 'px', height: h + 'px', zIndex: ++z,
@@ -1393,6 +1508,16 @@ function openWindow({ title, badge = '', w = 560, h = 380, render }) {
 
   render(el.querySelector('.body'), el);
   return el;
+}
+
+// Two chat windows were two copies of one log, and the last writer won. The
+// dock raises the one that is open instead of opening another.
+function focusOrOpen(spec) {
+  const open = document.querySelector(`.win[data-app="${spec.id}"]`);
+  if (!open) return openWindow(spec);
+  open.classList.remove('min');
+  open.style.zIndex = ++z;
+  return open;
 }
 
 function drag(handle, move, start) {
@@ -1462,7 +1587,7 @@ function launchApp(app) {
       const mount = createAppMount(body);
       const start = async () => {
         try { await runModule(app.source, mount, CAP); }
-        catch (e) { mount.innerHTML = `<p class="no small">${e.message}</p>`; }
+        catch (e) { mount.textContent = ''; const m = document.createElement('p'); m.className = 'no small'; m.textContent = e.message; mount.appendChild(m); }
       };
       if (!missing.length) return start();
       renderUpsell(mount, missing);
@@ -1624,6 +1749,7 @@ function FilesApp(body) {
       <button class="btn p" id="pick">Open a folder…</button>
       <span class="small muted" id="where">nothing opened</span>
     </div>
+    <p class="tiny dimmer" style="margin:0 0 10px">data/ and apps/ are the machine's /mnt, flat — subdirectories under /mnt are not mirrored.</p>
     <div id="list"></div><div id="view"></div>`;
   const list = body.querySelector('#list'), view = body.querySelector('#view');
 
@@ -1653,7 +1779,7 @@ function FilesApp(body) {
           const pre = document.createElement('pre');
           pre.className = 'out'; pre.textContent = text.slice(0, 4000) || '(empty)';
           view.appendChild(pre);
-        } catch (e) { view.innerHTML = `<p class="no small">${e.message}</p>`; }
+        } catch (e) { view.textContent = ''; const m = document.createElement('p'); m.className = 'no small'; m.textContent = e.message; view.appendChild(m); }
       };
       list.appendChild(row);
     });
@@ -1665,7 +1791,7 @@ function FilesApp(body) {
     try {
       const h = await window.showDirectoryPicker({ mode: 'read' });
       await show(h, h.name);
-    } catch (e) { if (e.name !== 'AbortError') view.innerHTML = `<p class="no small">${e.message}</p>`; }
+    } catch (e) { if (e.name !== 'AbortError') { view.textContent = ''; const m = document.createElement('p'); m.className = 'no small'; m.textContent = e.message; view.appendChild(m); } }
   };
 }
 
@@ -1743,7 +1869,7 @@ export default async function (mount, api) {
       d.textContent = (i.dir ? '📁 ' : '📄 ') + i.name;
       list.appendChild(d);
     });
-  } catch (e) { mount.innerHTML = '<p style="color:var(--no);font-size:13px;padding:8px">' + e.message + '</p>'; }
+  } catch (e) { mount.textContent = ''; const m = document.createElement('p'); m.style.cssText = 'color:var(--no);font-size:13px;padding:8px'; m.textContent = e.message; mount.appendChild(m); }
 }`,
   shell: `// @title Terminal
 // @requires shell
@@ -1848,6 +1974,87 @@ const Attachments = {
   },
 };
 
+/* ---------- the chat survives a reload ----------------------------------
+
+   The chat lived in ChatApp's closure and nowhere else, so reload_os — which
+   replaces the page 400 ms after the tool returns — took every turn with it,
+   and the boot that followed had a model with no memory of what it had just
+   edited. The log is a file now, system/chat.json. Not data/: Sync mirrors
+   data/ flat into /mnt, so a log there was a permanent "changed on both
+   sides" conflict and readable by any script the guest ran; system/ is never
+   synced and never mounted. Written as each turn lands, read back by the
+   chat that boots next, which says so in one line. A file that is not a log
+   is reported in the chat, never skipped: a silently empty chat after a
+   reload is the very bug this exists to fix. Entries come in user/assistant
+   pairs, so the cap cuts on an even count. The log is read once per page
+   (ChatLog.ready) and every chat window shares that array, so a send that
+   lands before the read finishes waits for it rather than writing a
+   two-turn file over the whole history. */
+const ChatLog = {
+  PATH: 'system/chat.json', OLD_PATH: 'data/chat.json', MAX_TURNS: 200,
+  ready: null,
+
+  // Resolves to the turns array (empty when there is no file yet), or null
+  // when there is no workspace; rejects when the file exists but is not a
+  // log, or could not be read for any reason other than not existing.
+  load() {
+    if (!this.ready) this.ready = this.read();
+    return this.ready;
+  },
+  async read() {
+    if (!Workspace.open) return null;
+    let raw = await this.readSystemFile('chat.json');
+    if (raw === null) raw = await this.migrate();
+    if (raw === null) return [];
+    return this.parse(raw);
+  },
+  async readSystemFile(name) {
+    try { return await Workspace.readSystem(name); }
+    catch (e) { if (e.name === 'NotFoundError') return null; throw e; }
+  },
+  // A log written by the build that kept it in data/: moved on the first
+  // boot that finds it, and only when system/ has none, so a newer log is
+  // never overwritten by an older one.
+  async migrate() {
+    let old;
+    try { old = await Workspace.readPath(this.OLD_PATH); }
+    catch (e) { if (/^not found: /.test(e.message)) return null; throw e; }
+    await Workspace.writeSystem('chat.json', old);
+    const { dir, name } = await Workspace.dirFromPath(this.OLD_PATH, false);
+    await dir.removeEntry(name);
+    return old;
+  },
+  parse(raw) {
+    let doc;
+    try { doc = JSON.parse(raw); }
+    catch (e) { throw new Error(`${this.PATH} is not JSON (${raw.length} bytes): ${e.message}`); }
+    if (!doc || doc.v !== 1 || !Array.isArray(doc.turns)) throw new Error(`${this.PATH} is not a chat log: expected {"v":1,"turns":[…]}`);
+    const bad = doc.turns.findIndex(t => !t || (t.role !== 'user' && t.role !== 'assistant') || typeof t.text !== 'string');
+    if (bad >= 0) throw new Error(`${this.PATH} turn ${bad} is not {role:"user"|"assistant", text}`);
+    return doc.turns;
+  },
+
+  // One turn saves three times within a tick (the pair, the reply, each
+  // card). Two writables open on one OPFS file close in either order and the
+  // later close wins, so the writes queue, each with the text of its moment.
+  async save(turns) {
+    if (!Workspace.open) return false;
+    if (turns.length > this.MAX_TURNS) turns.splice(0, turns.length - this.MAX_TURNS);
+    const text = JSON.stringify({ v: 1, turns }, null, 1);
+    const mine = (this.writing || Promise.resolve()).catch(() => {}).then(() => Workspace.writeSystem('chat.json', text));
+    this.writing = mine;
+    await mine;
+    return true;
+  },
+
+  // What the model is told a turn said: the shape `remember` in ChatApp
+  // pushes live, so a restored history reads like one that never reloaded.
+  content(t) {
+    if (t.role !== 'user' || !t.images) return t.text;
+    return (t.text ? t.text + '\n' : '') + Attachments.marker(t.images);
+  },
+};
+
 function ChatApp(body) {
   body.style.padding = '0';
   body.innerHTML = `
@@ -1863,6 +2070,20 @@ function ChatApp(body) {
   const log = body.querySelector('#log'), input = body.querySelector('#msg'), chips = body.querySelector('#chips');
   const history = [];
   const pending = [];
+  // The persisted log (see ChatLog): history's text plus what the screen
+  // showed — image counts, the cards — so a boot can paint it back.
+  let turns = [];
+  let saidUnsaved = false;
+  const persist = () => ChatLog.save(turns).then(saved => {
+    if (saved || saidUnsaved) return;
+    saidUnsaved = true;
+    line('chat is not being saved: no workspace mounted');
+  }, e => {
+    const b = bubble('vibeos', '<span class="no"></span>'); b.querySelector('.no').textContent = 'could not save ' + ChatLog.PATH + ': ' + e.message;
+  });
+  // The assistant entry the cards of the running turn belong to.
+  let reply = null;
+  const card = data => { if (!reply) return; reply.cards.push(data); persist(); };
 
   const bubble = (who, html) => {
     const d = document.createElement('div');
@@ -1874,6 +2095,8 @@ function ChatApp(body) {
     body.scrollTop = body.scrollHeight;
     return d;
   };
+
+  const line = text => { const d = bubble('vibeos', '<span class="tiny dimmer"></span>'); d.querySelector('.dimmer').textContent = text; return d; };
 
   // The old copy here told you to run server.py, which is the local python demo
   // and does not exist on vibeos.sh — it read as an error on the hosted build.
@@ -1888,6 +2111,100 @@ function ChatApp(body) {
     await Gen.askForKey();
     if (Gen.available) intro.innerHTML = readyLine();
   };
+
+  const paintReload = ({ note, files, source }) => {
+    const b = bubble('vibeos', `<b>reloaded</b> <span class="tiny dimmer">${source === 'stored' ? 'running your copy' : 'running the stock desktop'}</span><span class="tiny dimmer" id="files"></span><div id="note"></div>`);
+    b.querySelector('#files').textContent = ' · ' + (files || []).join(', ');
+    if (note) b.querySelector('#note').textContent = note; else b.querySelector('#note').remove();
+  };
+  // A card painted back from the log. The source is not in the file, so a
+  // window opens from what the workspace holds under that title, and says
+  // so when nothing does.
+  const paintCard = c => {
+    if (c.kind === 'refused') {
+      const b = bubble('vibeos', '<b></b> <span class="no">refused</span><br><span class="tiny dimmer"></span>');
+      b.querySelector('b').textContent = c.title; b.querySelector('.dimmer').textContent = c.error;
+      return;
+    }
+    const b = bubble('vibeos', `<b></b> <span class="req">${c.kind === 'vm' ? 'vm script' : 'window'}</span><br>
+      <span class="tiny dimmer"></span>
+      <div class="row" style="margin-top:8px"><button class="btn sm" id="act"></button></div>
+      <pre class="out" id="res" style="display:none;margin-top:8px"></pre>`);
+    b.querySelector('b').textContent = c.title;
+    b.querySelector('.dimmer').textContent = c.where;
+    const act = b.querySelector('#act'), res = b.querySelector('#res');
+    const show = t => { res.style.display = 'block'; res.textContent = t; };
+    if (c.kind === 'vm') {
+      act.textContent = 'Run it';
+      act.onclick = async () => {
+        if (VM.state !== 'ready') return show('the VM is not running');
+        show('running…');
+        try { show((await VM.exec('sh /mnt/' + c.file)) || '(no output)'); } catch (e) { show(e.message); }
+      };
+    } else {
+      act.textContent = 'Open';
+      act.onclick = async () => {
+        const app = (await Apps.list()).apps.find(a => a.title === c.title);
+        if (!app) return show('no app titled "' + c.title + '" in the workspace or the VM now');
+        launchApp(app);
+      };
+    }
+  };
+  const paintTurn = t => {
+    if (t.role === 'user') {
+      const b = bubble('you', '<span id="t"></span>' + (t.images ? '<span class="tiny dimmer" id="i"></span>' : ''));
+      b.querySelector('#t').textContent = t.text;
+      if (t.images) b.querySelector('#i').textContent = (t.text ? ' · ' : '') + t.images + (t.images === 1 ? ' screenshot' : ' screenshots') + ', not kept';
+      return;
+    }
+    if (t.reload) return paintReload(t.reload);
+    (t.cards || []).forEach(paintCard);
+    if (t.said) bubble('vibeos', '<span></span>').querySelector('span').textContent = t.said;
+    if (t.failure === 'no model configured') line('that was a stock module — no model was configured');
+    else if (t.failure) { const b = bubble('vibeos', '<span class="no"></span> — fell back to a stock module.'); b.querySelector('.no').textContent = t.failure; }
+    else if (!t.text) line('the page was closed before this turn finished');
+  };
+
+  // The confirmation for a reload_os. Cleared on read so reopening the chat
+  // does not repeat it; what booted comes from the loader, not the note.
+  // It is the model's reply to the turn that called reload_os — that turn's
+  // entry is still open in the log, so the note lands there and is history
+  // the next request carries, not a line that vanishes on the boot after.
+  const reloadNote = () => {
+    try {
+      const raw = localStorage.getItem(RELOAD_NOTE);
+      if (!raw) return null;
+      localStorage.removeItem(RELOAD_NOTE);
+      const { note, files } = JSON.parse(raw);
+      return { note, files, source: window.__vibeosBoot && window.__vibeosBoot.source };
+    } catch { return null; }
+  };
+  const placeholder = input.placeholder;
+  input.disabled = true; input.placeholder = 'loading chat…';
+  const loaded = (async () => {
+    let restored = null;
+    try { restored = await ChatLog.load(); }
+    catch (e) { const b = bubble('vibeos', '<span class="no"></span>'); b.querySelector('.no').textContent = 'could not restore ' + ChatLog.PATH + ': ' + e.message; }
+    input.disabled = false; input.placeholder = placeholder;
+    const note = reloadNote();
+    if (restored) turns = restored;
+    if (restored && restored.length) {
+      const last = restored[restored.length - 1];
+      if (note && last && last.role === 'assistant' && !last.text) {
+        last.text = 'reloaded ' + (note.files || []).join(', ') + (note.note ? ' — ' + note.note : '');
+        last.reload = note;
+      }
+      for (const t of turns) {
+        paintTurn(t);
+        const content = ChatLog.content(t);
+        if (t.role === 'user') { if (content) history.push({ role: 'user', content }); }
+        else if (history.length && history[history.length - 1].role === 'user') history.push({ role: 'assistant', content: content || '(the page was closed before this turn finished)' });
+      }
+      line(`restored from ${ChatLog.PATH} · ${turns.length} turns`);
+      if (note && last && last.reload === note) { await persist(); return; }
+    }
+    if (note) paintReload(note);
+  })();
 
   const paintChips = () => {
     chips.innerHTML = '';
@@ -1909,7 +2226,7 @@ function ChatApp(body) {
         Attachments.check([...pending, img]);
         pending.push(img);
       }
-      catch (e) { bubble('vibeos', `<span class="no">${e.message.replace(/</g, '&lt;')}</span>`); }
+      catch (e) { bubble('vibeos', '<span class="no"></span>').querySelector('.no').textContent = e.message; }
     }
     paintChips();
     input.focus();
@@ -1930,11 +2247,20 @@ function ChatApp(body) {
     // Pictures put back after a failure can stack past the cap; refuse here
     // rather than let the body grow past what the server will take.
     try { Attachments.check(pending); }
-    catch (e) { bubble('vibeos', `<span class="no">${e.message.replace(/</g, '&lt;')}</span>`); return; }
+    catch (e) { bubble('vibeos', '<span class="no"></span>').querySelector('.no').textContent = e.message; return; }
     const images = pending.splice(0);
     paintChips();
     input.value = '';
-    bubble('you', text.replace(/</g, '&lt;') + images.map(i => `<img class="shot" src="${i.dataUrl}" alt="">`).join(''));
+    // A send before the log is read used to write this pair over the whole
+    // history, then paint the history under it. The read is awaited before
+    // anything is painted or written; a log that could not be read was
+    // already reported, and is overwritten.
+    await loaded;
+    {
+      const b = bubble('you', '<span></span>');
+      b.firstChild.textContent = text;
+      for (const i of images) { const img = document.createElement('img'); img.className = 'shot'; img.alt = ''; img.src = i.dataUrl; b.appendChild(img); }
+    }
     const thinking = bubble('vibeos', '<span class="dimmer">thinking…</span>');
     const onStatus = status => { thinking.innerHTML = '<span class="dimmer"></span>'; thinking.querySelector('.dimmer').textContent = String(status); };
 
@@ -1949,11 +2275,22 @@ function ChatApp(body) {
     // of them to ride along with every request — but only a picture the model
     // actually saw gets one. A turn that never reached a model is remembered
     // as its text alone, and an image-only one leaves nothing to remember.
-    const remember = (sent, reply) => {
+    // The pair goes to the log now, reply still blank: a turn that ends in
+    // reload_os never reaches `remember`, and the boot after fills the blank
+    // with the reload note.
+    const me = { role: 'user', text, images: images.length };
+    reply = { role: 'assistant', text: '', cards: [] };
+    turns.push(me, reply);
+    persist();
+    const remember = (sent, said) => {
+      me.images = sent ? images.length : 0;
+      reply.text = said.slice(0, 1200);
+      if (failure) reply.failure = failure;
+      persist();
       // An image-only turn has no text to lead with; do not remember a bare newline.
-      const turn = sent && images.length ? (text ? text + '\n' : '') + Attachments.marker(images.length) : text;
+      const turn = ChatLog.content(me);
       if (!turn) return;
-      history.push({ role: 'user', content: turn }, { role: 'assistant', content: reply.slice(0, 1200) });
+      history.push({ role: 'user', content: turn }, { role: 'assistant', content: reply.text });
     };
     // A picture that did not go through returns to the chip row, so the next
     // try — "Add a key", or just pressing Send again — carries it. Before this
@@ -1971,12 +2308,23 @@ function ChatApp(body) {
           : await Agent.runWithKey(text, prior, onStatus, images);
         live = true;
         thinking.remove();
-        const summary = result.text || result.created.map(c => c.title).join(', ') || 'done';
+        // What history remembers of the turn: the reply, else what was
+        // built. A refused create_app built nothing, so a turn that only
+        // refused is remembered as the refusal, never as the title alone.
+        const built = result.created.filter(c => c.ok !== false).map(c => c.title).join(', ');
+        const refused = result.created.filter(c => c.ok === false).map(c => `refused: ${c.title}: ${c.error}`).join('; ');
+        const summary = result.text || built || refused || 'done';
+        if (result.text) reply.said = result.text;
         remember(true, summary);
 
         for (const item of result.created) {
-          if (item.kind === 'vm') {
+          if (item.ok === false) {
+            const b = bubble('vibeos', '<b></b> <span class="no">refused</span><br><span class="tiny dimmer"></span>');
+            b.querySelector('b').textContent = String(item.title); b.querySelector('.dimmer').textContent = String(item.error);
+            card({ kind: 'refused', title: item.title, error: String(item.error) });
+          } else if (item.kind === 'vm') {
             track('app_generated', { target: 'vm' });
+            card({ kind: 'vm', title: item.title, file: item.file, where: item.installed ? 'installed at /mnt/' + item.file : 'not installed — the VM was not running' });
             const b = bubble('vibeos', `<b></b> <span class="req">vm script</span><br>
               <span class="tiny dimmer">${item.installed ? 'installed at <b></b>' : 'not installed — the VM is not running'}</span>
               <div class="row" style="margin-top:8px">
@@ -2000,13 +2348,12 @@ function ChatApp(body) {
             bubble('vibeos', `<b></b> <span class="req">window</span><br>
               <span class="tiny dimmer">${where ? 'saved to ' + where + headed : 'opened on the desktop'}</span>`)
               .querySelector('b').textContent = item.title;
+            card({ kind: 'window', title: item.title, where: where ? 'saved to ' + where + headed : 'opened on the desktop' });
           }
         }
 
-        if (result.text && !result.created.length) {
-          bubble('vibeos', result.text.replace(/</g, '&lt;'));
-        } else if (result.text && result.created.length) {
-          bubble('vibeos', `<span class="tiny dimmer">${result.text.replace(/</g, '&lt;')}</span>`);
+        if (result.text) {
+          bubble('vibeos', result.created.length ? '<span class="tiny dimmer"></span>' : '<span></span>').firstChild.textContent = result.text;
         }
       } catch (e) {
         failure = e.message;
@@ -2113,6 +2460,7 @@ function ChatApp(body) {
         try { res.textContent = (await VM.exec('sh /mnt/' + file)) || '(no output)'; }
         catch (e) { res.textContent = e.message; }
       };
+      card({ kind: 'vm', title, file, where: installed ? 'installed at /mnt/' + file : 'not installed — the VM was not running' });
     } else {
       const saved = await Apps.save(title, source).catch(() => ({}));
       paintDock();
@@ -2131,6 +2479,7 @@ function ChatApp(body) {
       };
       b.querySelector('#open').onclick = () => launchApp({ title, source: written, requires: parseRequires(written) });
       b.querySelector('#open').click();
+      card({ kind: 'window', title, where: where ? 'saved to ' + where : 'not saved — no VM and no workspace' });
     }
   }
 
@@ -2157,6 +2506,11 @@ const IMAGES = {
     config: () => ({ cdrom: { url: V86_ASSETS + 'linux4.iso' } }),
     dhcp: 'udhcpc -i eth0 -n -q 2>&1 | tail -1',
     ip: "ifconfig eth0 | grep -o 'inet addr:[0-9.]*' | cut -d: -f2",
+    // linux4.iso boots with lo DOWN (measured: `ifconfig lo` shows no UP flag
+    // and a connect to 127.0.0.1 hangs until the timeout instead of being
+    // refused), so nothing on localhost — a dev server, the Browser — works
+    // until someone brings it up. Debian's systemd does this itself.
+    loopback: 'ifconfig lo up',
     shellLine: 'Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.',
   },
   debian: {
@@ -2192,6 +2546,10 @@ const IMAGES = {
 // internet through it. The public one stays as a fallback.
 const NET_DEFAULT = 'wisps://vibeos.sh/api/wisp';
 const NET_OURS = 'wisps://wisp.mercurywork.shop/';
+
+// The shell prompt at the end of the serial line: busybox `~% ` / `~# `,
+// debian `root@vibeos:~# `.
+const PROMPT_TAIL = /(?:[\w.@()-]*:)?~[%#$]\s*$/;
 
 // One socket, as far as v86 is concerned, over as many real ones as it takes.
 //
@@ -2595,6 +2953,13 @@ const VM = {
       this.hookWrites();
       this.set('ready');
       track('vm_ready', { seconds: Math.round((Date.now() - this.bootStarted) / 1000), image: this.bootedImage });
+      // Not in boot's failure path: the machine is up whether or not lo came
+      // up, and a timeout or a Terminal Ctrl-C landing on this exec used to
+      // flip a ready machine to 'failed'.
+      if (image.loopback) {
+        try { await this.exec(image.loopback); }
+        catch (e) { console.warn(`loopback stayed down: ${e.message}`); }
+      }
 
       // The image brings the NIC up but does not ask for a lease, so a
       // configured relay would look broken until someone ran udhcpc by hand.
@@ -2684,12 +3049,18 @@ const VM = {
 
   // null, not [], when the machine cannot answer — callers already distinguish
   // "no files" from "no VM" and would otherwise report an empty disk.
+  // Every entry under /mnt, recursively, as {parentid, name, type}: parentid 0
+  // is the mount root and type is the inode's S_IFMT class. Only 'file' is
+  // readable through read_file: a directory, a symlink (even one pointing at a
+  // readable file — 9p does not follow it), a broken symlink and a FIFO all
+  // throw 'File not found' (measured on busybox).
   listFiles() {
     const fs = this.emu && this.emu.fs9p;
     if (!fs) return null;
     const list = [];
     try { fs.GetRecursiveList(0, list); } catch { return null; }
-    return list.filter(e => e.name && !/^\./.test(e.name));
+    return list.filter(e => e.name && !/^\./.test(e.name))
+               .map(e => ({ ...e, type: inodeType(fs.GetInode(fs.Search(e.parentid, e.name)).mode) }));
   },
 
   onWrite(fn, { settled = false } = {}) {
@@ -2714,10 +3085,33 @@ const VM = {
   // is still running (boot's own dhcp, a user typing during a slow apt) would
   // interleave both outputs and each would claim the other's lines.
   exec(cmd, timeoutMs = 20000) {
+    checkTimeout(timeoutMs);
     const run = () => this._exec(cmd, timeoutMs);
     const next = (this._queue || Promise.resolve()).then(run, run);
     this._queue = next.catch(() => {});
     return next;
+  },
+
+  // Ctrl-C on the serial line: SIGINT to whatever the shell is running. The
+  // exec waiting on that command must reject too: ash drops the ` echo mark`
+  // queued behind an interrupted command (measured in exec-timeout.mjs), so
+  // without this stamp the Terminal's 600 s exec would sit out its whole
+  // timeout on a line that was free after one keypress.
+  interrupt() {
+    if (this.state !== 'ready') throw new Error('Linux is not running yet.');
+    this.interruptedAt = Date.now();
+    this.emu.serial0_send('\x03');
+  },
+
+  // The shell is back at its line editor once the serial line ends in its
+  // prompt. Bounded: a program that ignores SIGINT never gets there.
+  async _atPrompt(maxMs) {
+    const t0 = Date.now();
+    while (!PROMPT_TAIL.test(this.serial.slice(-80))) {
+      if (Date.now() - t0 > maxMs) return false;
+      await new Promise(r => setTimeout(r, 60));
+    }
+    return true;
   },
 
   async _exec(cmd, timeoutMs) {
@@ -2728,7 +3122,13 @@ const VM = {
     const t0 = Date.now();
     for (;;) {
       const chunk = this.serial.slice(from);
-      if (chunk.includes(mark + '\r\n') || /__VOS\d+__\r?\n/.test(chunk)) {
+      // Only THIS call's mark, and only the shell's OUTPUT of it (a line that
+      // is the mark alone), never the echo of the line we typed. Matching any
+      // __VOSn__ let a command that outlived its timeout hand its late
+      // sentinel to the NEXT exec, which returned the wrong output as its own;
+      // matching the typed echo returned "" or "^Cecho again" for `echo again`
+      // whenever its bytes landed while the tty was still in cooked mode.
+      if (chunk.includes('\n' + mark + '\r\n')) {
         const clean = chunk.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');   // colour and bracketed-paste
         // Output ends where the shell echoes back the sentinel command we
         // typed. CUT there rather than dropping the line containing it: a
@@ -2742,10 +3142,29 @@ const VM = {
           .filter(l => l.trim() !== cmd.trim())        // the terminal echoing what we typed
           .join('\n')
           // Strip only the prompt itself, not the line it sits on.
-          .replace(/(?:[\w.@()-]*:)?~[%#$]\s*$/, '')
+          .replace(PROMPT_TAIL, '')
           .trim();
       }
-      if (Date.now() - t0 > timeoutMs) throw new Error(`timed out after ${timeoutMs / 1000}s`);
+      const interrupted = this.interruptedAt > t0;
+      if (interrupted || Date.now() - t0 > timeoutMs) {
+        // The command is still holding the one serial line; leave it and every
+        // later exec waits behind it. Ctrl-C frees it, and ash drops the
+        // ` echo mark` it had buffered behind the command (measured: the mark
+        // of an interrupted exec never reaches the line). Then wait for the
+        // prompt before the next exec types: bytes sent while the tty is still
+        // cooked are echoed once by the tty and again by the line editor, and
+        // the tty's echo of ` echo mark` used to pass for the result.
+        // Someone else's Ctrl-C (the Terminal's) already sent the \x03; the
+        // same wait applies, and the error says whose it was.
+        if (!interrupted) this.interrupt();
+        const back = await this._atPrompt(3000);
+        const err = new Error((interrupted
+          ? `interrupted: ${cmd} — Ctrl-C on the machine's shell`
+          : `timed out after ${timeoutMs / 1000}s: ${cmd} — sent Ctrl-C to the machine's shell`)
+          + (back ? '' : ', and the prompt did not come back within 3s'));
+        err.interrupted = interrupted;
+        throw err;
+      }
       await new Promise(r => setTimeout(r, 120));
     }
   },
@@ -2877,14 +3296,24 @@ function TerminalApp(body) {
     if (!ready()) return line('the machine is not running', 'no');
     const pending = line('…', 'dimmer');
     try {
-      const res = await VM.exec(cmd);
+      // 600 s, not exec's 20 s default: a typed `apk add` or `git clone` is
+      // the user's to wait on, and Ctrl-C below is the way out of it.
+      const res = await VM.exec(cmd, 600000);
       pending.remove();
       if (res) line(res);
-    } catch (e) { pending.remove(); line(e.message, 'no'); }
+    } catch (e) { pending.remove(); if (!e.interrupted) line(e.message, 'no'); }
   }
 
   input.addEventListener('keydown', async e => {
-    if (e.key === 'Enter') {
+    if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'c') {
+      // What a terminal does with Ctrl-C: SIGINT to whatever holds the line.
+      // The exec waiting on it rejects as interrupted and run() prints nothing
+      // for that; this ^C is the whole record of it, like on a tty.
+      e.preventDefault();
+      if (!ready()) return;
+      line('^C', 'dimmer');
+      VM.interrupt();
+    } else if (e.key === 'Enter') {
       const cmd = input.value.trim();
       if (!cmd) return;
       hist.push(cmd); hpos = hist.length; input.value = '';
@@ -2927,7 +3356,27 @@ const Sync = {
     this.watchers.forEach(f => f());
   },
 
-  vmFiles() { return VM.listFiles(); },
+  // The mirror is flat: a regular file at the root of /mnt is data/<name> or
+  // apps/<name>.js, and nothing else moves. The 9p list is recursive, so
+  // `mkdir /mnt/sub; echo x > /mnt/sub/x` used to put `sub` and a bare `x` in
+  // the diff; readFile('sub') throws 'File not found', auto() died there, and
+  // every name sorted after it (zz.txt, measured) never reached the folder —
+  // inside the 60 s timer, which swallows the throw. A symlink or a FIFO at
+  // the root wedged it the same way once directories were filtered, so the
+  // filter is on the inode type, not on "is not a directory".
+  vmFiles() {
+    const all = VM.listFiles();
+    return all && all.filter(e => e.parentid === 0 && e.type === 'file');
+  },
+
+  // The root entries that filter drops, as {name, type}, so the Sync pane and
+  // list_apps can say "sub/ stays in the machine" instead of listing nothing.
+  unmirrored() {
+    const all = VM.listFiles();
+    return all ? all.filter(e => e.parentid === 0 && e.type !== 'file')
+                    .map(e => ({ name: e.name, type: e.type }))
+                    .sort((a, b) => a.name.localeCompare(b.name)) : [];
+  },
 
   async diff() {
     const vm = this.vmFiles();
@@ -2954,7 +3403,7 @@ const Sync = {
       }
       rows.push({ name, inWs, inVm, state });
     }
-    return { rows };
+    return { rows, unmirrored: this.unmirrored() };
   },
 
 // Called by the VM's write hook, debounced. Only moves VM -> folder, and
@@ -3078,10 +3527,10 @@ function SyncApp(body) {
       </label>
     </div>
     <div id="out"></div>
-    <div class="tiny dimmer" id="msg" style="margin-top:8px"></div>
+    <div class="tiny dimmer" id="syncMsg" style="margin-top:8px"></div>
     <div class="tiny dimmer" id="lastrun" style="margin-top:4px"></div>`;
 
-  const out = body.querySelector('#out'), msg = body.querySelector('#msg');
+  const out = body.querySelector('#out'), msg = body.querySelector('#syncMsg');
   const LABEL = {
     same:    ['in sync',        'dimmer', ''],
     push:    ['workspace only', 'part',   'Push →'],
@@ -3091,8 +3540,8 @@ function SyncApp(body) {
 
   async function paint() {
     const d = await Sync.diff();
-    if (d.error) { out.innerHTML = `<p class="note">${d.error}</p>`; return; }
-    if (!d.rows.length) { out.innerHTML = '<p class="small dimmer">Nothing on either side yet.</p>'; return; }
+    if (d.error) { out.innerHTML = '<p class="note"></p>'; out.firstChild.textContent = d.error; return; }
+    if (!d.rows.length) { out.innerHTML = '<p class="small dimmer">Nothing on either side yet.</p>'; msg.textContent = ''; unmirrored(d); return; }
 
     out.innerHTML = `<table><thead><tr><th>File</th><th>Workspace</th><th>VM</th><th>State</th><th></th></tr></thead><tbody></tbody></table>`;
     const tb = out.querySelector('tbody');
@@ -3117,6 +3566,17 @@ function SyncApp(body) {
     msg.innerHTML = conflicts
       ? `<span class="no">${conflicts} file${conflicts === 1 ? '' : 's'} changed on both sides.</span> Auto-sync will not touch these — copy the one you want by hand.`
       : 'Auto-sync moves only files that exist on one side.';
+    unmirrored(d);
+  }
+
+  function unmirrored(d) {
+    if (!d.unmirrored.length) return;
+    // Guest names: textContent, never markup.
+    const p = document.createElement('p');
+    p.className = 'small dimmer';
+    const label = e => e.type === 'dir' ? e.name + '/' : `${e.name} (${e.type})`;
+    p.textContent = `not mirrored: ${d.unmirrored.map(label).join(' ')} — only regular files at the root of /mnt are mirrored; subdirectories, links and special files stay in the machine.`;
+    msg.appendChild(p);
   }
 
   body.querySelector('#refresh').onclick = paint;
@@ -3262,6 +3722,98 @@ function SettingsApp(body, win, opts) {
 
 const PROXY = '/api/proxy?url=';
 
+/* localhost is the machine's, not the laptop's. A dev server started in the
+   Terminal listens inside v86, where the proxy cannot reach and the host
+   browser must not try: http://localhost is "potentially trustworthy", so a
+   page rendered with <base href="http://localhost:3000/"> makes the HOST
+   browser fetch /logo.png from whatever the developer runs on their own port
+   3000. So a guest URL is fetched from inside the guest — the status line over
+   serial, the body over 9p as a root-level dotfile on /mnt (listFiles hides
+   dotfiles, so Sync and the Files app never see it) — and the page is rendered
+   with every subresource that points back at the guest blanked to data:,.
+   ---------------------------------------------------------------------- */
+// *.localhost too: browsers resolve any such name to loopback without DNS.
+const GUEST_HOST = /^((?:[^.]+\.)*localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\]|::1)$/i;
+const isGuestHost = (url) => {
+  let host;
+  try { host = new URL(url).hostname; } catch { return false; }
+  return GUEST_HOST.test(host) || (!!VM.ip && host === VM.ip);
+};
+const escHtml = (s) => String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+
+let guestFetchSeq = 0;
+// -> { ok, status, type, text, finalUrl, via }. Throws with a sentence when the
+// machine is down, nothing listens, the fetch times out, or the guest has
+// neither curl nor wget. curl where it exists (status, type and final URL come
+// from -w); busybox wget otherwise (-S prints the response headers to stderr;
+// it keeps no body for a non-2xx status and exits 1 with a sentence instead —
+// measured on linux4.iso, BusyBox 1.28.4: "server returned error: HTTP/1.0 404
+// Not Found", "can't connect to remote host (127.0.0.1): Connection refused").
+async function guestFetch(url) {
+  if (!VM.ready()) throw new Error('localhost is inside the machine, and the machine is not running yet');
+  if (/['\r\n]/.test(url)) throw new Error("a single quote or a line break in the URL cannot be passed to the machine's shell: " + url);
+  const n = ++guestFetchSeq;
+  const name = `.vfetch-${n}`;
+  // A script on /mnt, not a long command line: the serial line editor wraps
+  // what it echoes at 80 columns, and exec's filter only drops an echo that
+  // matches the command whole, so a long command line comes back inside its
+  // own output.
+  const script = `u='${url}'; o=/mnt/${name}; e=/tmp/${name}.err
+if command -v curl >/dev/null 2>&1; then
+  curl -sS -L --max-time 15 -o "$o" -w '\\n__vfetch-w status=%{http_code} type=%{content_type} url=%{url_effective}\\n' "$u" 2>"$e"; rc=$?; via=curl
+elif command -v wget >/dev/null 2>&1; then
+  wget -S -T 15 -O "$o" "$u" 2>"$e"; rc=$?; via=wget
+else rc=127; via=none; fi
+sync
+echo "__vfetch rc=$rc via=$via"
+cat "$e" 2>/dev/null
+`;
+  await VM.writeQuietly(name + '.sh', new TextEncoder().encode(script));
+  const host = new URL(url).host;
+  try {
+    const out = await VM.exec(`sh /mnt/${name}.sh`, 25000);
+    const m = out.match(/^__vfetch rc=(\d+) via=(\w+)$/m);
+    if (!m) throw new Error('the machine gave no answer for ' + url + ': ' + out.slice(-200));
+    const rc = +m[1], via = m[2];
+    const head = out.slice(0, m.index), tail = out.slice(m.index + m[0].length).trim();
+    if (via === 'none') throw new Error("the Browser's localhost needs curl or wget in the machine, and this one has neither");
+    const refused = () => { throw new Error(`nothing is listening on ${host} inside the machine (localhost here is the VM's, not your laptop's)`); };
+    const timedOut = () => { throw new Error(`${host} did not answer within 15 s inside the machine (${tail.split('\n').filter(l => /^(wget|curl):/.test(l)).join('; ') || via})`); };
+    let status = 0, type = '', finalUrl = url;
+    if (via === 'curl') {
+      if (rc === 7) refused();
+      if (rc === 28) timedOut();
+      if (rc !== 0) throw new Error(`curl inside the machine failed (exit ${rc}): ${tail || 'no detail'}`);
+      const w = head.match(/^__vfetch-w status=(\d+) type=(.*?) url=(.*)$/m);
+      if (!w) throw new Error('curl inside the machine returned no status line: ' + head.slice(-200));
+      status = +w[1]; type = w[2]; finalUrl = w[3] || url;
+    } else {
+      if (/Connection refused/.test(tail)) refused();
+      if (/timed out|Resource temporarily unavailable/.test(tail)) timedOut();
+      // Last status wins: -S prints every hop of a redirect. Same for the rest.
+      const all = [...tail.matchAll(/^\s*HTTP\/\d\.\d (\d{3})/gm)];
+      const err = tail.match(/server returned error: HTTP\/\d\.\d (\d{3})/);
+      if (!all.length && !err) {
+        throw new Error(`wget inside the machine failed (exit ${rc}): ${tail.split('\n').filter(l => /^wget:/.test(l)).join('; ') || tail.slice(-200) || 'no detail'}`);
+      }
+      status = +(err ? err[1] : all[all.length - 1][1]);
+      const ct = [...tail.matchAll(/^\s*Content-Type:\s*(.*)$/gim)];
+      type = ct.length ? ct[ct.length - 1][1].trim() : '';
+      const loc = [...tail.matchAll(/^\s*Location:\s*(\S+)/gim)];
+      if (loc.length) { try { finalUrl = new URL(loc[loc.length - 1][1], url).href; } catch {} }
+      if (rc !== 0) {
+        // wget saved nothing: say what the server said, and that the body is gone.
+        return { ok: false, status, type, finalUrl, via, text: `${host} answered ${status} (busybox wget keeps no body for an error status; curl would)` };
+      }
+    }
+    const bytes = await VM.readFile(name);
+    if (!bytes) throw new Error(`the machine wrote no body for ${url} (${via} exit ${rc})`);
+    return { ok: status >= 200 && status < 300, status, type, finalUrl, via, text: new TextDecoder().decode(bytes) };
+  } finally {
+    VM.exec(`rm -f /mnt/${name} /mnt/${name}.sh /tmp/${name}.err`).catch(() => {});
+  }
+}
+
 function BrowserApp(body) {
   body.style.padding = '0';
   body.innerHTML = `
@@ -3280,36 +3832,53 @@ function BrowserApp(body) {
   const status = body.querySelector('#status'), back = body.querySelector('#back');
   const stack = [];
 
+  // Every place a page names a URL, passed through fn: the href/src/poster/
+  // action attributes (quoted either way, or not at all — <img src=/p.png>
+  // is legal HTML and used to slip past a quoted-only pattern), srcset's
+  // comma list with descriptors (missing it is why responsive images,
+  // Google's logo among them, rendered as broken icons), and url(...) in
+  // inline styles. attrs narrows the attribute pass.
+  // An attribute value is entity-decoded by the parser before it is a URL:
+  // src="http://localhost&#58;3000/x" is a guest URL to the browser and was
+  // not one to a regex over the raw text. Decoded the way the browser does
+  // it (DOMParser documents are inert — nothing in them fetches), then
+  // re-escaped on the way out so the value stays inside its quotes.
+  const decodeAttr = (v) => !v.includes('&') ? v
+    : new DOMParser().parseFromString(`<i title="${v.replace(/"/g, '&quot;')}">`, 'text/html').querySelector('i').getAttribute('title');
+  const escAttr = (v) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const rewriteUrls = (html, fn, attrs = 'href|src|poster|action', cssFn = fn) => html
+    .replace(new RegExp(`\\b(${attrs})\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>"'=]+))`, 'gi'),
+             (m, attr, dq, sq, uq) => { const v = decodeAttr(dq ?? sq ?? uq); return `${attr}="${v === '' ? '' : escAttr(fn(v))}"`; })
+    .replace(/\bsrcset\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"'=]+))/gi, (m, dq, sq, uq) =>
+      'srcset="' + (dq ?? sq ?? uq).split(',').map(part => {
+        const bits = part.trim().split(/\s+/);
+        if (!bits[0]) return part.trim();
+        bits[0] = fn(bits[0]);
+        return bits.join(' ');
+      }).join(', ') + '"')
+    .replace(/url\((['"]?)([^'")]+)\1\)/gi, (m, q, val) => `url(${q}${cssFn(val)}${q})`);
+
   const absolutise = (html, base) => {
     // Relative URLs would resolve against our origin inside srcdoc, so make
-    // them absolute against the page they came from.
+    // them absolute against the page they came from. action too: a guest
+    // page's <form action="/search"> must come back to the guest through
+    // open(), not resolve against this origin.
     try {
       const b = new URL(base);
       const one = (val) => {
         if (/^(https?:|data:|mailto:|#)/i.test(val)) return val;
         try { return new URL(val, b).href; } catch { return val; }
       };
-      return html
-        .replace(/\b(href|src|poster)\s*=\s*["']([^"']+)["']/gi,
-                 (m, attr, val) => `${attr}="${one(val)}"`)
-        // srcset is a comma-separated list with descriptors, so it needs its
-        // own pass — missing it is why responsive images (Google's logo among
-        // them) rendered as broken icons.
-        .replace(/\bsrcset\s*=\s*["']([^"']+)["']/gi, (m, list) =>
-          'srcset="' + list.split(',').map(part => {
-            const bits = part.trim().split(/\s+/);
-            if (!bits[0]) return part.trim();
-            bits[0] = one(bits[0]);
-            return bits.join(' ');
-          }).join(', ') + '"')
-        // Same problem inside inline styles: url(...) references. Fonts are the
-        // one asset the frame cannot load cross-origin (CORS-checked), so
-        // they go through the proxy — every proxied page with an icon font
-        // spat six CORS errors into the console for nothing.
-        .replace(/url\((['"]?)([^'")]+)\1\)/gi, (m, q, val) => {
-          const abs = one(val);
-          return /\.(woff2?|ttf|otf|eot)(\?|#|$)/i.test(abs) ? `url(${q}${PROXY}${encodeURIComponent(abs)}${q})` : `url(${q}${abs}${q})`;
-        });
+      // Fonts are the one asset the frame cannot load cross-origin
+      // (CORS-checked), so they go through the proxy — every proxied page with
+      // an icon font spat six CORS errors into the console for nothing. Not a
+      // guest's fonts: the proxy must never be asked about the machine's
+      // localhost, and blankGuestAssets blanks them with the rest.
+      const font = (val) => {
+        const abs = one(val);
+        return !isGuestHost(abs) && /\.(woff2?|ttf|otf|eot)(\?|#|$)/i.test(abs) ? PROXY + encodeURIComponent(abs) : abs;
+      };
+      return rewriteUrls(html, one, undefined, font);
     } catch { return html; }
   };
 
@@ -3330,9 +3899,11 @@ function BrowserApp(body) {
     const text = raw.trim();
     if (!text) return '';
     if (/^https?:\/\//i.test(text)) return text;
-    if (/^[^\s/?#]+\.[a-z]{2,}(?::\d+)?([/?#].*)?$/i.test(text) || /^localhost(:\d+)?/i.test(text)) {
-      return 'https://' + text;
-    }
+    // localhost and bare IPv4 addresses are http: they are the machine's own
+    // dev servers (fetched from inside it — see guestFetch), and nobody has a
+    // certificate for 127.0.0.1. Everything with a name gets https.
+    if (/^(localhost|\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?([/?#].*)?$/i.test(text)) return 'http://' + text;
+    if (/^[^\s/?#]+\.[a-z]{2,}(?::\d+)?([/?#].*)?$/i.test(text)) return 'https://' + text;
     // Marginalia, after measuring the alternatives through this proxy on
     // 2026-09-02. DuckDuckGo (all three endpoints) and Ecosia hard-403 us.
     // Google and Bing answer 200 but emit no plain result links, so with
@@ -3343,11 +3914,46 @@ function BrowserApp(body) {
     return 'https://old-search.marginalia.nu/search?query=' + encodeURIComponent(text);
   };
 
+  // Escaped: the title carries the typed host and the detail carries what a
+  // server or the guest's wget said, and the frame must never fetch or render
+  // anything either of them chose.
   const errorPage = (title, detail) =>
     `<!doctype html><meta charset="utf-8"><body style="margin:0;padding:28px;background:var(--panel2);color:var(--text);font:14px system-ui,-apple-system,sans-serif">
-       <p style="margin:0 0 6px;font-weight:600">${title}</p>
-       <p style="margin:0;color:var(--dim);font-size:13px;line-height:1.5">${detail}</p>
+       <p style="margin:0 0 6px;font-weight:600">${escHtml(title)}</p>
+       <p style="margin:0;color:var(--dim);font-size:13px;line-height:1.5">${escHtml(detail)}</p>
      </body>`;
+  const fail = (text) => { status.innerHTML = '<span class="no"></span>'; status.querySelector('.no').textContent = text; };
+
+  // Every subresource that resolves to the guest, blanked. absolutise() has
+  // already made them absolute, so a bare /logo.png is http://localhost:3000/
+  // logo.png here and would otherwise be fetched by the HOST browser from the
+  // developer's own port 3000. <a href> stays: a click comes back through
+  // open() and is fetched inside the machine like the page was. <link href>
+  // does not: a stylesheet is a fetch.
+  // This pass is for the rendered DOM's honesty, not the guarantee: it is a
+  // regex allowlist, and <body background>, <svg><image href>, @import "…",
+  // image-set("…") each slipped past an earlier version of it (measured, the
+  // host fetched all four). The guarantee is GUEST_CSP on the frame itself.
+  const blankGuestAssets = (html) => {
+    const blank = (val) => isGuestHost(val) ? 'data:,' : val;
+    return rewriteUrls(html, blank, 'src|poster|background')
+      .replace(/<(?:link|image)\b[^>]*>/gi, tag => rewriteUrls(tag, blank, 'href'));
+  };
+  // The frame refuses every fetch the rewrites miss. Inline styles stay so
+  // the page keeps its shape; data: images stay because that is what the
+  // blanks are.
+  const GUEST_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'">`;
+
+  // The proxy's answer in the same shape as guestFetch's, so open() renders
+  // both the same way. finalUrl is where the content actually came from, for
+  // resolving relative URLs.
+  const proxyFetch = async (url) => {
+    const r = await fetch(PROXY + encodeURIComponent(url), { headers: { 'ngrok-skip-browser-warning': '1' } });
+    const type = r.headers.get('content-type') || '';
+    const finalUrl = r.headers.get('x-final-url') || url;
+    const text = await r.text();
+    return { ok: r.ok, status: r.status, type, text, finalUrl, via: 'proxy' };
+  };
 
   async function open(target, push = true) {
     const url = asUrl(target);
@@ -3355,13 +3961,12 @@ function BrowserApp(body) {
     input.value = url;
     status.textContent = 'fetching…';
     frame.removeAttribute('srcdoc');
+    const guest = isGuestHost(url);
+    const host = (() => { try { return new URL(url).host; } catch { return url; } })();
     try {
-      track('browser_open');
-      const r = await fetch(PROXY + encodeURIComponent(url), { headers: { 'ngrok-skip-browser-warning': '1' } });
-      const type = r.headers.get('content-type') || '';
-      // Resolve relative URLs against where the content actually came from.
-      const finalUrl = r.headers.get('x-final-url') || url;
-      const text = await r.text();
+      track('browser_open', { guest });
+      const r = await (guest ? guestFetch(url) : proxyFetch(url));
+      const { type, finalUrl, text } = r;
       if (!r.ok) {
         let msg = text;
         try { msg = JSON.parse(text).error || text; } catch {}
@@ -3369,28 +3974,36 @@ function BrowserApp(body) {
         // A blank white frame reads as "vibeOS is broken". Say who refused and
         // why — 403 and 429 here are almost always the site blocking datacenter
         // egress, which is the proxy's address, not a bug in this browser.
-        const host = (() => { try { return new URL(url).host; } catch { return url; } })();
-        const hint = (r.status === 403 || r.status === 429)
+        const hint = !guest && (r.status === 403 || r.status === 429)
           ? `${host} refuses requests from datacenter addresses, and the proxy is one. Nothing here can change that — the site has to be reachable without a browser fingerprint.`
           : (msg || 'No detail was returned.');
         frame.srcdoc = errorPage(`${host} returned ${r.status}`, hint);
-        status.innerHTML = `<span class="no">${r.status} · ${host}</span>`;
+        fail(`${r.status} · ${host}` + (guest ? ' · inside the machine' : ''));
         return;
       }
       if (push) { stack.push(url); back.style.opacity = stack.length < 2 ? '.6' : '1'; }
 
       const doc = type.includes('text/html')
-        ? absolutise(strip(text), finalUrl)
+        ? (guest ? blankGuestAssets : (h => h))(absolutise(strip(text), finalUrl))
         : `<pre style="white-space:pre-wrap;font:13px ui-monospace,monospace;padding:12px">${
              text.slice(0, 200000).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</pre>`;
 
       // No target="_blank": links used to leave for the host browser, which is
       // the one place a browser app should never send you. The load handler
       // below catches clicks and navigates here instead.
-      frame.srcdoc = `<!doctype html><meta charset="utf-8"><base href="${finalUrl}">${doc}`;
-      status.innerHTML = `<span class="dimmer">${type.split(';')[0] || 'ok'} · ${(text.length / 1024).toFixed(0)} KB · scripts disabled</span>`;
+      // A guest page gets no <base>: with one, any relative URL the rewrites
+      // above missed would resolve to the guest host and be fetched by the
+      // host browser from the developer's laptop; without one it resolves to
+      // this origin, where nothing of the sort is served.
+      frame.srcdoc = `<!doctype html><meta charset="utf-8">${guest ? GUEST_CSP : `<base href="${finalUrl}">`}${doc}`;
+      status.innerHTML = '<span class="dimmer"></span>';
+      status.querySelector('.dimmer').textContent = `${type.split(';')[0] || 'ok'} · ${(text.length / 1024).toFixed(0)} KB · `
+        + (guest ? `served from inside the machine (${r.via}) · scripts off · assets not loaded` : 'scripts disabled');
     } catch (e) {
-      status.innerHTML = `<span class="no">${e.message}</span>`;
+      // Not a blank frame: the guest case is the one where a person is
+      // waiting for their own server, and "nothing is listening" is the answer.
+      frame.srcdoc = errorPage(guest ? `${host} inside the machine` : host, e.message);
+      fail(e.message);
     }
   }
 
@@ -3700,7 +4313,7 @@ const ICONS = {
 };
 
 const SHELL = {
-  chat:     { title: 'vibeOS',   badge: 'agent',    render: ChatApp,     w: 580, h: 500 },
+  chat:     { id: 'chat', title: 'vibeOS', badge: 'agent', render: ChatApp, w: 580, h: 500 },
   browser:  { title: 'Browser',  badge: 'proxied',  render: BrowserApp,  w: 820, h: 560 },
   settings: { title: 'Settings', badge: '',         render: SettingsApp, w: 720, h: 480 },
 };
@@ -3722,7 +4335,7 @@ async function paintDock() {
     return b;
   };
 
-  add(ICONS.vibeos, 'vibeOS — ask for an app', () => openWindow(SHELL.chat));
+  add(ICONS.vibeos, 'vibeOS — ask for an app', () => focusOrOpen(SHELL.chat));
   add('🌐', 'Browser', () => openWindow(SHELL.browser));
 
   let apps = [];
@@ -3830,7 +4443,7 @@ window.addEventListener('beforeunload', (e) => {
   await paintDock();
   VM.on(s => { if (s === 'ready') paintDock(); });
   // open the agent, not a settings panel — vibeOS is the app.
-  openWindow(SHELL.chat);
+  focusOrOpen(SHELL.chat);
   bootFinished();
   if (window.__vibeosBoot.source === 'served' && window.__vibeosBoot.storedFailed) {
     recoveryBar('Your edited OS did not finish booting last time, so this is the stock one.',
