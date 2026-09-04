@@ -957,6 +957,11 @@ class RemoteSocket {
 const RemoteBridge = {
   RELAY_KEY: 'vibeos-mcp-relay',
   KEEPALIVE_MS: 30000,
+  // A pong must come back within this, or the socket is dead without a
+  // close event (a laptop that slept, a network that changed) and the pane
+  // would say 'waiting' over a relay that dropped the tab long ago.
+  PONG_MS: 10000,
+  instance: null,
   // off | pairing | waiting | connected | error. `detail` is the agent's name
   // when connected, the message when error, the reason while pairing.
   state: 'off',
@@ -1070,14 +1075,29 @@ const RemoteBridge = {
   // ignores a frame with no id, tools or error.
   startKeepalive() {
     this.stopKeepalive();
-    this.keepalive = setInterval(() => { if (this.socket && this.socket.open) this.socket.send(JSON.stringify({ ping: Date.now() })); }, this.KEEPALIVE_MS);
+    this.keepalive = setInterval(() => {
+      if (!this.socket || !this.socket.open) return;
+      this.socket.send(JSON.stringify({ ping: Date.now() }));
+      // The deadline runs from the FIRST unanswered ping; a later ping must
+      // not push it out, or a dead socket is never declared dead.
+      if (this.pongTimer) return;
+      this.pongTimer = setTimeout(() => {
+        if (!this.socket || !this.socket.open) return;
+        console.warn('RemoteBridge: no pong in ' + this.PONG_MS + ' ms — the socket is dead without saying so; redialing');
+        track('mcp_silent');
+        this.set('pairing', 'the relay went silent; redialing');
+        this.socket.__inner.close();   // RemoteSocket redials on close
+      }, this.PONG_MS);
+    }, this.KEEPALIVE_MS);
   },
-  stopKeepalive() { clearInterval(this.keepalive); this.keepalive = null; },
+  stopKeepalive() { clearInterval(this.keepalive); this.keepalive = null; clearTimeout(this.pongTimer); this.pongTimer = null; },
 
   handle(raw) {
     let msg;
     try { msg = JSON.parse(raw); } catch (e) { console.error('RemoteBridge: a frame that is not JSON from the relay:', raw); return; }
     if (!msg || typeof msg !== 'object') return;
+    if (typeof msg.instance === 'string') this.instance = msg.instance.slice(0, 16);
+    if ('pong' in msg) { clearTimeout(this.pongTimer); this.pongTimer = null; return; }
     if ('paired' in msg) { if (msg.paired) this.connected(); else this.set('waiting'); return; }
     if (msg.want === 'tools') {
       this.connected(typeof msg.agent === 'string' ? msg.agent.slice(0, 80) : '');

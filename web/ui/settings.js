@@ -412,6 +412,9 @@ function mcpPane(body, win) {
   trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token lives in this tab only and dies with it.';
   const refusal = RemoteBridge.refusal();
   let probe = null;
+  // The relay instance this tab landed on. An agent that reports a different
+  // one never sees this tab: the pairing map is per instance.
+  const inst = () => RemoteBridge.instance ? ' Relay instance ' + RemoteBridge.instance + '.' : '';
   const paint = () => {
     const st = RemoteBridge.state, d = RemoteBridge.detail;
     state.className = 'small ' + (st === 'connected' ? 'yes' : st === 'error' ? 'no' : st === 'off' ? 'dimmer' : 'part');
@@ -420,8 +423,8 @@ function mcpPane(body, win) {
       : st === 'off' && probe && !probe.ok ? probe.reason
       : st === 'off' ? 'No agent paired. Pairing mints a token for this tab.'
       : st === 'pairing' ? 'Pairing — ' + d + '…'
-      : st === 'waiting' ? 'Waiting for an agent: paste the command into your MCP client. Talk to your agent in its own window; it drives this desktop, and the built-in chat keeps working alongside it.'
-      : st === 'connected' ? d + ' is connected and driving this desktop (' + RemoteBridge.calls + ' call' + (RemoteBridge.calls === 1 ? '' : 's') + '). Talk to it in its own window.'
+      : st === 'waiting' ? 'Waiting for an agent: paste the command into your MCP client. Talk to your agent in its own window; it drives this desktop, and the built-in chat keeps working alongside it.' + inst()
+      : st === 'connected' ? d + ' is connected and driving this desktop (' + RemoteBridge.calls + ' call' + (RemoteBridge.calls === 1 ? '' : 's') + '). Talk to it in its own window.' + inst()
       : 'Not connected — ' + d;
     const hasToken = !!RemoteBridge.token;
     cmd.hidden = !hasToken;
