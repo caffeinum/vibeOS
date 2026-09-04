@@ -1,0 +1,21 @@
+.github/workflows/docker.yml
+  s_5e83b0922092c9::t_6aceef8262e422 201
+  s_5e83b0922092c9::t_77a13b0b46c7a6 170-185,187-200
+  s_5e83b0922092c9::t_8c04007271b2b0 169,186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "461fde8d126a7822d1f9f53e938c1caecd41ac60",
+  "prompts": {},
+  "sessions": {
+    "s_5e83b0922092c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aac9fd07-cba9-4a58-9d86-8bcf27c81bdb",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
