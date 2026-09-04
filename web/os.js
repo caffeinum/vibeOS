@@ -181,7 +181,13 @@ const Workspace = {
     await this.mount(dir);
   },
 
-  get label() { return this.private ? 'private browser storage' : (this.root.name || 'workspace'); },
+  // 'no workspace' is a state, not a name: the Workspace pane and the app
+  // save report read this while a folder is still waiting to be re-granted,
+  // and `this.root.name` threw there.
+  get label() {
+    if (!this.open) return 'no workspace';
+    return this.private ? 'private browser storage' : (this.root.name || 'workspace');
+  },
 
   async restore() {
     if (!canPickDirectory) return 'no-picker';
@@ -189,10 +195,22 @@ const Workspace = {
     let handle;
     try { handle = await idb.get('workspace'); } catch { return 'none'; }
     if (!handle) return 'none';
+    // mountPrivate() stores the OPFS root under the same key, so a reload of a
+    // private workspace comes back through here. Its name is '', and without
+    // this it mounted as a folder called 'workspace' — the one label that
+    // says nothing about where the files are.
+    const isPrivate = await this.isPrivateRoot(handle);
     const perm = await handle.queryPermission({ mode: 'readwrite' });
-    if (perm === 'granted') { await this.mount(handle); return 'restored'; }
+    if (perm === 'granted') { this.private = isPrivate; await this.mount(handle); return isPrivate ? 'private' : 'restored'; }
     this.pending = handle;
     return 'needs-permission';
+  },
+
+  async isPrivateRoot(handle) {
+    if (!navigator.storage || !navigator.storage.getDirectory) return false;
+    let opfs;
+    try { opfs = await navigator.storage.getDirectory(); } catch { return false; }   // opaque origin: no OPFS, so not it
+    return handle.isSameEntry(opfs);
   },
 
   async regrant() {
@@ -222,13 +240,47 @@ const Workspace = {
   // Path-addressed access for the agent's file tools. Reads of the OS source
   // fall back to the served copy, so the very first edit_file has the real
   // file to edit and writing it is what forks the OS into this workspace.
-  async dirFromPath(path, create) {
+  async dirFromPath(path, create, root = this.root) {
     const parts = String(path).replace(/^\/+/, '').split('/').filter(Boolean);
     if (!parts.length || parts.some(x => x === '..')) throw new Error('bad path: ' + path);
-    let dir = this.root;
+    let dir = root;
     for (const seg of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(seg, { create });
     return { dir, name: parts[parts.length - 1] };
   },
+  // Bytes, for the VM snapshot. `root` may be a directory other than the
+  // workspace (private storage when none is open); the text helpers above
+  // always mean the workspace and take no such argument.
+  async readBytesPath(path, root = this.root) {
+    if (!root) throw new Error('no workspace is open');
+    const { dir, name } = await this.dirFromPath(path, false, root);
+    return new Uint8Array(await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer());
+  },
+
+  async writeBytesPath(path, bytes, root = this.root) {
+    if (!root) throw new Error('no workspace is open');
+    const { dir, name } = await this.dirFromPath(path, true, root);
+    const fh = await dir.getFileHandle(name, { create: true });
+    const w = await fh.createWritable(); await w.write(bytes); await w.close();
+  },
+
+  // null when the file does not exist; any other failure is thrown.
+  async statPath(path, root = this.root) {
+    if (!root) throw new Error('no workspace is open');
+    let dir, name;
+    try { ({ dir, name } = await this.dirFromPath(path, false, root)); }
+    catch (e) { if (e.name === 'NotFoundError') return null; throw e; }
+    let file;
+    try { file = await (await dir.getFileHandle(name)).getFile(); }
+    catch (e) { if (e.name === 'NotFoundError') return null; throw e; }
+    return { size: file.size, modified: file.lastModified, file };
+  },
+
+  async removePath(path, root = this.root) {
+    if (!root) throw new Error('no workspace is open');
+    const { dir, name } = await this.dirFromPath(path, false, root);
+    await dir.removeEntry(name);
+  },
+
   osFile(path) {
     const m = /^system\/(os\.js|os\.css)$/.exec(String(path).replace(/^\/+/, ''));
     return m ? m[1] : null;
@@ -331,7 +383,8 @@ const Workspace = {
     for (const dir of [this.apps, this.dataDir]) {
       for await (const [name, h] of dir.entries()) {
         if (h.kind !== 'file') continue;
-        out.push({ name, size: (await h.getFile()).size });
+        const file = await h.getFile();
+        out.push({ name, size: file.size, modified: file.lastModified });
       }
     }
     return out;
@@ -345,8 +398,10 @@ const Workspace = {
     const out = [];
     for await (const [name, h] of this.apps.entries()) {
       if (h.kind !== 'file' || !name.endsWith('.js')) continue;
-      try { out.push({ name, source: await (await h.getFile()).text() }); }
-      catch (e) { out.push({ name, error: e.message }); }
+      try {
+        const file = await h.getFile();
+        out.push({ name, source: await file.text(), modified: file.lastModified });
+      } catch (e) { out.push({ name, error: e.message }); }
     }
     return out.sort((a, b) => a.name.localeCompare(b.name));
   },
@@ -2604,7 +2659,7 @@ const DEBIAN_BASE = 'https://d3je35hqch090t.cloudfront.net/debian-3/';
 const ALPINE_BASE = 'https://d3je35hqch090t.cloudfront.net/alpine-2/';
 const IMAGES = {
   alpine: {
-    label: 'Alpine', blurb: 'streamed 91 MB disk, apk works, usually 20-30 s to a shell — longer on a busy machine',
+    id: 'alpine', label: 'Alpine', blurb: 'streamed 91 MB disk, apk works, usually 20-30 s to a shell — longer on a busy machine',
     // The same budget as the bundled image: 20-40 s measured, and a laptop on
     // battery with the tab in the background is slower by more than 2x.
     memoryMB: 128, bootTimeoutMs: 120000,
@@ -2627,6 +2682,9 @@ const IMAGES = {
     }),
     dhcp: 'ifconfig eth0 up; udhcpc -i eth0 -n -q 2>&1 | tail -1',
     ip: "ifconfig eth0 | grep -o 'inet addr:[0-9.]*' | cut -d: -f2",
+    // The same ne2k and the same BusyBox ifconfig as the bundled image: a
+    // restored card receives nothing until the driver resets it (see boot).
+    netReset: 'ifconfig eth0 down; ifconfig eth0 up',
     // Measured on alpine-2: /sys/class/net/lo/flags is 0x8 after boot (no UP),
     // and a connect to 127.0.0.1 hangs until curl's --max-time, so the
     // Browser's localhost never answered on the default image.
@@ -2634,11 +2692,12 @@ const IMAGES = {
     shellLine: 'Then a POSIX shell script for Alpine Linux 3.20 (BusyBox ash, musl). apk works (run apk update first; the network is on): apk add <pkg>. Installed: busybox sh grep sed awk find, curl wget ca-certificates, git nano less. No bash, no glibc — a glibc binary will not run without gcompat. The workspace is at /mnt. Print results to stdout.',
   },
   busybox: {
-    label: 'BusyBox', blurb: 'tiny: bundled 7 MB ISO, boots in about 10 s, no package manager',
+    id: 'busybox', label: 'BusyBox', blurb: 'tiny: bundled 7 MB ISO, boots in about 10 s, no package manager',
     memoryMB: 64, bootTimeoutMs: 120000,
     config: () => ({ cdrom: { url: V86_ASSETS + 'linux4.iso' } }),
     dhcp: 'udhcpc -i eth0 -n -q 2>&1 | tail -1',
     ip: "ifconfig eth0 | grep -o 'inet addr:[0-9.]*' | cut -d: -f2",
+    netReset: 'ifconfig eth0 down; ifconfig eth0 up',
     // linux4.iso boots with lo DOWN (measured: `ifconfig lo` shows no UP flag
     // and a connect to 127.0.0.1 hangs until the timeout instead of being
     // refused), so nothing on localhost — a dev server, the Browser — works
@@ -2647,7 +2706,7 @@ const IMAGES = {
     shellLine: 'Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.',
   },
   debian: {
-    label: 'Debian', blurb: 'full: streamed 1 GB disk, apt works, slow — 80 to 120 s to a shell',
+    id: 'debian', label: 'Debian', blurb: 'full: streamed 1 GB disk, apt works, slow — 80 to 120 s to a shell',
     memoryMB: 256, bootTimeoutMs: 360000,
     preflight: DEBIAN_BASE + 'bzImage',
     config: () => ({
@@ -2665,6 +2724,7 @@ const IMAGES = {
     // udev may rename eth0 to enp0s5 before we get here; ask for whatever is not lo.
     dhcp: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); dhclient -1 $IF 2>&1 | tail -1',
     ip: "ip -4 -o addr show $(ls /sys/class/net | grep -v ^lo$ | head -1) | grep -o 'inet [0-9.]*' | cut -d' ' -f2",
+    netReset: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); ip link set $IF down; ip link set $IF up',
     shellLine: 'Then a bash script for Debian 12. apt-get works (run apt-get update first; the network is on). Common tools are installed: bash coreutils grep sed awk find curl wget git nano. python3 is NOT installed by default. The workspace is at /mnt. Print results to stdout.',
   },
 };
@@ -2682,13 +2742,184 @@ const IMAGES = {
 const NET_DEFAULT = 'wisps://vibeos.sh/api/wisp';
 const NET_OURS = 'wisps://wisp.mercurywork.shop/';
 
+/* ---------- snapshots: the machine as a file ---------------------------
+
+   v86 can serialise the whole machine — RAM, CPU, devices, the 9p mount —
+   into one ArrayBuffer, and restore it into a freshly constructed emulator.
+   That makes a booted machine restorable in seconds instead of re-running
+   the kernel, and it is what lets an apt install outlive a reload: the
+   Debian disk is streamed and its writes live only in memory.
+
+   One snapshot per image, at system/vm-<image>.state in the workspace, or
+   in private browser storage when no workspace is open. gzip on the way in:
+   the state is RAM plus every device, and for BusyBox that includes the
+   7.7 MB CD image v86 keeps in memory — measured 51.2 MB of state, 30.9 MB
+   on disk, 1.2 s to save. The gzip trailer carries the raw size, so a stat
+   reports both without reading the file back.
+
+   Every verb takes the store to use — {root, where, private} — and none
+   resolves one for itself. The store a boot looks in is pinned on the VM
+   for the life of that boot (VM.store), and that is the only store a
+   snapshot is ever written to: resolving it at write time meant that a
+   workspace folder waiting to be re-granted at boot (so the boot looked in
+   private storage, found nothing and ran the kernel) and re-granted within
+   the 10 s auto-snapshot had a fresh cold machine written over the good
+   snapshot in the folder.
+
+   When the snapshot was taken is the instant BEFORE save_state, and it
+   travels inside the file, in the gzip header's MTIME (bytes 4–7, seconds
+   since the epoch, the field the format defines for "when the original
+   was made"; CompressionStream leaves it zero). The file's own mtime is
+   after save_state + gzip + write — 1.2 s on BusyBox, 4.7 s on Debian —
+   so a disk edit inside that window read as newer than the machine and
+   was 'differs' forever after a restore instead of being pushed in. A
+   sidecar json would carry milliseconds, but it is a second file that a
+   copy, a sync or a hand edit can separate from the state it describes;
+   the header cannot be. The cost is one-second resolution: an edit that
+   landed on disk in the same second the snapshot started counts as after
+   it, and the disk is the truth in that second too.
+   -------------------------------------------------------------------- */
+
+const Snapshots = {
+  path(image) { return 'system/vm-' + image + '.state'; },
+
+  // Where a snapshot would go right now: the open workspace, else private
+  // browser storage.
+  async current() {
+    if (Workspace.open) return { root: Workspace.root, where: Workspace.label, private: Workspace.private };
+    const priv = await this.privateStore();
+    if (priv) return priv;
+    throw new Error('nowhere to keep a snapshot: no workspace is open and this browser has no private storage');
+  },
+
+  async privateStore() {
+    if (!navigator.storage || !navigator.storage.getDirectory) return null;
+    return { root: await navigator.storage.getDirectory(), where: 'private browser storage', private: true };
+  },
+
+  same(a, b) { return a.root === b.root ? Promise.resolve(true) : a.root.isSameEntry(b.root); },
+
+  // null when there is none. Sizes are bytes: on disk, and the raw state.
+  // A file too short to be gzip, or without its magic, is reported rather
+  // than thrown: a 0-byte file made the trailer DataView throw RangeError,
+  // which the boot read as "could not look for a snapshot" and the Machine
+  // tab showed raw, with no Forget button for the file that caused it.
+  async stat(image, store) {
+    const st = await Workspace.statPath(this.path(image), store.root);
+    if (!st) return null;
+    const info = { image, bytes: st.size, rawBytes: null, savedAt: null, where: store.where, corrupt: '' };
+    const head = this.header(new Uint8Array(await st.file.slice(0, 10).arrayBuffer()), st.size);
+    if (head.corrupt) info.corrupt = head.corrupt;
+    else {
+      info.rawBytes = new DataView(await st.file.slice(-4).arrayBuffer()).getUint32(0, true);
+      info.savedAt = head.takenAt;
+    }
+    return info;
+  },
+
+  // One verdict on the first bytes for stat and read alike: a file read()
+  // would take that stat() calls unusable is a machine restored without a
+  // time, and every disk file would then read as newer than it.
+  header(head, size) {
+    if (size === 0) return { corrupt: 'the snapshot file is empty (0 bytes)' };
+    if (size < 18 || head[0] !== 0x1f || head[1] !== 0x8b) return { corrupt: `the snapshot file is not what this desktop writes (${size} bytes, no gzip header)` };
+    const takenAt = new DataView(head.buffer, head.byteOffset).getUint32(4, true) * 1000;
+    if (!takenAt) return { corrupt: 'the snapshot does not say when it was taken (written by an older desktop), so a disk edit since could not be told from a file it holds' };
+    return { takenAt };
+  },
+
+  async read(image, store) {
+    const gz = await Workspace.readBytesPath(this.path(image), store.root);
+    const head = this.header(gz.subarray(0, 10), gz.length);
+    if (head.corrupt) throw new Error(head.corrupt);
+    const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).arrayBuffer();
+  },
+
+  async write(image, state, store, takenAt) {
+    if (!Number.isInteger(takenAt) || takenAt <= 0) throw new Error('a snapshot must say when it was taken');
+    const stream = new Blob([state]).stream().pipeThrough(new CompressionStream('gzip'));
+    const gz = new Uint8Array(await new Response(stream).arrayBuffer());
+    const seconds = Math.floor(takenAt / 1000);
+    new DataView(gz.buffer, gz.byteOffset, gz.byteLength).setUint32(4, seconds, true);
+    await Workspace.writeBytesPath(this.path(image), gz, store.root);
+    return { image, bytes: gz.length, rawBytes: state.byteLength, savedAt: seconds * 1000, where: store.where };
+  },
+
+  async forget(image, store) {
+    if (!(await Workspace.statPath(this.path(image), store.root))) return false;
+    await Workspace.removePath(this.path(image), store.root);
+    return true;
+  },
+};
+
+const APT_INSTALL = /\bapt(-get)?\b[^|;&]*\binstall\b/;
+
 // The shell prompt at the end of the serial line: busybox `~% ` / `~# `,
 // debian `root@vibeos:~# `.
 const PROMPT_TAIL = /(?:[\w.@()-]*:)?~[%#$]\s*$/;
-// The same prompt for cutting it off captured output, with the hostname spelt
-// out (see _exec): the class above is right for "is the shell back", wrong
-// for "where does the output end".
-const PROMPT_STRIP = /(?:(?:root@)?vibeos:)?~ ?[%#$]\s*$/;
+// The same prompt where it is cut off captured output, with the hostname
+// spelt out. PROMPT_TAIL's class before the colon is right for "is the shell
+// back" and wrong for "where does the output end": it swallowed output that
+// shares the prompt line — `printf no-trailing-newline` on Alpine came back
+// "" and `printf "a\nb\nc"` came back "a\nb", because
+// "no-trailing-newlinevibeos:" is all word characters. Every image we build
+// is hostname vibeos; BusyBox prints no hostname.
+const PROMPT = '(?:(?:root@)?vibeos:)?~ ?[%#$]';
+const PROMPT_STRIP = new RegExp(PROMPT + '\\s*$');
+const PROMPT_AT_START = new RegExp('^' + PROMPT + '\\s*');
+
+// What one exec returns, from the serial bytes since it typed, or null while
+// the command is still running. Pure, so scripts/e2e/exec-parse.mjs can run
+// it over chunks captured verbatim from the runs that broke it.
+//
+// Done only when THIS exec's mark comes back as a line of its own. The shell
+// echoes the sentinel command first (` echo __VOSn__`), and those bytes also
+// contain `__VOSn__\r\n`; a quiet machine prints the echo and the real line
+// inside one 120 ms poll, so `includes(mark)` worked by luck. Under load the
+// poll saw the echo alone, the exec resolved before its command had run,
+// `from` for the next exec landed before this mark's real line, and a check
+// for any `__VOS\d+__` then ended that one on the spot too. Measured, 5 runs
+// on a loaded laptop (cold boots 10–17 s): `echo alive` returned
+// "__VOS2__\nalive"; a dhcp exec ended on the previous mark and left udhcpc
+// running while the next three commands were echoed by the kernel tty, each
+// returning "" — 7 checks failed per run, 3 runs of 5. The same rule is what
+// keeps a timed-out command's late sentinel from ending the NEXT exec with
+// the wrong output, and the typed echo (`^Cecho again`, landed while the tty
+// was still cooked) from passing for the result.
+//
+// Output ends where the shell echoes back the sentinel command we typed. CUT
+// there rather than dropping the line containing it: a command whose output
+// has no trailing newline — `cat` on almost any file — leaves the prompt and
+// that echo on the SAME line as the last line of output, so dropping the
+// line dropped the output with it. The echo may arrive with the prompt in
+// front of it: `from` is taken the instant the previous exec sees its
+// sentinel, and the shell prints the next `~% ` a beat later, so a queued
+// exec's chunk can start `~% printf x` rather than `printf x` (2 runs in 5
+// under load returned "~% printf no-newline\nno-newline"). And cut at the
+// LAST echo before the mark's own line, not the first: under load the next
+// exec's bytes arrived while the shell was still leaving its line editor, so
+// the kernel tty echoed both lines at once (`printf x\r\n echo __VOSn__\r\n`)
+// and the shell then read and echoed them again with prompts — cutting at
+// the first copy returned "" (once in 11 runs, on a 12.6 s cold boot).
+function execResult(chunk, cmd, mark) {
+  // On the cleaned bytes, and after a bare \r too: bash's readline answers
+  // Enter with `\e[?2004l\r` before the command's first output byte.
+  const clean = chunk.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');   // colour and bracketed-paste
+  const done = new RegExp('(^|[\\r\\n])' + mark + '\\r?\\n');
+  if (!done.test(clean)) return null;
+  const body = clean.slice(0, done.exec(clean).index);
+  const cut = body.lastIndexOf('echo ' + mark);
+  return (cut >= 0 ? body.slice(0, cut) : body)
+    .split(/\r?\n/)
+    .filter(l => l.replace(PROMPT_AT_START, '').trim() !== cmd.trim())   // the terminal echoing what we typed
+    .filter(l => l.trim() !== 'echo ' + mark)                             // the kernel's copy of the sentinel line
+    .filter(l => !/^__VOS\d+__$/.test(l.trim()))                          // a previous mark, if `from` still landed before it
+    .join('\n')
+    // Strip only the prompt itself, not the line it sits on.
+    .replace(PROMPT_STRIP, '')
+    .trim();
+}
 
 // One socket, as far as v86 is concerned, over as many real ones as it takes.
 //
@@ -2946,8 +3177,18 @@ const VM = {
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
   // No paintVM() here any more: the machine announces its state and does not
   // know a DOM exists. The menu-bar painter subscribes like any other listener.
-  emit() { this.listeners.forEach(fn => { try { fn(this.state); } catch {} }); },
-  set(state, detail) { this.state = state; this.detail = detail || ''; this.emit(); },
+  // Listeners get (state, transition): emit() is a repaint — the lease, a
+  // snapshot — and only set() to a different state is a transition. A boot
+  // used to announce 'ready' three times (set, set again, emit after the
+  // lease), and every listener that did work on 'ready' — the guest CLI
+  // install, the first sync — did it three times, queuing execs ahead of the
+  // lease and in the window where a kernel line can land inside one.
+  emit(transition = false) { this.listeners.forEach(fn => { try { fn(this.state, transition); } catch {} }); },
+  set(state, detail) {
+    const changed = state !== this.state;
+    this.state = state; this.detail = detail || '';
+    this.emit(changed);
+  },
 
   async available() {
     try { return (await fetch(V86_ASSETS + 'libv86.js', { method: 'HEAD' })).ok; }
@@ -3023,20 +3264,24 @@ const VM = {
   // Five redials have failed, or the image is being switched: the machine has
   // to come back. Apps survive because they are files on disk; VM state does
   // not.
-  teardown() {
+  async teardown() {
     // v86's network adapter arms a 10 s redial in onclose (register_ws) that
     // destroy() never clears, and destroy() is async. Left alone, the dead
     // emulator kept dialing through the wrapper and the desktop showed the
     // zombie's link instead of the new guest's. Measured: two open relay
-    // sockets after a restart. The timer calls this.register_ws by name.
-    try { if (this.emu && this.emu.network_adapter) this.emu.network_adapter.register_ws = () => {}; } catch {}
-    try { this.emu && this.emu.stop(); } catch {}
-    try { this.emu && this.emu.destroy && this.emu.destroy(); } catch {}
-    this.emu = null; this.screen = null; this.serial = '';
+    // sockets after a restart. discard() disarms it before tearing down.
+    // The machine is 'off' the moment it is detached, not once destroy() has
+    // finished: destroy waits for the CPU loop (up to 5 s for a wedged one),
+    // and a retry clicked in that window read 'ready' from the machine it
+    // had just torn down. The wait stays: the next boot must not build a
+    // second emulator over one that is still stopping.
+    const destroyed = this.discard();
+    this.screen = null; this.serial = '';
     this.net = ''; this.ip = ''; this.leased = false; this.link = ''; this.linkWasOpen = false; this.netNote = '';
     this.relaySocket = null; this.bootedRelay = '';
     window.__v86loaded = null;
     this.set('off');
+    await destroyed;
   },
   // No image named while the default's fallback is running: reboot the
   // BusyBox that works, not the Alpine that just failed — retryFallback is
@@ -3044,7 +3289,7 @@ const VM = {
   async restart(imageId) {
     const stayOnFallback = !imageId && !!this.fallback && !this.chosenImage;
     const id = stayOnFallback ? this.bootedImage : (imageId || this.image);
-    this.teardown();
+    await this.teardown();
     if (!stayOnFallback) this.fallback = null;
     await this.boot(id);
   },
@@ -3055,12 +3300,125 @@ const VM = {
     return this.restart(this.fallback.from);
   },
 
+  // destroy() waits for the CPU loop to notice it should stop; a machine that
+  // is wedged never gets there, and a restart must not hang on it.
+  async discard() {
+    const emu = this.emu;
+    this.emu = null;
+    if (!emu) return;
+    // The adapter's onclose arms a 10 s setTimeout(register_ws) that destroy()
+    // never clears; a discarded machine kept dialing through the wrapper.
+    try { if (emu.network_adapter) emu.network_adapter.register_ws = () => {}; } catch {}
+    // And the RelaySocket that machine dialed: closed, it neither redials nor
+    // reports a link, so a machine discarded after a failed restore cannot
+    // paint 'reconnecting' over the cold boot's socket.
+    const rs = this.relaySocket; this.relaySocket = null;
+    try { if (rs) rs.close(); } catch {}
+    try { emu.stop(); } catch {}
+    try { await Promise.race([emu.destroy(), new Promise(r => setTimeout(r, 5000))]); } catch {}
+  },
+
+  // Snapshot bookkeeping, all per boot: where the boot looked, whether this
+  // machine came from a snapshot and how old it was, why a restore was
+  // refused, what the last snapshot did.
+  store: null,          // {root, where, private} the boot consulted; the only store this boot writes
+  storeError: '',       // why store is null
+  restored: false,
+  restoredFrom: null,   // {savedAt} of the snapshot this machine came from
+  keptSnapshot: false,  // the boot found a snapshot and left it alone (?safe=1, recovering): nothing this boot may write over it
+  restoreError: '',
+  snapshotInfo: null,   // {image, bytes, rawBytes, savedAt, where, reason, ms}
+  snapshotError: '',
+  AUTO_SNAPSHOT_MS: 10000,
+  _written: new Set(),  // /mnt names the guest, or an app save, wrote this boot
+
+  construct(image, autostart) {
+    this.emu = new V86({
+      wasm_path: V86_ASSETS + 'v86.wasm',
+      memory_size: image.memoryMB * 1024 * 1024,
+      vga_memory_size: 2 * 1024 * 1024,
+      bios:     { url: V86_ASSETS + 'seabios.bin' },
+      vga_bios: { url: V86_ASSETS + 'vgabios.bin' },
+      ...image.config(),
+      ...(this.bootedRelay ? { net_device: { type: 'ne2k', relay_url: this.bootedRelay } } : {}),
+      filesystem: {},        // the 9p mount at /mnt — the file bridge
+      screen_container: this.screen,
+      autostart,
+      disable_speaker: true,
+    });
+    window.__v86 = this.emu;
+    this.emu.add_listener('serial0-output-byte', b => {
+      this.serial += String.fromCharCode(b);
+      // Not while an exec is reading: its `from` is an index into this
+      // string, and a trim under it either cut the output silently (350 KB
+      // came back as its last 150 KB) or left `from` past the end, so the
+      // exec never saw its mark and timed out.
+      if (this._execFrom === null && this.serial.length > 200000) this.serial = this.serial.slice(-100000);
+    });
+  },
+
+  // Cold: run the kernel and wait for the shell prompt on the serial console.
+  async coldBoot(image) {
+    this.construct(image, true);
+    await new Promise((res, rej) => {
+      const t0 = Date.now();
+      const tick = setInterval(() => {
+        if (/~[%#$] $/.test(this.serial) || /~[%#$] /.test(this.serial.slice(-40))) {
+          clearInterval(tick); res();
+        } else if (Date.now() - t0 > image.bootTimeoutMs) {
+          clearInterval(tick); rej(Object.assign(new Error('the VM never reached a shell prompt'), { fallbackReason: 'timeout' }));
+        }
+      }, 500);
+    });
+  },
+
+  // Warm: the same machine config, the CPU held until the state is in, then
+  // run. The prompt was printed before the snapshot, so there is nothing to
+  // wait for on the serial line; instead the sentinel protocol exec relies on
+  // is exercised once, with a real command, and "ready" means it answered.
+  // The guest's clock stopped at the snapshot, so it is set from the host's.
+  // A machine that restores but cannot run a command is not restored.
+  // The whole thing is under the image's boot timeout, like coldBoot: a
+  // restore measures 0.3–0.5 s (BusyBox) and 4.7 s (Debian), but neither
+  // emulator-loaded nor restore_state has a timeout of its own, so a state
+  // that never loaded sat at 'vm starting…' forever, with Forget unreachable
+  // behind it. Now it is a refused snapshot like any other: discarded, cold
+  // boot, and the reason in the pill.
+  async restore(image, snap) {
+    const t0 = Date.now();
+    const state = await Snapshots.read(image.id, this.store);
+    this.construct(image, false);
+    // Pinned: once the timeout below has won, this.emu is null and then the
+    // cold boot's machine, and a restore_state that resolves late must not
+    // run that one or send its probe down that one's serial line.
+    const emu = this.emu;
+    const work = (async () => {
+      await new Promise(res => emu.add_listener('emulator-loaded', res));
+      await emu.restore_state(state);
+      if (this.emu !== emu) throw new Error('superseded by a cold boot');
+      await emu.run();
+      this._restoring = true;
+      try { return await this._exec(`date -s @${Math.floor(Date.now() / 1000)} >/dev/null 2>&1; echo restored-ok`, 20000); }
+      finally { this._restoring = false; }
+    })();
+    work.catch(() => {});   // a late failure after the timeout has already won is not unhandled
+    let timer;
+    const out = await Promise.race([work, new Promise((_, rej) => {
+      timer = setTimeout(() => rej(new Error(`the snapshot did not restore within ${image.bootTimeoutMs / 1000}s`)), image.bootTimeoutMs);
+    })]).finally(() => clearTimeout(timer));
+    if (!/restored-ok/.test(out)) throw new Error('the restored machine did not answer on the serial line: ' + JSON.stringify(out.slice(0, 80)));
+    this.restored = true;
+    this.restoredFrom = { savedAt: snap.savedAt };
+    track('vm_restored', { image: image.id, seconds: Math.round((Date.now() - t0) / 1000), mb: Math.round(snap.bytes / 1048576) });
+  },
+
   // The default image lives on a CDN. A network that blocks it, or a host too
   // loaded to reach a prompt inside the budget, used to end at 'vm failed'
   // where the bundled BusyBox always worked. So the default — never an image
   // someone chose in Settings — falls back to BusyBox once, and says so.
   fallback: null,          // { from, reason } while a fallback is booting or running
   fellBack: false,         // once per page: the retry after a fallback shows 'failed'
+  _execFrom: null,         // where the running exec's output starts in `serial`; the buffer is not trimmed under it
   async boot(imageId) {
     if (this.state === 'booting' || this.state === 'ready') return;
     if (!(await this.available())) return this.set('unavailable');
@@ -3068,6 +3426,8 @@ const VM = {
     if (!IMAGES[id]) throw new Error('unknown image: ' + id);
     this.set('booting');
     this.bootStarted = Date.now();
+    this.store = null; this.storeError = ''; this.restored = false; this.restoredFrom = null;
+    this.keptSnapshot = false; this.restoreError = ''; this.snapshotError = ''; this._written = new Set();
     try {
       await loadScriptOnce(V86_ASSETS + 'libv86.js');
       this.watchRelay();
@@ -3100,40 +3460,45 @@ const VM = {
             fetch(base + name).then(r => r.arrayBuffer(), () => null))))
           .catch(e => console.warn('warm list skipped:', e.message));
       }
-      this.emu = new V86({
-        wasm_path: V86_ASSETS + 'v86.wasm',
-        memory_size: image.memoryMB * 1024 * 1024,
-        vga_memory_size: 2 * 1024 * 1024,
-        bios:     { url: V86_ASSETS + 'seabios.bin' },
-        vga_bios: { url: V86_ASSETS + 'vgabios.bin' },
-        ...image.config(),
-        ...(this.bootedRelay ? { net_device: { type: 'ne2k', relay_url: this.bootedRelay } } : {}),
-        filesystem: {},        // the 9p mount at /mnt — the file bridge
-        screen_container: this.screen,
-        autostart: true,
-        disable_speaker: true,
-      });
-      window.__v86 = this.emu;
 
-      this.emu.add_listener('serial0-output-byte', b => {
-        this.serial += String.fromCharCode(b);
-        if (this.serial.length > 200000) this.serial = this.serial.slice(-100000);
-      });
+      // The store is pinned here, and the boot always looks in it, even when
+      // it will not restore: what is there decides whether this boot may
+      // snapshot at all (below). The recovery rule from the loader applies
+      // to the restore: a boot that is already recovering, or asked to be
+      // plain, runs the machine from scratch and leaves the snapshot where it
+      // is. And a snapshot that fails to restore is forgotten and the machine
+      // cold-boots — it must never be a dead machine that fails the same way
+      // on every reload.
+      const b = window.__vibeosBoot || {};
+      let snap = null;
+      try {
+        this.store = await Snapshots.current();
+        snap = await Snapshots.stat(image.id, this.store);
+      } catch (e) {
+        this.store = null;
+        this.storeError = this.restoreError = 'could not look for a snapshot: ' + e.message;
+      }
+      const kept = !!snap && (b.recovering || b.safe);
+      this.keptSnapshot = kept;
+      if (snap && !kept) {
+        try { await this.restore(image, snap); }
+        catch (e) {
+          this.restoreError = e.message;
+          track('vm_restore_failed', { image: image.id, error: String(e.message).slice(0, 80) });
+          await this.discard();
+          this.serial = '';
+          try { await Snapshots.forget(image.id, this.store); }
+          catch (e2) { this.restoreError += ' (and it could not be deleted: ' + e2.message + ')'; }
+        }
+      }
+      if (!this.restored) await this.coldBoot(image);
 
-      // Ready when the shell prompt appears on the serial console.
-      await new Promise((res, rej) => {
-        const t0 = Date.now();
-        const tick = setInterval(() => {
-          if (/~[%#$] $/.test(this.serial) || /~[%#$] /.test(this.serial.slice(-40))) {
-            clearInterval(tick); res();
-          } else if (Date.now() - t0 > image.bootTimeoutMs) {
-            clearInterval(tick); rej(Object.assign(new Error('the VM never reached a shell prompt'), { fallbackReason: 'timeout' }));
-          }
-        }, 500);
-      });
       this.hookWrites();
+      this.bootSeconds = (Date.now() - this.bootStarted) / 1000;
+      // Announced once. A second set('ready') used to sit inside the relay
+      // block below, and everything that runs on 'ready' ran twice.
       this.set('ready');
-      track('vm_ready', { seconds: Math.round((Date.now() - this.bootStarted) / 1000), image: this.bootedImage });
+      track('vm_ready', { seconds: Math.round(this.bootSeconds), image: this.bootedImage, restored: this.restored });
       // Not in boot's failure path: the machine is up whether or not lo came
       // up, and a timeout or a Terminal Ctrl-C landing on this exec used to
       // flip a ready machine to 'failed'.
@@ -3144,16 +3509,37 @@ const VM = {
 
       // The image brings the NIC up but does not ask for a lease, so a
       // configured relay would look broken until someone ran udhcpc by hand.
+      // After a restore this runs again on purpose: the relay socket is v86's
+      // and did not survive the snapshot — the guest still holds its old
+      // lease, but every TCP connection it had is gone and the new socket is
+      // what its traffic now goes through. Renewing is how that gets checked
+      // rather than assumed; whatever it reports is what the pill says.
+      // The link is bounced first. Measured on BusyBox: after a restore the
+      // guest's DHCP discovers do leave the card (four net0-send events on
+      // v86's bus) and nothing ever comes back, until the driver resets the
+      // device — ifconfig down/up — after which the next request leases in
+      // under a second. A restored ne2k receives nothing until it is reset.
       if (this.bootedRelay) {
         this.net = 'connecting';
         this.emit();
         try {
+          if (this.restored) await this.exec(image.netReset, 15000);
           await this.exec(image.dhcp, 45000);
           const ip = (await this.exec(image.ip)).trim();
           this.ip = /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip : '';
         } catch { this.ip = ''; }
         this.leased = true;
         this.syncNet();
+      }
+
+      // A cold boot earns a snapshot once it has settled, so the next load of
+      // this image is a restore. Not after a restore: that would rewrite the
+      // same state every boot for nothing. And not over a snapshot the boot
+      // found and left alone (?safe=1, recovering): that one holds the
+      // installs; a fresh kernel written over it is what safe mode promised
+      // not to do.
+      if (!this.restored && this.store && !kept) {
+        setTimeout(() => { if (this.ready() && this.bootedImage === image.id) this.snapshot('first boot').catch(() => {}); }, this.AUTO_SNAPSHOT_MS);
       }
     } catch (e) {
       const seconds = Math.round((Date.now() - this.bootStarted) / 1000);
@@ -3169,9 +3555,74 @@ const VM = {
       this.fellBack = true;
       this.fallback = { from: id, reason: e.fallbackReason };
       track('vm_fallback', { from: id, reason: e.fallbackReason });
-      this.teardown();
+      await this.teardown();
       await this.boot('busybox');
     }
+  },
+
+  refuseSnapshot(reason) {
+    this.snapshotError = `not saved after ${reason}: this boot left the snapshot in ${this.store.where} alone (?safe=1 or recovery), and nothing is written over it`;
+    this.emit();
+  },
+
+  // Serialised behind exec: a state saved while a command is mid-flight would
+  // restore into a shell that is waiting for output nobody will read.
+  snapshot(reason) {
+    const run = () => this._snapshot(reason || 'manual');
+    const next = (this._queue || Promise.resolve()).then(run, run);
+    this._queue = next.catch(() => {});
+    return next;
+  },
+
+  // The store this boot looked in, and only if it still is the store: a
+  // workspace opened since boot means the next boot will look somewhere
+  // else, and writing here would either overwrite a snapshot the boot never
+  // saw or leave one nobody will read.
+  async snapshotStore() {
+    if (!this.store) throw new Error('not saved: ' + this.storeError);
+    const now = await Snapshots.current();
+    if (!(await Snapshots.same(now, this.store))) {
+      throw new Error(`not saved: the workspace changed since boot (the boot looked for a snapshot in ${this.store.where}; one saved now would go to ${now.where}, which was not checked). Reload, and snapshots go to ${now.where}.`);
+    }
+    return this.store;
+  },
+
+  async _snapshot(reason) {
+    if (!this.ready()) throw new Error('the VM is not running');
+    const t0 = Date.now();
+    try {
+      const store = await this.snapshotStore();
+      const takenAt = Date.now();
+      const state = await this.emu.save_state();
+      const info = await Snapshots.write(this.bootedImage, state, store, takenAt);
+      this.snapshotInfo = { ...info, reason, ms: Date.now() - t0 };
+      this.snapshotError = '';
+      track('vm_snapshot', { image: this.bootedImage, reason, mb: Math.round(info.bytes / 1048576), seconds: Math.round((Date.now() - t0) / 1000) });
+      this.emit();
+      return this.snapshotInfo;
+    } catch (e) {
+      this.snapshotError = e.message;
+      this.emit();
+      throw e;
+    }
+  },
+
+  async forgetSnapshot(image = this.bootedImage || this.image, store = this.store) {
+    if (!store) throw new Error(this.storeError || 'the machine has not booted, so there is no snapshot store yet');
+    const gone = await Snapshots.forget(image, store);
+    if (this.snapshotInfo && this.snapshotInfo.image === image) this.snapshotInfo = null;
+    this.emit();
+    return gone;
+  },
+
+  // After a restore /mnt holds the snapshot's copy of the folder. A file
+  // edited on disk since then was shadowed by that stale copy: the diff
+  // called it 'differs' and never moved it, and the dock ran the old source.
+  // On a cold boot the machine came up empty and the disk copy won; this is
+  // that rule for a restored machine — the disk is newer than the snapshot,
+  // and the machine has not written the file itself this boot.
+  staleSinceRestore(name, diskModified) {
+    return !!this.restoredFrom && diskModified > this.restoredFrom.savedAt && !this._written.has(name);
   },
 
 
@@ -3186,8 +3637,13 @@ const VM = {
     const fs = this.emu && this.emu.fs9p;
     if (!fs || fs.__hooked) return;
     fs.__hooked = true;
-    const schedule = () => {
+    // v86's Write does not touch the inode mtime (only CreateInode and a
+    // guest setattr do), so which files this machine has written is kept
+    // here, by name, for staleSinceRestore. /mnt is flat: root is inode 0.
+    const nameOf = id => { for (const [n, i] of fs.inodes[0].direntries) if (i === id && n !== '.' && n !== '..') return n; return null; };
+    const schedule = (name) => {
       if (this.suppress) return;          // don't echo our own folder -> VM pushes
+      if (name) this._written.add(name);
       // Listeners first and unconditionally: a subscriber that wants to react
       // to a specific file cannot afford the 800ms debounce meant for syncing.
       this._writeListeners.forEach(f => { try { f(); } catch {} });
@@ -3197,7 +3653,10 @@ const VM = {
     for (const name of ['Write', 'Unlink', 'ChangeSize']) {
       const orig = fs[name];
       if (typeof orig !== 'function') continue;
-      fs[name] = function (...args) { const r = orig.apply(this, args); schedule(); return r; };
+      fs[name] = function (...args) {
+        const written = name === 'Unlink' ? args[1] : nameOf(args[0]);
+        const r = orig.apply(this, args); schedule(written); return r;
+      };
     }
   },
 
@@ -3225,9 +3684,15 @@ const VM = {
     return this.emu.read_file(path);
   },
 
+  // create_file goes through v86's set_data, never the hooked fs.Write, so
+  // a `// @target vm` create_app or the VM half of Apps.save left the ledger
+  // empty and Sync.auto pushed the disk copy over it after a restore. A
+  // quiet write (Sync.push, the guest CLI) IS the disk copy and stays out.
   async writeFile(path, bytes) {
     if (!this.emu) throw new Error('the VM is not running');
-    return this.emu.create_file(path, bytes);
+    const r = await this.emu.create_file(path, bytes);
+    if (!this.suppress) this._written.add(path.replace(/^.*\//, ''));   // by root name, as the write hook keys it
+    return r;
   },
 
   async readText(path) {
@@ -3280,6 +3745,18 @@ const VM = {
     const run = () => this._exec(cmd, timeoutMs);
     const next = (this._queue || Promise.resolve()).then(run, run);
     this._queue = next.catch(() => {});
+    // An install only lives in memory (the Debian disk is streamed), so it
+    // earns a snapshot. Here, on the one path every shell goes through — the
+    // agent's vm_exec, the Terminal window, api.shell — so "after every apt
+    // install" is true of all three, not only the agent's. By command shape,
+    // not by result: apt's exit status is not in the output exec returns.
+    // Queued behind exec, which means an install backgrounded with & is
+    // snapshotted while still running; the finished state is caught by the
+    // next apt command or by Snapshot now.
+    // Under the same gate as the first-boot snapshot: a boot that left the
+    // snapshot alone (?safe=1, recovering) does not write over it here either,
+    // and says so where the Machine tab reads.
+    if (APT_INSTALL.test(cmd)) next.then(() => this.keptSnapshot ? this.refuseSnapshot('apt install') : this.snapshot('apt install').catch(() => {}), () => {});   // the failure is on VM.snapshotError
     return next;
   },
 
@@ -3306,42 +3783,25 @@ const VM = {
   },
 
   async _exec(cmd, timeoutMs) {
-    if (this.state !== 'ready') throw new Error('Linux is not running yet.');
+    // _restoring: the one command that decides whether a restored machine
+    // gets to be 'ready' at all, so it runs before the state says so.
+    if (this.state !== 'ready' && !this._restoring) throw new Error('Linux is not running yet.');
     const mark = `__VOS${++this.seq}__`;
     const from = this.serial.length;
+    this._execFrom = from;
+    try {
+      return await this._collect(cmd, mark, from, timeoutMs);
+    } finally {
+      this._execFrom = null;
+    }
+  },
+
+  async _collect(cmd, mark, from, timeoutMs) {
     this.emu.serial0_send(`${cmd}\n echo ${mark}\n`);
     const t0 = Date.now();
     for (;;) {
-      const chunk = this.serial.slice(from);
-      // Only THIS call's mark, and only the shell's OUTPUT of it (a line that
-      // is the mark alone), never the echo of the line we typed. Matching any
-      // __VOSn__ let a command that outlived its timeout hand its late
-      // sentinel to the NEXT exec, which returned the wrong output as its own;
-      // matching the typed echo returned "" or "^Cecho again" for `echo again`
-      // whenever its bytes landed while the tty was still in cooked mode, and
-      // `mount | grep /mnt` came back empty right after boot on Alpine.
-      if (chunk.includes('\n' + mark + '\r\n')) {
-        const clean = chunk.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');   // colour and bracketed-paste
-        // Output ends where the shell echoes back the sentinel command we
-        // typed. CUT there rather than dropping the line containing it: a
-        // command whose output has no trailing newline — `cat` on almost any
-        // file — leaves the prompt and that echo on the SAME line as the last
-        // line of output, so dropping the line dropped the output with it and
-        // returned an empty string for a command that succeeded.
-        return clean
-          .split('echo ' + mark)[0]
-          .split(/\r?\n/)
-          .filter(l => l.trim() !== cmd.trim())        // the terminal echoing what we typed
-          .join('\n')
-          // Strip only the prompt itself, not the line it sits on. Not
-          // PROMPT_TAIL: its hostname class ([\w.@()-]*) before the colon
-          // swallowed output sharing that line — `printf no-trailing-newline`
-          // on Alpine came back "" and `printf "a\nb\nc"` came back "a\nb",
-          // because "no-trailing-newlinevibeos:" is all word characters. Every
-          // image we build is hostname vibeos; BusyBox prints no hostname.
-          .replace(PROMPT_STRIP, '')
-          .trim();
-      }
+      const out = execResult(this.serial.slice(from), cmd, mark);
+      if (out !== null) return out;
       const interrupted = this.interruptedAt > t0;
       if (interrupted || Date.now() - t0 > timeoutMs) {
         // The command is still holding the one serial line; leave it and every
@@ -3398,6 +3858,7 @@ function paintVM() {
   const redialing = VM.state === 'ready' && VM.net === 'reconnecting';
   txt.textContent = dropped ? 'network dropped' : redialing ? 'reconnecting…'
     : VM.fallback && (VM.state === 'ready' || VM.state === 'booting') ? fallbackLine()
+    : VM.state === 'ready' && VM.restored ? `${VM.bootedImage} restored`
     : VM.state === 'ready' ? `${VM.bootedImage} ready` : VM_LABEL[VM.state];
   dot.className = 'dot' + (dropped || redialing ? ' warn' : VM.state === 'ready' ? '' :
                            VM.state === 'booting' ? ' warn' : ' off');
@@ -3405,8 +3866,11 @@ function paintVM() {
     : VM.bootedImage === 'alpine' ? 'Booting Alpine from the CDN — usually 20-30 s, longer on a busy machine.'
     : `Booting ${IMAGES[VM.bootedImage].label} — under half a minute.`;
   document.getElementById('lxPill').title =
-    VM.state === 'ready'   ? ((VM.fallback ? `${IMAGES[VM.fallback.from].label} ${FALLBACK_REASON[VM.fallback.reason]}; ${IMAGES[VM.bootedImage].label} is running instead. Settings › Machine can retry.  ` : 'The VM is up. api.shell() runs real commands.')
-                              + (VM.net ? '  Network: ' + VM.net + (VM.ip ? ', ' + VM.ip : '') : '  No network.')) :
+    VM.state === 'ready'   ? ((VM.fallback ? `${IMAGES[VM.fallback.from].label} ${FALLBACK_REASON[VM.fallback.reason]}; ${IMAGES[VM.bootedImage].label} is running instead. Settings › Machine can retry.  `
+                                : VM.restored ? `${IMAGES[VM.bootedImage].label} restored from its snapshot in ${VM.bootSeconds.toFixed(1)}s. api.shell() runs real commands.`
+                                : 'The VM is up. api.shell() runs real commands.')
+                              + (VM.net ? '  Network: ' + VM.net + (VM.ip ? ', ' + VM.ip : '') : '  No network.')
+                              + (VM.restoreError ? '  Snapshot discarded: ' + VM.restoreError : '')) :
     VM.state === 'booting' ? (VM.fallback ? `${fallbackLine()} instead.` : bootNote()) :
     VM.state === 'failed'  ? ('Boot failed: ' + (VM.detail || '')) :
     VM.state === 'unavailable' ? 'The 11 MB of v86 assets are not served here.' :
@@ -3455,6 +3919,65 @@ function imageSwitch() {
   return box;
 }
 
+const fmtMB = bytes => (bytes / 1048576).toFixed(1) + ' MB';
+
+// The machine as a file: what is saved, where, how big, and the two verbs.
+// Sizes come from the file, not from memory, so what this shows is what the
+// next boot will actually find.
+function snapshotBox() {
+  const box = document.createElement('div');
+  box.style.cssText = 'padding:8px 10px;border-bottom:1px solid var(--barline);display:flex;gap:10px;align-items:center;flex-wrap:wrap';
+  const image = VM.bootedImage || VM.image;
+  const paint = async () => {
+    // The store the boot looked in, not whatever is open now: that is the
+    // one the next boot reads and the only one this boot writes.
+    let snap = null, lookupError = VM.store ? '' : (VM.storeError || 'the machine has not booted yet');
+    if (VM.store) { try { snap = await Snapshots.stat(image, VM.store); } catch (e) { lookupError = e.message; } }
+    // A folder open at boot means the boot never looked in private storage;
+    // a snapshot left there (from a boot while the folder was waiting to be
+    // re-granted, or before it was chosen) is listed so it can be forgotten
+    // rather than sitting invisible.
+    let orphan = null, priv = null;
+    if (VM.store && !VM.store.private) {
+      try { priv = await Snapshots.privateStore(); orphan = priv && await Snapshots.stat(image, priv); } catch {}
+    }
+    const last = VM.snapshotInfo && VM.snapshotInfo.image === image ? VM.snapshotInfo : null;
+    const describe = s => `<b>${fmtMB(s.bytes)}</b> <span class="dimmer">(${fmtMB(s.rawBytes)} of machine state) · saved ${new Date(s.savedAt).toLocaleTimeString()} · in ${s.where}`;
+    box.innerHTML = `
+      <span class="small" id="snapText">${lookupError ? `<span class="no">no snapshot store: ${lookupError}</span>`
+        : snap && snap.corrupt ? `<span class="no">Snapshot in ${snap.where} is unusable: ${escHtml(snap.corrupt)}.</span> <span class="dimmer">The next boot will discard it and run the kernel; Forget does it now.</span>`
+        : snap ? `Snapshot ${describe(snap)}${last ? ' · ' + last.reason + ', ' + (last.ms / 1000).toFixed(1) + 's' : ''}${VM.restored ? ' · <b>this machine was restored from it</b>' : ''}</span>`
+        : `<span class="dimmer">No snapshot of ${IMAGES[image].label} yet — one is taken ${VM.AUTO_SNAPSHOT_MS / 1000}s after a cold boot, and after every apt install.</span>`}</span>
+      <button class="btn p sm" id="snapNow" ${VM.ready() ? '' : 'disabled'}>Snapshot now</button>
+      ${snap ? '<button class="btn sm" id="snapForget">Forget snapshot</button>' : ''}
+      ${orphan ? `<span class="small" id="snapOrphan" style="flex-basis:100%">Also a snapshot ${orphan.corrupt ? `in private browser storage that is unusable: ${escHtml(orphan.corrupt)}` : describe(orphan)}</span> <span class="dimmer">— the boot looked in ${VM.store.where} and not there, so nothing reads it.</span>
+          <button class="btn sm" id="snapOrphanForget">Forget that one</button></span>` : ''}
+      ${VM.snapshotError ? `<span class="tiny no" style="flex-basis:100%">last snapshot failed: ${escHtml(VM.snapshotError)}</span>` : ''}
+      ${VM.restoreError ? `<span class="tiny no" style="flex-basis:100%">the snapshot could not be restored, so it was discarded and the machine cold-booted: ${escHtml(VM.restoreError)}</span>` : ''}`;
+    // restoreError can quote the serial line — guest bytes — hence the escape above.
+    box.querySelector('#snapNow').onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = 'saving…';
+      track('snapshot_click');
+      try { await VM.snapshot('manual'); } catch {}   // the error is on VM.snapshotError, painted below
+      paint();
+    };
+    const forget = box.querySelector('#snapForget');
+    if (forget) forget.onclick = async () => {
+      track('snapshot_forget_click');
+      try { await VM.forgetSnapshot(image); } catch (e) { VM.snapshotError = e.message; }
+      paint();
+    };
+    const forgetOrphan = box.querySelector('#snapOrphanForget');
+    if (forgetOrphan) forgetOrphan.onclick = async () => {
+      track('snapshot_forget_click', { orphan: true });
+      try { await VM.forgetSnapshot(image, priv); } catch (e) { VM.snapshotError = e.message; }
+      paint();
+    };
+  };
+  paint();
+  return box;
+}
+
 function ConsoleApp(body) {
   // Raw machine console: boot and kernel output. A debug surface, kept apart
   // from the Terminal so command output is not buried in boot spam.
@@ -3468,6 +3991,7 @@ function ConsoleApp(body) {
       hint.textContent = 'Machine console — boot and kernel output. Run commands in the Terminal.';
       body.appendChild(hint);
       body.appendChild(imageSwitch());
+      body.appendChild(snapshotBox());
       body.appendChild(VM.screen);
       return;
     }
@@ -3616,18 +4140,22 @@ const Sync = {
     const names = [...new Set([...ws.map(f => f.name), ...vm.map(f => f.name)])].sort();
     const rows = [];
     for (const name of names) {
-      const inWs = ws.some(f => f.name === name);
+      const onDisk = ws.find(f => f.name === name);
+      const inWs = !!onDisk;
       const inVm = vm.some(f => f.name === name);
       let state = 'same';
       if (inWs && !inVm) state = 'push';
       else if (!inWs && inVm) state = 'pull';
       else {
         // Both sides have it; compare bytes. These are small text files, so a
-        // full compare is cheaper than maintaining a hash index.
+        // full compare is cheaper than maintaining a hash index. A difference
+        // on a restored machine that only the disk has touched since the
+        // snapshot is 'stale', not a conflict: the folder is the truth there.
         try {
           const a = await Workspace.readAny(name);
           const b = await VM.readFile(name);
-          state = (a.length === b.length && a.every((v, i) => v === b[i])) ? 'same' : 'differs';
+          state = (a.length === b.length && a.every((v, i) => v === b[i])) ? 'same'
+            : VM.staleSinceRestore(name, onDisk.modified) ? 'stale' : 'differs';
         } catch { state = 'differs'; }
       }
       rows.push({ name, inWs, inVm, state });
@@ -3672,7 +4200,7 @@ const Sync = {
     if (d.error) return d;
     let moved = 0;
     for (const r of d.rows) {
-      if (r.state === 'push') { await this.push(r.name); moved++; }
+      if (r.state === 'push' || r.state === 'stale') { await this.push(r.name); moved++; }
       else if (r.state === 'pull') { await this.pull(r.name); moved++; }
     }
     return { moved, conflicts: d.rows.filter(r => r.state === 'differs').length };
@@ -3711,7 +4239,11 @@ const Apps = {
     }
     if (VM.state === 'ready') {
       for (const f of (Sync.vmFiles() || []).filter(f => f.name.endsWith('.js'))) {
-        // The VM wins on a name collision: it is where the agent just wrote.
+        const disk = byName.get(f.name);
+        // The folder wins when the machine's copy is the snapshot's and the
+        // disk was edited after it — the dock ran the old source otherwise.
+        if (disk && disk.modified && VM.staleSinceRestore(f.name, disk.modified)) continue;
+        // Otherwise the VM wins on a name collision: it is where the agent just wrote.
         try { byName.set(f.name, { source: await VM.readText(f.name) }); }
         catch (e) { byName.set(f.name, { error: e.message }); }
       }
@@ -3764,6 +4296,7 @@ function SyncApp(body) {
     same:    ['in sync',        'dimmer', ''],
     push:    ['workspace only', 'part',   'Push →'],
     pull:    ['VM only',        'part',   '← Pull'],
+    stale:   ['edited on disk since the snapshot', 'part', 'Push →'],
     differs: ['both changed',   'no',     ''],
   };
 
@@ -3786,7 +4319,7 @@ function SyncApp(body) {
       tr.firstElementChild.textContent = r.name;   // a VM filename, so never markup
       const btn = tr.querySelector('button');
       if (btn) btn.onclick = async () => {
-        try { r.state === 'push' ? await Sync.push(r.name) : await Sync.pull(r.name); await paint(); }
+        try { r.state === 'pull' ? await Sync.pull(r.name) : await Sync.push(r.name); await paint(); }
         catch (e) { msg.textContent = e.message; }
       };
       tb.appendChild(tr);
@@ -4635,8 +5168,10 @@ window.addEventListener('beforeunload', (e) => {
   Theme.load({ stock: recovering });
   VM.on(paintVM);   // the VM used to call this itself; now it just announces
   paintVM();
-  VM.on(async s => {
-    if (s !== 'ready') return;
+  // On the transition only: a repaint (the lease landing, a snapshot) also
+  // announces 'ready', and this must not install the CLI or sync again.
+  VM.on(async (s, transition) => {
+    if (s !== 'ready' || !transition) return;
     GuestBridge.start();
     // The CLI lives in the VM's RAM, so it is re-added each boot. A slow guest
     // can time this out; that is a missing convenience, not a broken desktop,
@@ -4651,7 +5186,18 @@ window.addEventListener('beforeunload', (e) => {
   });
   await detectMode();
   await Gen.probe();
-  // Start the machine FIRST. The key modal is an in-page overlay that is
+  // The workspace before the machine: the machine's snapshot lives in it, so
+  // the boot has to know where the workspace is to find one. This is a
+  // handle lookup and a permission query — milliseconds, no gesture, and a
+  // folder that needs re-granting is left pending exactly as before.
+  let state = await Workspace.restore();
+  // Nothing mounted and nothing pending: use private browser storage so apps
+  // persist without a click. A real folder stays one click away in Settings.
+  if ((state === 'none' || state === 'no-picker') && canStoreWorkspace) {
+    try { await Workspace.mountPrivate(); state = 'private'; } catch {}
+  }
+  paintWorkspace();
+  // Start the machine BEFORE the key modal. It is an in-page overlay that is
   // awaited, so booting after it left the VM at 'off' until the user dealt with
   // the modal — two slow things in series, with the desktop looking dead in
   // between. The VM needs no key, so it must not wait for one.
@@ -4668,16 +5214,8 @@ window.addEventListener('beforeunload', (e) => {
       }
     } catch { await Gen.askForKey(); }
   }
-  // The VM is the system, so it starts with the page rather than on demand.
-  let state = await Workspace.restore();
-  // Nothing mounted and nothing pending: use private browser storage so apps
-  // persist without a click. A real folder stays one click away in Settings.
-  if ((state === 'none' || state === 'no-picker') && canStoreWorkspace) {
-    try { await Workspace.mountPrivate(); state = 'private'; } catch {}
-  }
-  paintWorkspace();
   await paintDock();
-  VM.on(s => { if (s === 'ready') paintDock(); });
+  VM.on((s, transition) => { if (s === 'ready' && transition) paintDock(); });
   // open the agent, not a settings panel — vibeOS is the app.
   focusOrOpen(SHELL.chat);
   bootFinished();
