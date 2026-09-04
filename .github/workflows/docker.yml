@@ -166,6 +166,39 @@ jobs:
               exit 1
             fi
 
+
+            # The local CDP port must be bound to loopback ONLY. An
+            # unauthenticated CDP endpoint is equivalent to remote code
+            # execution and can navigate file:// to read this container's
+            # filesystem, so a wildcard bind would expose the host the moment
+            # anyone published the port.
+            #
+            # chromium is passed --remote-debugging-address=127.0.0.1, but a
+            # flag only states intent: this is what enforces it. A comment
+            # cannot, and a chromium default could change silently.
+            #
+            # Read from /proc/net/tcp rather than `ss`: iproute2 is not in the
+            # image, and a probe that needs a missing binary fails as a false
+            # red on a healthy image. 2406 is hex for 9222; 0100007F is
+            # 127.0.0.1 little-endian, 00000000 is the wildcard bind.
+            for attempt in $(seq 1 15); do
+              line=$(docker exec "$cid" sh -lc 'grep -i ":2406 " /proc/net/tcp || true')
+              if [ -n "$line" ]; then break; fi
+              sleep 2
+            done
+            if [ -z "$line" ]; then
+              echo "::error::[$platform] nothing is listening on 9222 — chromium never came up:"
+              docker exec "$cid" sh -lc 'cat /proc/1/fd/2' 2>/dev/null || true
+              docker logs "$cid" 2>&1 | tail -30 || true
+              exit 1
+            fi
+            if ! echo "$line" | awk '{print $2}' | grep -qi '^0100007F:2406$'; then
+              echo "::error::[$platform] CDP port is NOT bound to loopback:"
+              echo "$line"
+              exit 1
+            fi
+            echo "ok: CDP bound to 127.0.0.1:9222 only"
+
             docker rm -f "$cid" >/dev/null
             trap - EXIT
             echo "::endgroup::"
