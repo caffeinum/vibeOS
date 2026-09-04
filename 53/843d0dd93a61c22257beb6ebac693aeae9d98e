@@ -1,0 +1,21 @@
+web/os.css
+  s_eacdf770d99162::t_04bd2560f3d4e5 162-165
+web/os.js
+  s_eacdf770d99162::t_b02cc4baed6246 602,604-606,613,625,628,631,634,642,1051-1060,1064-1079,1089,1110,1118,1127,1167,1190,1307-1319,1324-1325,1349,1775-1851,1856-1862,1864,1866,1893-1927,1930-1936,1938,1940,1943-1963,1971-1972,1976,2015,2017,2019-2021,2029,2032,2036,2062-2064,2068-2070
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "53843d0dd93a61c22257beb6ebac693aeae9d98e",
+  "prompts": {},
+  "sessions": {
+    "s_eacdf770d99162": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37e46d39-19cd-49f9-831e-7abcb9428a8d",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
