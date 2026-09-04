@@ -489,6 +489,22 @@ function lintApp(title, requires, source) {
 
 /* ---------- the model, when a server is holding a key ------------------ */
 
+// What the model gets to remember. Six turns — three exchanges — was the
+// window on every path, so a chat restored with 28 turns reached the model as
+// its last three and "do you remember?" got "only in this chat". The window
+// is now bounded by size, not by a count that fit one screenshot: the last
+// forty turns, trimmed from the front until they fit the budget, and always
+// starting on a user turn so the pairs stay aligned. The server applies the
+// same rule (app/api/openai/generate/route.ts) so it never cuts what is sent.
+const HISTORY_TURNS = 40, HISTORY_CHARS = 24000;
+function historyWindow(history) {
+  let turns = (history || []).slice(-HISTORY_TURNS);
+  let size = turns.reduce((n, h) => n + String(h.content || '').length, 0);
+  while (turns.length && size > HISTORY_CHARS) size -= String(turns.shift().content || '').length;
+  while (turns.length && turns[0].role !== 'user') turns.shift();
+  return turns;
+}
+
 const Gen = {
   available: false,
   token: (location.hash.match(/token=([^&]+)/) || [])[1] || '',
@@ -717,10 +733,10 @@ const Gen = {
       const user = { role: 'user', content: Agent.userContent(this.provider, prompt, images) };
       const payload = this.provider === 'anthropic'
         ? { model: this.model, max_tokens: 2000, system: withSkills(forImage(PASTE_KEY_SYSTEM_PROMPT)),
-            messages: [...(history || []).slice(-6), user] }
+            messages: [...historyWindow(history), user] }
         : { model: this.model, max_completion_tokens: 2000,
             messages: [{ role: 'system', content: withSkills(forImage(PASTE_KEY_SYSTEM_PROMPT)) },
-                       ...(history || []).slice(-6), user] };
+                       ...historyWindow(history), user] };
 
       const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
       const j = await jsonOf(r, this.provider);
@@ -1285,7 +1301,7 @@ const Agent = {
     const anthropic = Gen.provider === 'anthropic';
     const created = [];
     let msgs = [
-      ...(history || []).slice(-6).map(h => ({ role: h.role, content: h.content })),
+      ...historyWindow(history).map(h => ({ role: h.role, content: h.content })),
       { role: 'user', content: this.userContent(anthropic ? 'anthropic' : 'openai', prompt, images) },
     ];
     let lastText = '';
@@ -1538,7 +1554,7 @@ const Agent = {
     // build what it shows. Attachments caps what one turn can carry, so five
     // steps of it stay under the body limit.
     let messages = [
-      ...(history || []).slice(-6).map(h => ({ role: h.role, content: h.content })),
+      ...historyWindow(history).map(h => ({ role: h.role, content: h.content })),
       { role: 'user', content: this.userContent('sdk', prompt, images) },
     ];
     const created = [];
