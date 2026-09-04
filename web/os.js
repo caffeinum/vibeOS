@@ -1894,7 +1894,20 @@ function ChatApp(body) {
     const title = parseTitle(source) || text.slice(0, 30);
     if (live) track('app_generated', { target });
     else if (failure === 'no model configured') track('app_stock', { target });
-    else track('gen_failed', { target, error: String(failure).slice(0, 80) });
+    else {
+      track('gen_failed', { target, error: String(failure).slice(0, 80) });
+      // Vercel's analytics API exposes event counts but not event properties,
+      // so the error above is unreadable from outside the dashboard. A coarse
+      // bucket as its own event name is countable: 9 failures in a day could
+      // be one expired key or a broken deploy, and those need different fixes.
+      const msg = String(failure).toLowerCase();
+      const bucket = /api key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
+        : /timed out|timeout|failed to fetch|network|econn/.test(msg) ? 'network'
+        : /not supported|model|400|bad request/.test(msg) ? 'model'
+        : /429|rate limit|quota|insufficient/.test(msg) ? 'quota'
+        : 'other';
+      track('gen_failed_' + bucket, { target });
+    }
 
     if (target === 'vm') {
       const file = parseFile(source) || 'script.sh';
