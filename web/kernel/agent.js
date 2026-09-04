@@ -379,10 +379,11 @@ TARGET 1, a desktop window (default). Header exactly:
 // @title <Short Name>
 // @target browser
 // @requires <space-separated caps, or none>
-Caps: files (read the workspace), shell (run commands in the VM). Use none unless needed.
+Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs). Use none unless needed.
 Then: export default function (mount, api) { ... }
 mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size.
-api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone — and the built-in Terminal's Ctrl-C frees the line. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted. List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
+api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): one-shot commands. Waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app that uses it and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted — those want api.tty(). List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
+api.tty() -> { write(bytesOrString), onData(fn) -> off, resize(cols, rows), close() } (needs tty): a terminal is api.tty(): bytes both ways, ctrl-c, top, nano, passwords work; api.shell is for one-shot commands. It is its own shell on the machine's second serial line, not the one api.shell and the agent share, so a cd there stays there. The line echoes what you write: paint what onData delivers (\\r, \\n, \\b and ANSI escapes; answer \\x1b[6n with \\x1b[row;colR or vi and ash wait on it) instead of echoing keys yourself; send Enter as \\r, Ctrl-C as \\x03, arrows as \\x1b[A..D, and resize(cols, rows) when the pane changes. One tty per machine: while the built-in Terminal or another app holds it, api.tty() throws naming the holder — show that message; closing that window releases it.
 
 Layout rules (required): root width/height 100%, box-sizing:border-box, display:flex, flex-direction:column, overflow:hidden on mount. No document scroll, no min-height exceeding the window. Modest type and padding; empty states must fit. Scroll inner panes only (overflow:auto, scrollbar-width:thin), never mount.
 
@@ -891,7 +892,14 @@ const MCP_TOKEN_RE = /^[0-9a-f]{64}$/;
 // held and flushed. Five failed dials, or a close the relay means (4001
 // replaced, 4003 revoked), end it; the bridge says which.
 class RemoteSocket {
-  static delays = [500, 1000, 2000, 2000, 2000];
+  // Never gives up on its own: the relay is a serverless function, and a
+  // deploy cuts every socket for longer than five quick redials (~7.5 s) —
+  // a tab that gave up sat in the error state with "retry" while its agent
+  // dialed a relay that had the token and no tab. Backoff climbs to a
+  // 30 s cap and stays there for as long as the tab holds a token; only a
+  // close code that means it (4001 replaced, 4003 revoked) or close() ends it.
+  static delays = [500, 1000, 2000, 5000, 10000, 30000];
+  static CAP_MS = 30000;
 
   constructor(url, { hello, onOpen, onFrame, onGap, onEnd }) {
     this.url = url;
@@ -926,14 +934,15 @@ class RemoteSocket {
   closed_(e) {
     if (this.ended) return;
     const meant = e.code === 4001 || e.code === 4003;
-    const delay = RemoteSocket.delays[this.attempt];
-    if (meant || delay === undefined) {
+    if (meant) {
       this.ended = true;
       this.held = [];
-      this.onEnd({ code: e.code, reason: e.reason, gaveUp: !meant });
+      this.onEnd({ code: e.code, reason: e.reason, gaveUp: false });
       return;
     }
+    const delay = RemoteSocket.delays[Math.min(this.attempt, RemoteSocket.delays.length - 1)];
     if (this.attempt === 0) this.onGap();
+    else this.onGap(this.attempt, delay);
     this.attempt++;
     this.timer = setTimeout(() => { this.timer = null; this.dial(); }, delay);
   }
@@ -1057,14 +1066,13 @@ const RemoteBridge = {
         this.set('waiting');
       },
       onFrame: raw => this.handle(raw),
-      onGap: () => this.set('pairing', 'the relay dropped the socket; redialing'),
+      onGap: (attempt, delay) => this.set('pairing', attempt ? `the relay is unreachable (${attempt} redials); trying again in ${Math.round(delay / 1000)} s` : 'the relay dropped the socket; redialing'),
       onEnd: ({ code, reason, gaveUp }) => {
         this.socket = null;
         this.stopKeepalive();
         if (code === 4003) { remoteToken = null; this.set('off'); return; }
         if (code === 4001) { this.set('error', 'another tab paired with this token and took its place; revoke here, or pair again there'); return; }
-        if (!gaveUp) throw new Error('RemoteSocket ended on a code it does not mean: ' + code);
-        this.set('error', `the relay closed the socket (${code}${reason ? ' ' + reason : ''}) and five redials failed — retry, or check the network`);
+        throw new Error('RemoteSocket ended on a code it does not mean: ' + code + (gaveUp ? ' (gave up)' : ''));
       },
     });
     this.startKeepalive();

@@ -189,3 +189,18 @@
     * { animation: none !important; transition: none !important; }
     #dock button:hover { transform: none; }
   }
+
+/* the Terminal: a vt100 grid over VM.tty; colours are the classic 16 */
+.tty { position: relative; height: 100%; overflow: auto; background: #101012; color: #d6d6d6; padding: 6px 8px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.3; white-space: pre; cursor: text; outline: none; }
+.tty div { min-height: 1.3em; }
+.tty .cur { background: #d6d6d6; color: #101012; }
+.tty .bo { font-weight: 700; }
+.tty .ul { text-decoration: underline; }
+.tty .inv { background: #d6d6d6; color: #101012; }
+.tty .f0 { color: #000 } .tty .f1 { color: #d24 } .tty .f2 { color: #4c2 } .tty .f3 { color: #cb2 } .tty .f4 { color: #48e } .tty .f5 { color: #c4c } .tty .f6 { color: #2bc } .tty .f7 { color: #ccc }
+.tty .f8 { color: #666 } .tty .f9 { color: #f66 } .tty .f10 { color: #6f6 } .tty .f11 { color: #ff6 } .tty .f12 { color: #6af } .tty .f13 { color: #f6f } .tty .f14 { color: #6ff } .tty .f15 { color: #fff }
+.tty .b0 { background: #000 } .tty .b1 { background: #d24 } .tty .b2 { background: #4c2 } .tty .b3 { background: #cb2 } .tty .b4 { background: #48e } .tty .b5 { background: #c4c } .tty .b6 { background: #2bc } .tty .b7 { background: #ccc }
+.tty .b8 { background: #666 } .tty .b9 { background: #f66 } .tty .b10 { background: #6f6 } .tty .b11 { background: #ff6 } .tty .b12 { background: #6af } .tty .b13 { background: #f6f } .tty .b14 { background: #6ff } .tty .b15 { background: #fff }
+.tty-input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; resize: none; border: 0; padding: 0; }
+.tty-note { position: absolute; left: 10px; right: 10px; bottom: 8px; padding: 6px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--barline); }
+.tty-note[hidden] { display: none; }

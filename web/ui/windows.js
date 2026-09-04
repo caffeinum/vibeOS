@@ -146,7 +146,7 @@ function createAppMount(body) {
   return mount;
 }
 
-function createAppApi(provider, mount) {
+function createAppApi(provider, mount, title) {
   let resizeCb = null;
   const ro = new ResizeObserver(entries => {
     const { width, height } = entries[0].contentRect;
@@ -159,6 +159,14 @@ function createAppApi(provider, mount) {
   return {
     async list(...args) { return provider.list(...args); },
     async shell(...args) { return provider.shell(...args); },
+    // A byte stream with its own shell on the machine's second serial line.
+    // Held by this window: closing it (or a repaint) gives the line back,
+    // and the kernel's close() emits so a Terminal waiting for it attaches.
+    tty() {
+      const handle = provider.tty(title);
+      Windows.onDispose(mount.closest('.win'), () => handle.close());
+      return handle;
+    },
     onResize(fn) {
       resizeCb = fn;
       fn(mount.clientWidth, mount.clientHeight);
@@ -169,8 +177,8 @@ function createAppApi(provider, mount) {
   };
 }
 
-async function runModule(source, mount, provider) {
-  const api = createAppApi(provider, mount);
+async function runModule(source, mount, provider, title) {
+  const api = createAppApi(provider, mount, title);
   const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
   try {
     const mod = await import(url);
@@ -195,19 +203,28 @@ export function AppWindow(body, win, { app }) {
   const missing = missingCaps(app.requires);
   const mount = createAppMount(body);
   const start = async () => {
-    try { await runModule(app.source, mount, CAP); }
+    try { await runModule(app.source, mount, CAP, app.title); }
     catch (e) { mount.textContent = ''; const m = document.createElement('p'); m.className = 'no small'; m.textContent = e.message; mount.appendChild(m); }
   };
   if (!missing.length) return start();
   renderUpsell(mount, missing);
-  // Blocked only on the shell while the machine boots: open the app the
-  // moment it is ready instead of leaving a "blocked" window behind. The
-  // subscription is the window's: closed or repainted, it lets go.
-  if (missing.every(c => c === 'shell') && VM.state !== 'failed' && VM.state !== 'unavailable') {
-    const off = VM.on(st => { if (st === 'ready') { off(); start(); } });
+  // Blocked only on the machine while it boots: open the app the moment
+  // it is ready instead of leaving a "blocked" window behind. The
+  // subscription is the window's: closed or repainted, it lets go. The tty
+  // comes up after 'ready' (its own state, on every emit), so the check is
+  // "nothing missing any more", not the state name.
+  if (missing.every(c => VM_CAPS.includes(c)) && VM.state !== 'failed' && VM.state !== 'unavailable') {
+    const off = VM.on(() => {
+      const still = missingCaps(app.requires);
+      if (!still.length) { off(); start(); return; }
+      renderUpsell(mount, still);
+    });
     Windows.onDispose(win, off);
   }
 }
+
+// The capabilities the VM provides once it is up, as against the native build's.
+const VM_CAPS = ['shell', 'tty'];
 
 // The limitation is the conversion moment, not a dead end.
 function renderUpsell(mount, missing) {
@@ -215,20 +232,25 @@ function renderUpsell(mount, missing) {
   // is ready. Saying "a browser tab cannot provide" it while the machine was
   // still booting sent people (and the agent) away from kernel-backed apps —
   // the exact apps this OS exists to run. Say what is actually true.
-  const vmCaps = missing.filter(c => c === 'shell');
-  const nativeOnly = missing.filter(c => c !== 'shell');
+  const vmCaps = missing.filter(c => VM_CAPS.includes(c));
+  const nativeOnly = missing.filter(c => !VM_CAPS.includes(c));
   if (vmCaps.length && !nativeOnly.length) {
-    const why = VM.state === 'ready' ? 'ready'
+    const ttyDown = vmCaps.includes('tty') && VM.state === 'ready' && VM.ttyState === 'failed';
+    const why = ttyDown ? `the machine is ready but its terminal line failed: ${VM.ttyError}`
+      : VM.state === 'ready' ? (vmCaps.includes('tty') ? 'the machine is ready and its terminal line is starting' : 'ready')
       : VM.state === 'failed' || VM.state === 'unavailable' ? `the machine is ${VM.state}${VM.detail ? ': ' + VM.detail : ''}`
       : `the machine is still ${VM.state || 'starting'} — this window opens by itself when it is ready`;
     mount.innerHTML = `
       <div class="upsell">
         <h3 style="margin:0 0 6px">Waiting for Linux</h3>
-        <p class="small muted" style="margin:0 0 10px">This app uses the <b>shell</b>, which the VM provides. Right now ${why}.</p>
-        ${VM.state === 'failed' || VM.state === 'unavailable'
+        <p class="small muted" style="margin:0 0 10px">This app uses the <b></b>, which the VM provides. Right now <span class="why"></span>.</p>
+        ${VM.state === 'failed' || VM.state === 'unavailable' || ttyDown
           ? '<button class="btn sm" id="upsellRestart">Restart the machine</button>'
           : '<p class="tiny dimmer" style="margin:0">Settings &rsaquo; Machine shows the boot console.</p>'}
       </div>`;
+    // The reason can carry the guest's last bytes (ttyError): text, not html.
+    mount.querySelector('b').textContent = vmCaps.join(' and ');
+    mount.querySelector('.why').textContent = why;
     const rb = mount.querySelector('#upsellRestart');
     if (rb) rb.onclick = () => VM.restart();
     return;

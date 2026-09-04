@@ -425,13 +425,16 @@ const missingCaps = reqs => reqs.filter(r => !CAP.supports[r]);
 // A "Console log viewer" with @requires none is the accepted false positive:
 // it is refused too, and the message says what to change.
 function lintApp(title, requires, source) {
-  if (/api\.shell\s*\(/.test(source)) return null;
+  if (/api\.(shell|tty)\s*\(/.test(source)) return null;
   const machine = `The machine is ${VM.state}.`;
   if (/\b(terminal|term|shell|console)\b/i.test(title)) {
-    return { rule: 'fake_terminal', error: `a terminal must drive the Linux VM: declare // @requires shell and run each line with api.shell(line). ${machine}` };
+    return { rule: 'fake_terminal', error: `a terminal must drive the Linux VM: declare // @requires tty and attach api.tty() (bytes both ways — Ctrl-C, top, vi, passwords), or // @requires shell and run each line with api.shell(line). ${machine}` };
   }
   if (requires.includes('shell')) {
     return { rule: 'unused_shell', error: `declares // @requires shell but never calls api.shell(). Run commands through api.shell(cmd) or drop the requirement. ${machine}` };
+  }
+  if (requires.includes('tty')) {
+    return { rule: 'unused_tty', error: `declares // @requires tty but never calls api.tty(). Attach the terminal with api.tty() or drop the requirement. ${machine}` };
   }
   return null;
 }

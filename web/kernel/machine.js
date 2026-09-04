@@ -47,6 +47,7 @@ const BrowserProvider = {
     disk:     canPickDirectory,      // it is genuinely THEIR folder
     write:    canStoreWorkspace,
     get shell() { return VM.state === 'ready'; },   // the VM's shell, not yours
+    get tty() { return VM.ttyState === 'ready'; },  // a byte stream on the VM's second serial line
     process:  false,     // host processes; workers are a different thing
     net:      false,
     usb:      'usb' in navigator,
@@ -69,12 +70,13 @@ const BrowserProvider = {
   // Real, once the background Linux is up — but it is the VM's shell, on the
   // VM's disk. Never the user's machine. The capability table says so.
   async shell(cmd, timeoutMs = 600000) { checkTimeout(timeoutMs); return VM.exec(cmd, timeoutMs); },
+  tty(holder) { return VM.tty(TTY_PORTS[0], holder); },
 };
 
 const NativeProvider = {
   name: 'native', label: 'Native binary',
   supports: { files:true, disk:true, write:true, shell:true, process:true, net:true, usb:true,
-              serial:true, hid:true, midi:true, camera:true, clipboard:true, codegen:true },
+              serial:true, hid:true, midi:true, camera:true, clipboard:true, codegen:true, tty:false },
   base: 'http://127.0.0.1:4571',
   async probe() {
     const c = new AbortController(); const t = setTimeout(() => c.abort(), 400);
@@ -148,6 +150,7 @@ const IMAGES = {
     // Measured on alpine-2: /sys/class/net/lo/flags is 0x8 after boot (no UP),
     // and a connect to 127.0.0.1 hangs until curl's --max-time, so the
     // Browser's localhost never answered on the default image.
+    tty: "setsid sh -c 'TERM=xterm exec sh </dev/ttyS1 >/dev/ttyS1 2>&1' & wait $!",
     loopback: 'ifconfig lo up',
     shellLine: 'Then a POSIX shell script for Alpine Linux 3.20 (BusyBox ash, musl). apk works (run apk update first; the network is on): apk add <pkg>. Installed: busybox sh grep sed awk find, curl wget ca-certificates, git nano less — the BusyBox versions, so no GNU-only flags (no find -printf, no ls --time-style, no sed -z; list a directory with ls -1p). No bash, no glibc — a glibc binary will not run without gcompat. The workspace is at /mnt. Print results to stdout.',
   },
@@ -162,6 +165,16 @@ const IMAGES = {
     // and a connect to 127.0.0.1 hangs until the timeout instead of being
     // refused), so nothing on localhost — a dev server, the Browser — works
     // until someone brings it up. Debian's systemd does this itself.
+    // The second serial line gets its own shell at boot, started from ttyS0.
+    // setsid so it owns ttyS1 (Ctrl-C reaches what it runs). A background
+    // job of the INTERACTIVE shell, never `( … & )`: a subshell has no job
+    // control, so its `&` sets SIGINT to SIG_IGN, the exec'd shell keeps that
+    // as "ignored at entry" and hands it to every child — measured: ^C
+    // echoed, `sleep 100` stayed, `kill -INT` from ttyS0 did nothing either.
+    // `wait $!` reaps the job (setsid forks and its parent exits at once), so
+    // no `[1]+ Done` notice lands in the next exec's output. null when an
+    // image bakes its own getty for ttyS1.
+    tty: "setsid sh -c 'TERM=xterm exec sh </dev/ttyS1 >/dev/ttyS1 2>&1' & wait $!",
     loopback: 'ifconfig lo up',
     shellLine: 'Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.',
   },
@@ -185,6 +198,7 @@ const IMAGES = {
     dhcp: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); dhclient -1 $IF 2>&1 | tail -1',
     ip: "ip -4 -o addr show $(ls /sys/class/net | grep -v ^lo$ | head -1) | grep -o 'inet [0-9.]*' | cut -d' ' -f2",
     netReset: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); ip link set $IF down; ip link set $IF up',
+    tty: "setsid bash -c 'TERM=xterm exec bash </dev/ttyS1 >/dev/ttyS1 2>&1' & wait $!",
     shellLine: 'Then a bash script for Debian 12. apt-get works (run apt-get update first; the network is on). Common tools are installed: bash coreutils grep sed awk find curl wget git nano. python3 is NOT installed by default. The workspace is at /mnt. Print results to stdout.',
   },
 };
@@ -313,11 +327,24 @@ const Snapshots = {
   },
 };
 
+// The serial ports with a shell behind VM.tty. One entry: a second port is
+// another uart flag and another boot-time line.
+const TTY_PORTS = [1];
+
 const APT_INSTALL = /\bapt(-get)?\b[^|;&]*\binstall\b/;
 
 // The shell prompt at the end of the serial line: busybox `~% ` / `~# `,
 // debian `root@vibeos:~# `.
 const PROMPT_TAIL = /(?:[\w.@()-]*:)?~[%#$]\s*$/;
+// The ttyS1 shell reads no profile (it is exec'd, not a login shell), so on
+// Alpine it prints busybox's own `~ # ` — a space before the sigil — and
+// then a cursor-position query (`\e[6n`, stripped before the test).
+// Any cwd, not only `~`: after `cd /tmp` busybox prints `tmp% `, alpine
+// `/tmp # `, bash `root@vibeos:/tmp# ` — with the home-only shape a resize
+// was queued until the shell came back to ~, and the restore probe read
+// "no prompt" and started a second shell over the one in /tmp. Anchored at
+// a line start so a `100% ` in a program's output is not a prompt.
+const TTY_PROMPT_TAIL = /(?:^|[\r\n])(?:[\w.@()-]*:)?[\w./~-]* ?[%#$] $/;
 // The same prompt where it is cut off captured output, with the hostname
 // spelt out. PROMPT_TAIL's class before the colon is right for "is the shell
 // back" and wrong for "where does the output end": it swallowed output that
@@ -802,6 +829,7 @@ const VM = {
       ...image.config(),
       ...(this.bootedRelay ? { net_device: { type: 'ne2k', relay_url: this.bootedRelay } } : {}),
       filesystem: {},        // the 9p mount at /mnt — the file bridge
+      uart1: true,           // ttyS1: the tty apps and the Terminal attach to (VM.tty)
       screen_container: this.screen,
       autostart,
       disable_speaker: true,
@@ -815,6 +843,11 @@ const VM = {
       // exec never saw its mark and timed out.
       if (this._execFrom === null && this.serial.length > 200000) this.serial = this.serial.slice(-100000);
     });
+    this._tty = {};
+    for (const port of TTY_PORTS) {
+      this._tty[port] = { tail: '', chunk: [], listeners: new Set(), holder: null, pendingResize: null, flush: 0, resizeTimer: 0 };
+      this.emu.add_listener(`serial${port}-output-byte`, b => this._ttyByte(port, b));
+    }
   },
 
   // Cold: run the kernel and wait for the shell prompt on the serial console.
@@ -884,10 +917,16 @@ const VM = {
     if (!(await this.available())) return this.set('unavailable');
     const id = imageId || this.image;
     if (!IMAGES[id]) throw new Error('unknown image: ' + id);
+    // The image is named BEFORE the state is announced: 'booting' listeners
+    // read IMAGES[VM.bootedImage].label for the pill, and between the two
+    // the read was of undefined — a 1-in-4 page error in machine.mjs that
+    // only a listener running inside that gap could see.
+    this.bootedImage = id;
     this.set('booting');
     this.bootStarted = Date.now();
     this.store = null; this.storeError = ''; this.restored = false; this.restoredFrom = null;
     this.keptSnapshot = false; this.restoreError = ''; this.snapshotError = ''; this._written = new Set();
+    this.ttyState = ''; this.ttyError = ''; this.ttyMs = 0; this.ttyRestore = '';
     try {
       await loadScriptOnce(V86_ASSETS + 'libv86.js');
       this.watchRelay();
@@ -899,7 +938,6 @@ const VM = {
       this.screen.addEventListener('click', () => this.screen.focus());
 
       const image = IMAGES[id];
-      this.bootedImage = id;
       this.bootedRelay = this.relay;
       // v86 retries a missing disk forever; check the CDN once so a bad URL or
       // a blocked network fails in a second with a reason, not in six minutes.
@@ -966,6 +1004,7 @@ const VM = {
         try { await this.exec(image.loopback); }
         catch (e) { console.warn(`loopback stayed down: ${e.message}`); }
       }
+      await this.startTty(image);
 
       // The image brings the NIC up but does not ask for a lease, so a
       // configured relay would look broken until someone ran udhcpc by hand.
@@ -1193,6 +1232,168 @@ const VM = {
     this.suppress = true;
     try { return await this.writeFile(path, bytes); }
     finally { setTimeout(() => { this.suppress = false; }, 50); }
+  },
+
+  // ---- the tty: a byte stream on ttyS1 with its own shell ----------------
+  //
+  // exec is request/response over ttyS0 behind a sentinel: no stdin once the
+  // command has started, no pty, and every app shares the agent's shell. A
+  // terminal wants bytes both ways. v86 emulates uart1 (`uart1: true`); the
+  // image starts a shell on it from ttyS0 at boot (IMAGES.<id>.tty), and
+  // VM.tty(port) hands out ONE handle per port: the built-in Terminal and a
+  // `// @requires tty` app cannot both read one line, so the second attach
+  // throws naming the holder, and close() (the window closing) frees it.
+  // The stream is its own buffer: nothing here touches `serial` or execResult.
+  ttyState: '',        // '' | starting | ready | failed — VM.on listeners read it on every emit
+  ttyError: '',
+  ttyMs: 0,            // how long the ttyS1 shell took to reach its prompt
+  ttyRestore: '',      // after a restore: 'survived' (the snapshot's shell answered) | 'busy' (a program holds the line) | 'restarted'
+  get ttyReady() { return this.ttyState === 'ready'; },
+  _tty: {},
+
+  _ttyByte(port, b) {
+    const t = this._tty[port];
+    t.chunk.push(b);
+    t.tail = (t.tail + String.fromCharCode(b)).slice(-200);
+    if (!t.flush) t.flush = setTimeout(() => this._ttyFlush(port), 0);
+  },
+  _ttyFlush(port) {
+    const t = this._tty[port];
+    t.flush = 0;
+    const bytes = Uint8Array.from(t.chunk);
+    t.chunk = [];
+    for (const fn of t.listeners) { try { fn(bytes); } catch (e) { console.warn(`tty listener threw: ${e.message}`); } }
+    if (t.pendingResize && this._ttyAtPrompt(port)) this._ttyResizeSoon(port);
+  },
+  // 80 ms after the prompt, not in the same flush: the terminal's reply to
+  // the prompt's `\e[6n` goes out in that flush too, and busybox 1.36's
+  // read_key drops whatever it read together with a cursor-position reply —
+  // measured on alpine: `stty cols ` vanished and `90 rows 25` ran as a
+  // command (`sh: 90: not found`). The tail is checked again at send time.
+  _ttyResizeSoon(port) {
+    const t = this._tty[port];
+    if (t.resizeTimer) return;
+    t.resizeTimer = setTimeout(() => {
+      t.resizeTimer = 0;
+      if (t.pendingResize && this._ttyAtPrompt(port)) this._ttySendResize(port);
+    }, 80);
+  },
+  // "At a prompt" is what the last bytes on the line say, ANSI stripped —
+  // the same PROMPT_TAIL exec waits for on ttyS0. A write() clears the tail:
+  // after typing, the line is not at a prompt until the shell prints one.
+  // The tail is flattened first: a query (`\e[6n`, after the prompt on
+  // alpine) and an SGR vanish, every other escape is a line break — vi
+  // leaves `\e[24;1H\e[K\e[?1049l~% `, a prompt at the start of a line the
+  // terminal drew, not the bytes — and anything unprintable goes (the first
+  // prompt after a cold boot arrives as `\xff~% ` on busybox).
+  _ttyAtPrompt(port) {
+    const flat = this._tty[port].tail.replace(/\x1b\[[0-9;?]*[nm]/g, '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '\n').replace(/[^\x20-\x7e\r\n]/g, '');
+    return TTY_PROMPT_TAIL.test(flat.slice(-80));
+  },
+  // A write that is only escape sequences is the terminal answering a query
+  // (`\e[24;80R` to `\e[6n`, which ash on alpine sends after every prompt) —
+  // the shell prints nothing back for it, so clearing the tail there left
+  // the line "not at a prompt" for good and every resize queued forever
+  // (measured: nano laid out for 80 columns in a 76-column pane).
+  _ttySend(port, data) {
+    const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    if (!(bytes instanceof Uint8Array)) throw new Error('tty.write takes a string or a Uint8Array');
+    const typed = String.fromCharCode(...bytes.subarray(0, 64)).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '') !== '';
+    if (typed) this._tty[port].tail = '';
+    this.emu.serial_send_bytes(port, bytes);
+  },
+  _ttySendResize(port) {
+    const { cols, rows } = this._tty[port].pendingResize;
+    this._tty[port].pendingResize = null;
+    this._ttySend(port, `stty cols ${cols} rows ${rows}\n`);
+  },
+  async _ttyPrompt(port, maxMs) {
+    const t0 = Date.now();
+    while (!this._ttyAtPrompt(port)) {
+      if (Date.now() - t0 > maxMs) return false;
+      await new Promise(r => setTimeout(r, 60));
+    }
+    return true;
+  },
+
+  // Runs after 'ready', guarded like the loopback exec: a machine whose
+  // second line never answers is a machine without a tty, not a failed one.
+  // After a restore the snapshot's shell is still in RAM and the uart state
+  // came back with it. ttyS0 is asked first whether anything reads the line
+  // (the shell, or top/vi/a sleep the snapshot caught mid-command — the
+  // auto-snapshot after a cold boot or an apt install lands wherever the
+  // Terminal is): if so an Enter tells a prompt ('survived') from a running
+  // program ('busy', ready without a prompt), and only an unowned line gets
+  // the boot line again. Before the count, a probe that saw no prompt under
+  // top started a second shell over the first, and each got half the keys.
+  async startTty(image) {
+    const port = TTY_PORTS[0];
+    this.ttyState = 'starting'; this.ttyError = ''; this.ttyRestore = '';
+    this.emit();
+    const t0 = Date.now();
+    try {
+      let start = !!image.tty;
+      if (this.restored) {
+        const readers = (await this.exec(`ls -l /proc/[0-9]*/fd/0 2>/dev/null | grep -c /dev/ttyS${port}`, 10000)).trim();
+        if (!/^\d+$/.test(readers)) throw new Error(`could not count the readers of ttyS${port} after the restore: ${JSON.stringify(readers.slice(0, 80))}`);
+        if (readers === '0') this.ttyRestore = 'restarted';
+        else {
+          this._ttySend(port, '\n');
+          const alive = await this._ttyPrompt(port, 3000);
+          this.ttyRestore = alive ? 'survived' : 'busy';
+          start = false;
+        }
+      }
+      if (start) await this.exec(image.tty);
+      const deadline = 15000;
+      if (this.ttyRestore !== 'busy' && !(await this._ttyPrompt(port, deadline))) {
+        throw new Error(`no shell prompt on ttyS${port} within ${deadline / 1000}s (last bytes: ${JSON.stringify(this._tty[port].tail.slice(-60))})`);
+      }
+      this.ttyMs = Date.now() - t0;
+      this.ttyState = 'ready';
+    } catch (e) {
+      console.warn(`tty stayed down: ${e.message}`);
+      this.ttyState = 'failed';
+      this.ttyError = e.message;
+    }
+    this.emit();
+  },
+
+  tty(port = 1, holder = 'unnamed') {
+    if (!TTY_PORTS.includes(port)) throw new Error(`no ttyS${port}: the machine has ttyS${TTY_PORTS.join(', ttyS')}`);
+    if (this.state !== 'ready') throw new Error('Linux is not running yet.');
+    if (this.ttyState !== 'ready') throw new Error(`the tty is ${this.ttyState || 'not started'}${this.ttyError ? ': ' + this.ttyError : ''}`);
+    const t = this._tty[port];
+    if (t.holder) throw new Error(`ttyS${port} is held by ${t.holder}; close that window first`);
+    t.holder = holder;
+    const mine = new Set();
+    let closed = false;
+    const open = () => { if (closed) throw new Error(`this tty handle is closed (${holder})`); };
+    return {
+      port, holder,
+      write: data => { open(); this._ttySend(port, data); },
+      onData: fn => {
+        open();
+        if (typeof fn !== 'function') throw new Error('tty.onData takes a function');
+        t.listeners.add(fn); mine.add(fn);
+        return () => { t.listeners.delete(fn); mine.delete(fn); };
+      },
+      resize: (cols, rows) => {
+        open();
+        if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 2) throw new Error(`tty.resize: cols and rows must be integers >= 2, got ${cols}x${rows}`);
+        t.pendingResize = { cols, rows };
+        if (this._ttyAtPrompt(port)) this._ttyResizeSoon(port);
+      },
+      close: () => {
+        if (closed) return;
+        closed = true;
+        for (const fn of mine) t.listeners.delete(fn);
+        mine.clear();
+        t.pendingResize = null;
+        if (t.holder === holder) t.holder = null;
+        this.emit();   // a pane waiting for the line (a reload_ui trial's Terminal) attaches on this
+      },
+    };
   },
 
   // A real command, with output captured. A sentinel marks the end so we never

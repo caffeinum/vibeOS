@@ -132,75 +132,357 @@ export function ConsoleApp(body, win) {
   });
 }
 
-export function TerminalApp(body, win) {
-  // Its own transcript. Commands run through VM.exec(), so this shows what you
-  // typed and what came back — never the boot log.
-  body.style.padding = '0';
-  body.innerHTML = `
-    <div id="tout" class="mono" style="padding:10px 12px;font-size:12.5px;line-height:1.45;white-space:pre-wrap;word-break:break-word"></div>
-    <div class="row" style="position:sticky;bottom:0;gap:6px;padding:8px 10px;border-top:1px solid var(--barline);background:var(--panel)">
-      <span class="mono dimmer" style="font-size:12.5px">$</span>
-      <input type="text" id="tin" autocomplete="off" spellcheck="false"
-             style="flex:1;border:0;background:transparent;padding:2px 0;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--text)" />
-    </div>`;
-  const out = body.querySelector('#tout'), input = body.querySelector('#tin');
-  const hist = []; let hpos = 0;
+/* ---------- the Terminal: a small vt100 over VM.tty -------------------- */
 
-  const line = (text, cls) => {
-    const d = document.createElement('div');
-    if (cls) d.className = cls;
-    d.textContent = text;
-    out.appendChild(d);
-    body.scrollTop = body.scrollHeight;
-    return d;
-  };
-  const ready = () => VM.state === 'ready';
+// Enough of a terminal for busybox top and vi and GNU nano to be legible:
+// a cell grid with a cursor, a scroll region, the CSI moves/erases/inserts
+// those three use, SGR colour and inverse, the alternate screen, and the
+// two queries they send (cursor position `\e[6n` — vi and ash ask it to
+// size the screen and wait for the answer, eating the next keys as the
+// reply; device attributes `\e[c`). Written rather than vendored: xterm.js is
+// ~300 KB the open-source mirror would have to carry, and busybox's programs
+// use this subset. Every byte from the guest lands as textContent.
+const VT_ESC = 0x1b;
+function createVt(el, respond) {
+  const vt = { cols: 80, rows: 24, x: 0, y: 0, attr: 0, wrapNext: false, top: 0, bottom: 23,
+               cursorVisible: true, autowrap: true, grid: null, alt: null, saved: null, scrollback: [], dirty: false };
+  const blank = () => [' ', 0];
+  const row = () => Array.from({ length: vt.cols }, blank);
+  vt.grid = Array.from({ length: vt.rows }, row);
+  let state = 'normal', params = '', collect = '', osc = '';
+  const dec = new TextDecoder();
+  // a sequence that never ends is dropped past 4 KB, not held in memory
+  const grow = (acc, ch) => acc.length < 4096 ? acc + ch : acc;
 
-  if (!ready()) {
-    const waiting = line('waiting for the machine…', 'dimmer');
-    const off = VM.on(() => {
-      if (ready()) { waiting.textContent = 'machine ready — type a command'; off(); input.focus(); }
-      else if (VM.state === 'failed' || VM.state === 'unavailable') {
-        waiting.textContent = 'the machine is not available'; waiting.className = 'no'; off();
-      }
-    });
-    Windows.onDispose(win, off);
-  }
-
-  async function run(cmd) {
-    line('$ ' + cmd, 'dimmer');
-    if (!ready()) return line('the machine is not running', 'no');
-    const pending = line('…', 'dimmer');
-    try {
-      // 600 s, not exec's 20 s default: a typed `apk add` or `git clone` is
-      // the user's to wait on, and Ctrl-C below is the way out of it.
-      const res = await VM.exec(cmd, 600000);
-      pending.remove();
-      if (res) line(crCollapse(res));
-    } catch (e) { pending.remove(); if (!e.interrupted) line(e.message, 'no'); }
-  }
-
-  input.addEventListener('keydown', async e => {
-    if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'c') {
-      // What a terminal does with Ctrl-C: SIGINT to whatever holds the line.
-      // The exec waiting on it rejects as interrupted and run() prints nothing
-      // for that; this ^C is the whole record of it, like on a tty.
-      e.preventDefault();
-      if (!ready()) return;
-      line('^C', 'dimmer');
-      VM.interrupt();
-    } else if (e.key === 'Enter') {
-      const cmd = input.value.trim();
-      if (!cmd) return;
-      hist.push(cmd); hpos = hist.length; input.value = '';
-      await run(cmd);
-    } else if (e.key === 'ArrowUp' && hpos > 0) {
-      e.preventDefault(); input.value = hist[--hpos] || '';
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault(); hpos = Math.min(hpos + 1, hist.length); input.value = hist[hpos] || '';
+  const clampCursor = () => { vt.x = Math.max(0, Math.min(vt.x, vt.cols - 1)); vt.y = Math.max(0, Math.min(vt.y, vt.rows - 1)); };
+  // n comes off the wire: `\e[1000000@` hung the tab (and the machine on
+  // the same thread) for 30 s+ before the loops were clamped to the region.
+  const scrollUp = (n, top = vt.top, bottom = vt.bottom) => {
+    n = Math.min(n, bottom - top + 1);
+    for (let i = 0; i < n; i++) {
+      const gone = vt.grid.splice(top, 1)[0];
+      if (top === 0 && bottom === vt.rows - 1 && !vt.alt) { vt.scrollback.push(gone); if (vt.scrollback.length > 1000) vt.scrollback.shift(); }
+      vt.grid.splice(bottom, 0, row());
     }
+  };
+  const scrollDown = (n, top = vt.top, bottom = vt.bottom) => {
+    n = Math.min(n, bottom - top + 1);
+    for (let i = 0; i < n; i++) { vt.grid.splice(bottom, 1); vt.grid.splice(top, 0, row()); }
+  };
+  const linefeed = () => {
+    if (vt.y === vt.bottom) scrollUp(1);
+    else if (vt.y < vt.rows - 1) vt.y++;
+  };
+  const put = ch => {
+    if (vt.wrapNext) {
+      if (vt.autowrap) { vt.x = 0; linefeed(); }
+      vt.wrapNext = false;
+    }
+    vt.grid[vt.y][vt.x] = [ch, vt.attr];
+    if (vt.x === vt.cols - 1) vt.wrapNext = true; else vt.x++;
+  };
+  const erase = (r, from, to) => { for (let i = from; i < to; i++) vt.grid[r][i] = [' ', vt.attr & 0x3ff]; };
+  const sgr = list => {
+    if (!list.length) list = [0];
+    for (let i = 0; i < list.length; i++) {
+      const n = list[i];
+      if (n === 0) vt.attr = 0;
+      else if (n === 1) vt.attr |= 0x400;
+      else if (n === 4) vt.attr |= 0x800;
+      else if (n === 7) vt.attr |= 0x1000;
+      else if (n === 22) vt.attr &= ~0x400;
+      else if (n === 24) vt.attr &= ~0x800;
+      else if (n === 27) vt.attr &= ~0x1000;
+      else if (n >= 30 && n <= 37) vt.attr = (vt.attr & ~0x1f) | (n - 30 + 1);
+      else if (n === 39) vt.attr &= ~0x1f;
+      else if (n >= 40 && n <= 47) vt.attr = (vt.attr & ~0x3e0) | ((n - 40 + 1) << 5);
+      else if (n === 49) vt.attr &= ~0x3e0;
+      else if (n >= 90 && n <= 97) vt.attr = (vt.attr & ~0x1f) | (n - 90 + 9);
+      else if (n >= 100 && n <= 107) vt.attr = (vt.attr & ~0x3e0) | ((n - 100 + 9) << 5);
+      else if ((n === 38 || n === 48) && list[i + 1] === 5) {
+        const c = list[i + 2] < 16 ? list[i + 2] + 1 : 0;
+        vt.attr = n === 38 ? (vt.attr & ~0x1f) | c : (vt.attr & ~0x3e0) | (c << 5);
+        i += 2;
+      } else if ((n === 38 || n === 48) && list[i + 1] === 2) i += 4;
+    }
+  };
+  const csi = final => {
+    const priv = collect.includes('?');
+    const p = params.split(';').map(v => v === '' ? 0 : parseInt(v, 10));
+    const n = Math.max(1, p[0] || 0);
+    switch (final) {
+      case 'A': vt.y = Math.max(vt.top <= vt.y ? vt.top : 0, vt.y - n); break;
+      case 'B': vt.y = Math.min(vt.y <= vt.bottom ? vt.bottom : vt.rows - 1, vt.y + n); break;
+      case 'C': vt.x = Math.min(vt.cols - 1, vt.x + n); break;
+      case 'D': vt.x = Math.max(0, vt.x - n); break;
+      case 'E': vt.x = 0; vt.y = Math.min(vt.rows - 1, vt.y + n); break;
+      case 'F': vt.x = 0; vt.y = Math.max(0, vt.y - n); break;
+      case 'G': case '`': vt.x = n - 1; break;
+      case 'd': vt.y = n - 1; break;
+      case 'H': case 'f': vt.y = n - 1; vt.x = Math.max(1, p[1] || 0) - 1; break;
+      case 'J': {
+        const m = p[0] || 0;
+        if (m === 0) { erase(vt.y, vt.x, vt.cols); for (let r = vt.y + 1; r < vt.rows; r++) erase(r, 0, vt.cols); }
+        else if (m === 1) { erase(vt.y, 0, vt.x + 1); for (let r = 0; r < vt.y; r++) erase(r, 0, vt.cols); }
+        else for (let r = 0; r < vt.rows; r++) erase(r, 0, vt.cols);
+        break;
+      }
+      case 'K': {
+        const m = p[0] || 0;
+        if (m === 0) erase(vt.y, vt.x, vt.cols); else if (m === 1) erase(vt.y, 0, vt.x + 1); else erase(vt.y, 0, vt.cols);
+        break;
+      }
+      case 'L': if (vt.y >= vt.top && vt.y <= vt.bottom) scrollDown(n, vt.y, vt.bottom); break;
+      case 'M': if (vt.y >= vt.top && vt.y <= vt.bottom) scrollUp(n, vt.y, vt.bottom); break;
+      case 'P': { const r = vt.grid[vt.y]; r.splice(vt.x, Math.min(n, vt.cols - vt.x)); while (r.length < vt.cols) r.push(blank()); break; }
+      case '@': { const r = vt.grid[vt.y]; r.splice(vt.x, 0, ...Array.from({ length: Math.min(n, vt.cols - vt.x) }, blank)); r.length = vt.cols; break; }
+      case 'X': erase(vt.y, vt.x, Math.min(vt.cols, vt.x + n)); break;
+      case 'S': scrollUp(n); break;
+      case 'T': scrollDown(n); break;
+      case 'r': vt.top = Math.max(0, (p[0] || 1) - 1); vt.bottom = Math.min(vt.rows - 1, (p[1] || vt.rows) - 1); vt.x = 0; vt.y = 0; break;
+      case 'm': sgr(params === '' ? [] : p); break;
+      case 'h': case 'l': {
+        const on = final === 'h';
+        if (!priv) break;
+        for (const m of p) {
+          if (m === 25) vt.cursorVisible = on;
+          else if (m === 7) vt.autowrap = on;
+          else if (m === 1049 || m === 47 || m === 1047) {
+            if (on && !vt.alt) { vt.alt = { grid: vt.grid, x: vt.x, y: vt.y }; vt.grid = Array.from({ length: vt.rows }, row); vt.x = 0; vt.y = 0; }
+            else if (!on && vt.alt) { vt.grid = vt.alt.grid; vt.x = vt.alt.x; vt.y = vt.alt.y; vt.alt = null; }
+          }
+        }
+        break;
+      }
+      case 's': vt.saved = { x: vt.x, y: vt.y, attr: vt.attr }; break;
+      case 'u': if (vt.saved) { vt.x = vt.saved.x; vt.y = vt.saved.y; vt.attr = vt.saved.attr; } break;
+      case 'n': if (p[0] === 6) respond(`\x1b[${vt.y + 1};${vt.x + 1}R`); else if (p[0] === 5) respond('\x1b[0n'); break;
+      case 'c': respond('\x1b[?1;2c'); break;
+    }
+    clampCursor();
+    vt.wrapNext = false;
+  };
+  const esc = ch => {
+    switch (ch) {
+      case '[': state = 'csi'; params = ''; collect = ''; return;
+      case ']': state = 'osc'; osc = ''; return;
+      case '(': case ')': case '#': case '%': state = 'skip1'; return;
+      case '7': vt.saved = { x: vt.x, y: vt.y, attr: vt.attr }; break;
+      case '8': if (vt.saved) { vt.x = vt.saved.x; vt.y = vt.saved.y; vt.attr = vt.saved.attr; } break;
+      case 'D': linefeed(); break;
+      case 'E': vt.x = 0; linefeed(); break;
+      case 'M': if (vt.y === vt.top) scrollDown(1); else if (vt.y > 0) vt.y--; break;
+      case 'c': vt.grid = Array.from({ length: vt.rows }, row); vt.x = vt.y = 0; vt.attr = 0; vt.top = 0; vt.bottom = vt.rows - 1; vt.alt = null; break;
+    }
+    state = 'normal';
+  };
+  const control = code => {
+    switch (code) {
+      case 0x0d: vt.x = 0; vt.wrapNext = false; return true;
+      case 0x0a: case 0x0b: case 0x0c: linefeed(); vt.wrapNext = false; return true;
+      case 0x08: if (vt.x > 0) vt.x--; vt.wrapNext = false; return true;
+      case 0x09: vt.x = Math.min(vt.cols - 1, (Math.floor(vt.x / 8) + 1) * 8); vt.wrapNext = false; return true;
+      case 0x07: case 0x00: case 0x0e: case 0x0f: return true;
+    }
+    return false;
+  };
+  vt.feed = bytes => {
+    const text = dec.decode(bytes, { stream: true });
+    for (const ch of text) {
+      const code = ch.codePointAt(0);
+      if (state === 'normal') {
+        if (code === VT_ESC) state = 'esc';
+        else if (code < 0x20) control(code);
+        else if (code !== 0x7f) put(ch);
+      } else if (state === 'esc') esc(ch);
+      else if (state === 'csi') {
+        if (code >= 0x40 && code <= 0x7e) { csi(ch); state = 'normal'; }
+        else if (code >= 0x30 && code <= 0x3f) { if (ch === '?' || ch === '>' || ch === '<' || ch === '=') collect = grow(collect, ch); else params = grow(params, ch); }
+        else if (code >= 0x20 && code <= 0x2f) collect = grow(collect, ch);
+        else if (code === VT_ESC) state = 'esc';
+        else if (code < 0x20) control(code);
+      } else if (state === 'osc') {
+        if (code === 0x07) state = 'normal';
+        else if (code === VT_ESC) state = 'osc-esc';
+        else osc = grow(osc, ch);
+      } else if (state === 'osc-esc') state = 'normal';
+      else if (state === 'skip1') state = 'normal';
+    }
+    vt.dirty = true;
+    paint();
+  };
+  vt.resize = (cols, rows) => {
+    if (cols === vt.cols && rows === vt.rows) return;
+    const fit = g => { g.length = Math.min(g.length, rows); while (g.length < rows) g.push(row()); for (const r of g) { r.length = Math.min(r.length, cols); while (r.length < cols) r.push(blank()); } return g; };
+    vt.cols = cols; vt.rows = rows;
+    fit(vt.grid); if (vt.alt) fit(vt.alt.grid);
+    vt.top = 0; vt.bottom = rows - 1;
+    clampCursor(); vt.wrapNext = false;
+    vt.dirty = true; paint();
+  };
+  let frame = 0;
+  const paintRow = (cells, cursorX) => {
+    const div = document.createElement('div');
+    let span = null, last = -1;
+    cells.forEach(([ch, attr], i) => {
+      const a = i === cursorX ? attr | 0x2000 : attr;
+      if (a !== last || span === null) {
+        span = document.createElement('span');
+        if (a) span.className = attrClass(a);
+        div.appendChild(span); last = a;
+      }
+      span.textContent += ch;
+    });
+    return div;
+  };
+  const attrClass = a => {
+    const c = [];
+    if (a & 0x1f) c.push('f' + ((a & 0x1f) - 1));
+    if (a & 0x3e0) c.push('b' + (((a >> 5) & 0x1f) - 1));
+    if (a & 0x400) c.push('bo'); if (a & 0x800) c.push('ul'); if (a & 0x1000) c.push('inv'); if (a & 0x2000) c.push('cur');
+    return c.join(' ');
+  };
+  function paint() {
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (!vt.dirty) return;
+      vt.dirty = false;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
+      el.textContent = '';
+      const frag = document.createDocumentFragment();
+      if (!vt.alt) for (const r of vt.scrollback) frag.appendChild(paintRow(r, -1));
+      vt.grid.forEach((r, y) => frag.appendChild(paintRow(r, vt.cursorVisible && y === vt.y ? vt.x : -1)));
+      el.appendChild(frag);
+      if (atBottom) el.scrollTop = el.scrollHeight;
+    });
+  }
+  vt.text = () => vt.grid.map(r => r.map(c => c[0]).join('').replace(/\s+$/, '')).join('\n');
+  return vt;
+}
+
+// What a keypress is on the wire. Ctrl-<letter> is the byte, Enter is \r
+// (the tty turns it into the newline), Backspace is DEL — busybox's line
+// editor and vi both erase on it. Cmd-combinations are the browser's.
+function keyBytes(e) {
+  if (e.metaKey) return null;
+  if (e.ctrlKey && !e.altKey && e.key.length === 1) {
+    const c = e.key.toUpperCase().charCodeAt(0);
+    if (c >= 64 && c <= 95) return String.fromCharCode(c - 64);
+    if (e.key === ' ') return '\x00';
+    return null;
+  }
+  const named = { Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b',
+    ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
+    Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~', Insert: '\x1b[2~', PageUp: '\x1b[5~', PageDown: '\x1b[6~' };
+  if (named[e.key]) return named[e.key];
+  if (e.key.length === 1 && !e.ctrlKey) return e.key;
+  return null;
+}
+
+export function TerminalApp(body, win) {
+  // A real terminal on the machine's second serial line: VM.tty(1) is bytes
+  // both ways, so Ctrl-C, top, vi and a password prompt all work, and its
+  // shell is not the one api.shell and the agent share. One holder per line:
+  // while an app holds it this pane says so and offers to try again.
+  body.style.padding = '0';
+  body.textContent = '';
+  const screen = document.createElement('div');
+  screen.className = 'tty';
+  screen.tabIndex = 0;
+  const input = document.createElement('textarea');
+  input.className = 'tty-input';
+  input.setAttribute('aria-label', 'terminal input');
+  input.autocomplete = 'off'; input.spellcheck = false;
+  const note = document.createElement('div');
+  note.className = 'tty-note small';
+  body.append(screen, input, note);
+  const vt = createVt(screen, s => { if (tty) tty.write(s); });
+  let tty = null, ro = null, resizeTimer = 0, sized = false;
+
+  const say = (text, cls) => { note.textContent = text; note.className = 'tty-note small' + (cls ? ' ' + cls : ''); note.hidden = !text; };
+  const focus = () => input.focus();
+  screen.addEventListener('mousedown', e => { if (!window.getSelection().toString()) { e.preventDefault(); focus(); } });
+  screen.addEventListener('mouseup', () => { if (!window.getSelection().toString()) focus(); });
+  input.addEventListener('keydown', e => {
+    if (!tty) return;
+    const bytes = keyBytes(e);
+    if (bytes === null) return;
+    e.preventDefault();
+    tty.write(bytes);
   });
-  setTimeout(() => input.focus(), 50);
+  input.addEventListener('paste', e => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text');
+    if (tty && text) tty.write(text.replace(/\r?\n/g, '\r'));
+  });
+  input.addEventListener('input', () => { input.value = ''; });
+
+  // Cells from a probe glyph, so cols/rows are what fits, not a guess.
+  const cell = () => {
+    const probe = document.createElement('span');
+    probe.textContent = 'W'.repeat(20);
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
+    screen.appendChild(probe);
+    const r = probe.getBoundingClientRect();
+    probe.remove();
+    return { w: r.width / 20, h: r.height };
+  };
+  // The shell gets the size once per handle (`sized`), then on every change.
+  // A trial paint (reload_ui) measures 0×0 in detached chrome: nothing is
+  // sent, and the observer calls back once the chrome is in the document.
+  const fit = () => {
+    const c = cell();
+    if (!(c.w > 0 && c.h > 0)) return;
+    const style = getComputedStyle(screen);
+    const w = screen.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const h = screen.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    const cols = Math.max(2, Math.floor(w / c.w)), rows = Math.max(2, Math.floor(h / c.h));
+    if (sized && cols === vt.cols && rows === vt.rows) return;
+    vt.resize(cols, rows);
+    if (tty) { tty.resize(cols, rows); sized = true; }
+  };
+  const scheduleFit = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(fit, 150); };
+
+  const attach = () => {
+    try { tty = VM.tty(1, 'the built-in Terminal'); }
+    catch (e) {
+      say(e.message + ' — ', 'no');
+      const retry = document.createElement('button');
+      retry.className = 'btn sm'; retry.textContent = 'try again';
+      retry.onclick = settle;
+      note.appendChild(retry);
+      return;
+    }
+    say('');
+    sized = false;
+    tty.onData(bytes => vt.feed(bytes));
+    fit();
+    focus();
+  };
+  // Subscribed for the life of the window, not until the first attach: a
+  // VM.restart replaces the tty records under the handle (its onData never
+  // fired again, its writes went to a record nobody held), and during a
+  // reload_ui trial the live window still holds the line — the handle is
+  // dropped the moment the tty is not live, and the line is taken the
+  // moment it is free (a close() in the kernel emits).
+  const settle = () => {
+    const live = VM.state === 'ready' && VM.ttyState === 'ready';
+    if (tty && !live) { const stale = tty; tty = null; stale.close(); }
+    if (live) { if (!tty) attach(); return; }
+    if (VM.ttyState === 'failed') say('the machine has no terminal line: ' + VM.ttyError, 'no');
+    else if (VM.state === 'failed' || VM.state === 'unavailable') say('the machine is not available', 'no');
+    else say('waiting for the machine…', 'dimmer');
+  };
+  Windows.onDispose(win, VM.on(settle));
+  settle();
+  ro = new ResizeObserver(scheduleFit);
+  ro.observe(screen);
+  Windows.onDispose(win, () => {
+    ro.disconnect();
+    clearTimeout(resizeTimer);
+    if (tty) tty.close();
+  });
 }
 
 /* ---------- apps ------------------------------------------------------ */
