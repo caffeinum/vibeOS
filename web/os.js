@@ -599,15 +599,18 @@ const Gen = {
     return this.available;
   },
 
-  async generate(prompt, history, onStatus) {
+  async generate(prompt, history, onStatus, images) {
     if (this.viaServer) {
+      // The local demo server takes a prompt string and nothing else; dropping
+      // the image here would send text that talks about a screenshot it lost.
+      if (images && images.length) throw new Error('the local server does not accept images');
       const r = await fetch('/api/generate', {
         method: 'POST',
         headers: Object.assign({ 'content-type': 'application/json', 'ngrok-skip-browser-warning': '1' },
                                this.token ? { 'x-demo-token': this.token } : {}),
         body: JSON.stringify({ prompt, history }),
       });
-      const j = await r.json();
+      const j = await jsonOf(r, 'server');
       if (!r.ok) throw new Error(j.error || ('server returned ' + r.status));
       return j.source;
     }
@@ -619,15 +622,16 @@ const Gen = {
         ? { 'content-type': 'application/json', 'x-api-key': this.key,
             'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }
         : { 'content-type': 'application/json', authorization: 'Bearer ' + this.key };
+      const user = { role: 'user', content: Agent.userContent(this.provider, prompt, images) };
       const payload = this.provider === 'anthropic'
         ? { model: this.model, max_tokens: 2000, system: withSkills(forImage(PASTE_KEY_SYSTEM_PROMPT)),
-            messages: [...(history || []).slice(-6), { role: 'user', content: prompt }] }
+            messages: [...(history || []).slice(-6), user] }
         : { model: this.model, max_completion_tokens: 2000,
             messages: [{ role: 'system', content: withSkills(forImage(PASTE_KEY_SYSTEM_PROMPT)) },
-                       ...(history || []).slice(-6), { role: 'user', content: prompt }] };
+                       ...(history || []).slice(-6), user] };
 
       const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
-      const j = await r.json();
+      const j = await jsonOf(r, this.provider);
       if (!r.ok) throw new Error(`${this.provider} ${r.status}: ${(j.error && j.error.message) || 'request failed'}`);
       let src = this.provider === 'anthropic'
         ? (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim()
@@ -635,7 +639,7 @@ const Gen = {
       if (src.startsWith('```')) src = src.split('\n').slice(1).join('\n').replace(/```\s*$/, '').trim();
       return src;
     }
-    if (this.oauth) return Agent.run(prompt, history, onStatus);
+    if (this.oauth) return Agent.run(prompt, history, onStatus, images);
     throw new Error('no model configured');
   },
 };
@@ -1044,8 +1048,34 @@ const TOOL_SCHEMAS = [
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
 ];
 
+/* Read a JSON reply, or say what came back instead. Vercel answers a request
+   body over 4.5 MB with a 413 as text/plain before the route ever runs, so
+   `await r.json()` on it surfaced "Unexpected token 'R'" — a parse error for a
+   size limit. The status and the first line of the body name the real cause. */
+async function jsonOf(r, who) {
+  const text = await r.text();
+  try { return JSON.parse(text); }
+  catch { throw new Error(`${who} returned ${r.status}: ${text.trim().slice(0, 200) || '(empty body)'}`); }
+}
+
 const Agent = {
   MAX_STEPS: 5,
+
+  /* One user turn, in the dialect of whichever transport carries it. Three
+     transports, three shapes for the same picture: chat completions wants
+     image_url with a data URL, Anthropic wants a base64 block, and the AI SDK
+     wants {type:'image', image} — which the server passes through verbatim, so
+     a screenshot reaches Codex without the route learning what one is.
+     A text-only turn stays a plain string, so a chat with no image sends
+     exactly the bytes it sent before. */
+  userContent(shape, text, images) {
+    if (!images || !images.length) return text;
+    const textPart = text ? [{ type: 'text', text }] : [];
+    if (shape === 'openai')    return [...textPart, ...images.map(i => ({ type: 'image_url', image_url: { url: i.dataUrl } }))];
+    if (shape === 'anthropic') return [...images.map(i => ({ type: 'image', source: { type: 'base64', media_type: i.mediaType, data: i.data } })), ...textPart];
+    if (shape === 'sdk')       return [...textPart, ...images.map(i => ({ type: 'image', image: i.dataUrl }))];
+    throw new Error('unknown message shape: ' + shape);
+  },
 
   async callServer(body) {
     await Gen.ensureOAuthFresh();
@@ -1056,7 +1086,7 @@ const Agent = {
       headers: Object.assign({ 'content-type': 'application/json' }, auth),
       body: JSON.stringify(body),
     });
-    const j = await r.json();
+    const j = await jsonOf(r, 'server');
     if (!r.ok) throw new Error(j.error || ('server returned ' + r.status));
     return j;
   },
@@ -1077,7 +1107,7 @@ const Agent = {
      write a window, but could not look at the workspace, run anything in the
      VM, or restyle the desktop — which made "bring your own key" a visibly
      lesser product than signing in, for no reason anyone chose. */
-  async runWithKey(prompt, history, onStatus) {
+  async runWithKey(prompt, history, onStatus, images) {
     let system;
     try { system = await this.systemPrompt(); }
     catch (e) {
@@ -1085,7 +1115,7 @@ const Agent = {
       // one-shot codegen with the local prompt, and it still does — the tools
       // need the endpoint, the window does not. Say which mode this is.
       onStatus?.('no agent endpoint here — one-shot mode');
-      const source = await Gen.generate(prompt, history, onStatus);
+      const source = await Gen.generate(prompt, history, onStatus, images);
       const title = parseTitle(source) || 'app';
       const out = await this.executeTool({ toolName: 'create_app', input: { title, source } }, onStatus);
       return { text: '', created: [out], steps: 1, oneShot: true };
@@ -1094,7 +1124,7 @@ const Agent = {
     const created = [];
     let msgs = [
       ...(history || []).slice(-6).map(h => ({ role: h.role, content: h.content })),
-      { role: 'user', content: prompt },
+      { role: 'user', content: this.userContent(anthropic ? 'anthropic' : 'openai', prompt, images) },
     ];
     let lastText = '';
 
@@ -1134,7 +1164,7 @@ const Agent = {
         reasoning_effort: 'none',
       }),
     });
-    const j = await r.json();
+    const j = await jsonOf(r, 'openai');
     if (!r.ok) throw new Error(j.error?.message || ('openai returned ' + r.status));
     const m = j.choices?.[0]?.message || {};
     return {
@@ -1157,7 +1187,7 @@ const Agent = {
         tools: TOOL_SCHEMAS.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters })),
       }),
     });
-    const j = await r.json();
+    const j = await jsonOf(r, 'anthropic');
     if (!r.ok) throw new Error(j.error?.message || ('anthropic returned ' + r.status));
     const blocks = j.content || [];
     return {
@@ -1274,15 +1304,25 @@ const Agent = {
     throw new Error('unknown tool: ' + toolName);
   },
 
-  async run(prompt, history, onStatus) {
-    let messages = null;
+  async run(prompt, history, onStatus, images) {
+    // Sent as messages from the first step, not {prompt, history}: the server
+    // builds the same array from those two, but only a string prompt fits
+    // through them, and an image needs the SDK's content-part shape.
+    // The picture lives in this turn only — history carries a marker — but it
+    // does ride along on every tool step of this run: the API is stateless, and
+    // a model that called list_files first still has to see the screenshot to
+    // build what it shows. Attachments caps what one turn can carry, so five
+    // steps of it stay under the body limit.
+    let messages = [
+      ...(history || []).slice(-6).map(h => ({ role: h.role, content: h.content })),
+      { role: 'user', content: this.userContent('sdk', prompt, images) },
+    ];
     const created = [];
     let lastText = '';
 
     for (let step = 0; step < this.MAX_STEPS; step++) {
-      const body = Object.assign({ image: VM.bootedImage || VM.image, theme: Theme.id },
-        Gen.codexModel ? { model: Gen.codexModel } : {},
-        messages ? { messages } : { prompt, history: (history || []).slice(-6) });
+      const body = Object.assign({ image: VM.bootedImage || VM.image, theme: Theme.id, messages },
+        Gen.codexModel ? { model: Gen.codexModel } : {});
       const j = await this.callServer(body);
       lastText = j.text || '';
 
@@ -1306,14 +1346,7 @@ const Agent = {
         return { text: lastText, created, steps: step + 1 };
       }
 
-      messages = [
-        ...(messages || [
-          ...(history || []).slice(-6).map(h => ({ role: h.role, content: h.content })),
-          { role: 'user', content: prompt },
-        ]),
-        ...(j.responseMessages || []),
-        { role: 'tool', content: toolResults },
-      ];
+      messages = [...messages, ...(j.responseMessages || []), { role: 'tool', content: toolResults }];
     }
 
     return { text: lastText, created, steps: this.MAX_STEPS };
@@ -1739,17 +1772,98 @@ function parseFile(src) {
   return m ? m[1].trim() : null;
 }
 
+/* ---------- images in the chat ------------------------------------------
+
+   A screenshot is the shortest bug report there is, so the chat takes one:
+   paste or drop, a chip appears above the input, and it goes with the next
+   message. It is shrunk here first. A Retina screenshot of this desktop is
+   2560×1600 and ~1.5 MB as PNG; every transport carries it base64 inside a
+   JSON body, and Anthropic refuses images over 5 MB outright. At ≤1600px on
+   the long side and JPEG 0.85 the same screenshot is ~200 KB and every pixel
+   of 13px UI text is still legible. */
+const Attachments = {
+  MAX_SIDE: 1600, QUALITY: 0.85,
+  /* Every image rides base64 inside the JSON body, and on the agent paths the
+     whole message array is resent on each tool step. Vercel refuses a body over
+     4.5 MB with a 413 before the route runs. Measured at 1600px / JPEG 0.85: a
+     2560×1600 Retina capture of this desktop is 80 KB as a data URL, the same
+     size of pure noise is 1.16 MB, so four of the worst kind (4.6 MB) already
+     pass the limit — hence a count and a byte cap, with 1.5 MB left for six
+     history turns and the tool results of a run. */
+  MAX_COUNT: 4, MAX_BYTES: 3 * 1024 * 1024,
+
+  filesOf(e) {
+    const dt = e.clipboardData || e.dataTransfer;
+    return dt ? [...dt.files] : [];
+  },
+
+  // A file dragged out of some apps arrives with an empty MIME type and a
+  // .png name; the first bytes say what it is when the type field does not.
+  async kindOf(file) {
+    if (/^image\//.test(file.type)) return file.type;
+    const b = [...new Uint8Array(await file.slice(0, 12).arrayBuffer())];
+    const at = (i, ...want) => want.every((w, k) => b[i + k] === w);
+    if (at(0, 0x89, 0x50, 0x4e, 0x47)) return 'image/png';
+    if (at(0, 0xff, 0xd8, 0xff)) return 'image/jpeg';
+    if (at(0, 0x47, 0x49, 0x46, 0x38)) return 'image/gif';
+    if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50)) return 'image/webp';
+    return '';
+  },
+
+  bytesOf(list) { return list.reduce((n, i) => n + i.dataUrl.length, 0); },
+
+  // Throws when `list` would not fit in one request body.
+  check(list) {
+    if (list.length > this.MAX_COUNT) throw new Error(`too many images: ${list.length} attached, ${this.MAX_COUNT} is the limit`);
+    const bytes = this.bytesOf(list);
+    if (bytes > this.MAX_BYTES) throw new Error(`images too large: ${(bytes / 1048576).toFixed(1)} MB attached, ${this.MAX_BYTES / 1048576} MB is the limit`);
+  },
+
+  // What history says in place of a picture the model saw once. Every transport
+  // resends the last six turns, so the marker has to say the picture is gone —
+  // "[image attached]" told the model a picture was in context it could not see.
+  marker(n) {
+    return n === 1
+      ? '[a screenshot was attached to this message; it is not resent, so it is no longer visible]'
+      : `[${n} screenshots were attached to this message; they are not resent, so they are no longer visible]`;
+  },
+
+  async prepare(file) {
+    if (!file) throw new Error('not an image: empty file');
+    const type = await this.kindOf(file);
+    if (!type) throw new Error('not an image: ' + (file.name || 'unnamed') + (file.type ? ` (${file.type})` : ''));
+    let bitmap;
+    try { bitmap = await createImageBitmap(file.type ? file : new Blob([file], { type })); }
+    catch (e) { throw new Error(`could not decode ${file.name || 'image'} (${type || file.type || 'unknown type'}): ${e.message}`); }
+    const scale = Math.min(1, this.MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(bitmap.width * scale));
+    c.height = Math.max(1, Math.round(bitmap.height * scale));
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);   // JPEG has no alpha; transparent PNG would come out black
+    g.drawImage(bitmap, 0, 0, c.width, c.height);
+    bitmap.close();
+    const dataUrl = c.toDataURL('image/jpeg', this.QUALITY);
+    return { dataUrl, mediaType: 'image/jpeg', data: dataUrl.slice(dataUrl.indexOf(',') + 1),
+             width: c.width, height: c.height, name: file.name || 'image' };
+  },
+};
+
 function ChatApp(body) {
   body.style.padding = '0';
   body.innerHTML = `
     <div id="log" style="padding:12px;display:flex;flex-direction:column;gap:10px"></div>
-    <div class="row" style="position:sticky;bottom:0;gap:6px;padding:8px 10px;border-top:1px solid var(--barline);background:var(--panel)">
-      <input type="text" id="msg" placeholder="ask for a window, or a script for the VM"
-             style="flex:1;border:1px solid var(--line);border-radius:var(--radius-ctl);background:var(--panel2);padding:7px 10px;font-size:13px" />
-      <button class="btn p sm" id="send">Send</button>
+    <div style="position:sticky;bottom:0;border-top:1px solid var(--barline);background:var(--panel)">
+      <div id="chips" class="row" hidden style="flex-wrap:wrap;gap:6px;padding:8px 10px 0"></div>
+      <div class="row" style="gap:6px;padding:8px 10px">
+        <input type="text" id="msg" placeholder="ask for a window, or a script for the VM — paste a screenshot too"
+               style="flex:1;border:1px solid var(--line);border-radius:var(--radius-ctl);background:var(--panel2);padding:7px 10px;font-size:13px" />
+        <button class="btn p sm" id="send">Send</button>
+      </div>
     </div>`;
-  const log = body.querySelector('#log'), input = body.querySelector('#msg');
+  const log = body.querySelector('#log'), input = body.querySelector('#msg'), chips = body.querySelector('#chips');
   const history = [];
+  const pending = [];
 
   const bubble = (who, html) => {
     const d = document.createElement('div');
@@ -1776,16 +1890,77 @@ function ChatApp(body) {
     if (Gen.available) intro.innerHTML = readyLine();
   };
 
+  const paintChips = () => {
+    chips.innerHTML = '';
+    chips.hidden = !pending.length;
+    pending.forEach((img, i) => {
+      const c = document.createElement('span');
+      c.className = 'chip';
+      c.title = `${img.name} ${img.width}×${img.height}`;
+      c.innerHTML = '<img alt=""><button class="x" title="Remove">&times;</button>';
+      c.querySelector('img').src = img.dataUrl;
+      c.querySelector('.x').onclick = () => { pending.splice(i, 1); paintChips(); };
+      chips.appendChild(c);
+    });
+  };
+  async function attach(files) {
+    for (const f of files) {
+      try {
+        const img = await Attachments.prepare(f);
+        Attachments.check([...pending, img]);
+        pending.push(img);
+      }
+      catch (e) { bubble('vibeos', `<span class="no">${e.message.replace(/</g, '&lt;')}</span>`); }
+    }
+    paintChips();
+    input.focus();
+  }
+  // A paste with no file falls through, so text still lands in the input.
+  body.addEventListener('paste', e => {
+    const files = Attachments.filesOf(e);
+    if (!files.length) return;
+    e.preventDefault();
+    attach(files);
+  });
+  body.addEventListener('dragover', e => e.preventDefault());
+  body.addEventListener('drop', e => { e.preventDefault(); attach(Attachments.filesOf(e)); });
+
   async function send() {
     const text = input.value.trim();
-    if (!text) return;
+    if (!text && !pending.length) return;
+    // Pictures put back after a failure can stack past the cap; refuse here
+    // rather than let the body grow past what the server will take.
+    try { Attachments.check(pending); }
+    catch (e) { bubble('vibeos', `<span class="no">${e.message.replace(/</g, '&lt;')}</span>`); return; }
+    const images = pending.splice(0);
+    paintChips();
     input.value = '';
-    bubble('you', text.replace(/</g, '&lt;'));
+    bubble('you', text.replace(/</g, '&lt;') + images.map(i => `<img class="shot" src="${i.dataUrl}" alt="">`).join(''));
     const thinking = bubble('vibeos', '<span class="dimmer">thinking…</span>');
-    const onStatus = status => { thinking.innerHTML = `<span class="dimmer">${status}</span>`; };
+    const onStatus = status => { thinking.innerHTML = '<span class="dimmer"></span>'; thinking.querySelector('.dimmer').textContent = String(status); };
 
     let live = false, failure = '';
-    history.push({ role: 'user', content: text });
+    // What came before this turn. The turn itself used to be pushed first and
+    // then sent again as the prompt, so every request carried the user's text
+    // twice — harmless for text, but with an image it would put a
+    // marker right before the actual image.
+    const prior = history.slice();
+    // The turn is recorded once its fate is known. History stays text: the
+    // picture is sent once, and a marker keeps the turn small enough for six
+    // of them to ride along with every request — but only a picture the model
+    // actually saw gets one. A turn that never reached a model is remembered
+    // as its text alone, and an image-only one leaves nothing to remember.
+    const remember = (sent, reply) => {
+      // An image-only turn has no text to lead with; do not remember a bare newline.
+      const turn = sent && images.length ? (text ? text + '\n' : '') + Attachments.marker(images.length) : text;
+      if (!turn) return;
+      history.push({ role: 'user', content: turn }, { role: 'assistant', content: reply.slice(0, 1200) });
+    };
+    // A picture that did not go through returns to the chip row, so the next
+    // try — "Add a key", or just pressing Send again — carries it. Before this
+    // the chips were cleared before the request, and the retry sent text that
+    // talked about a screenshot it no longer had.
+    const giveBack = () => { pending.unshift(...images); paintChips(); };
 
     // Both paths are the agent now. Signing in with ChatGPT proxies through
     // vibeos.sh; a pasted key talks to the provider from this page. Same
@@ -1793,12 +1968,12 @@ function ChatApp(body) {
     if (Gen.available && (Gen.oauth || Gen.key)) {
       try {
         const result = Gen.oauth
-          ? await Gen.generate(text, history, onStatus)
-          : await Agent.runWithKey(text, history, onStatus);
+          ? await Gen.generate(text, prior, onStatus, images)
+          : await Agent.runWithKey(text, prior, onStatus, images);
         live = true;
         thinking.remove();
         const summary = result.text || result.created.map(c => c.title).join(', ') || 'done';
-        history.push({ role: 'assistant', content: summary.slice(0, 1200) });
+        remember(true, summary);
 
         for (const item of result.created) {
           if (item.kind === 'vm') {
@@ -1837,10 +2012,13 @@ function ChatApp(body) {
       } catch (e) {
         failure = e.message;
         thinking.remove();
+        giveBack();
         const source = CANNED[pickCanned(text)];
-        history.push({ role: 'assistant', content: source.slice(0, 1200) });
+        remember(false, source);
         await openFromSource(source, text, false, failure);
-        bubble('vibeos', `<span class="no">${failure}</span> — fell back to a stock module.`);
+        // The message may carry a slice of a proxy's HTML error page (a
+        // Cloudflare 502, an interstitial) — text, never markup.
+        { const b = bubble('vibeos', '<span class="no"></span> — fell back to a stock module.'); b.querySelector('.no').textContent = String(failure); }
       }
       return;
     }
@@ -1848,13 +2026,14 @@ function ChatApp(body) {
     let source;
     try {
       if (!Gen.available) throw new Error('no model configured');
-      source = await Gen.generate(text, history); live = true;
+      source = await Gen.generate(text, prior, undefined, images); live = true;
     } catch (e) {
       failure = e.message;
+      giveBack();
       source = CANNED[pickCanned(text)];
     }
     thinking.remove();
-    history.push({ role: 'assistant', content: source.slice(0, 1200) });
+    remember(live, source);
     await openFromSource(source, text, live, failure);
     if (!live) {
       if (failure === 'no model configured') {
@@ -1880,11 +2059,15 @@ function ChatApp(body) {
           if (!Gen.available) return;
           track('key_offer_added');
           b.remove();
-          input.value = text;      // retry the same request, now for real
+          // Retry the same request, now for real. The pictures are already
+          // back in the chip row (giveBack), so they go with it this time.
+          input.value = text;
           send();
         };
       } else {
-        bubble('vibeos', `<span class="no">${failure}</span> — fell back to a stock module.`);
+        // The message may carry a slice of a proxy's HTML error page (a
+        // Cloudflare 502, an interstitial) — text, never markup.
+        { const b = bubble('vibeos', '<span class="no"></span> — fell back to a stock module.'); b.querySelector('.no').textContent = String(failure); }
       }
     }
   }

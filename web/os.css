@@ -159,6 +159,10 @@
   .card.blocked { opacity: .55; }
   .req { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; border-radius: var(--radius-sm); padding: 1px 5px; border: var(--border-w) solid var(--line2); color: var(--dimmer); }
   .req.miss { color: var(--warn); border-color: var(--warnline); }
+  .chip { position: relative; display: inline-flex; border: var(--border-w) solid var(--line2); border-radius: var(--radius-sm); overflow: hidden; background: var(--panel2); }
+  .chip img { display: block; width: 56px; height: 42px; object-fit: cover; }
+  .chip .x { position: absolute; top: 0; right: 0; border: 0; padding: 0 5px; line-height: 16px; font-size: 13px; background: var(--panel); color: var(--text); border-radius: 0 0 0 var(--radius-sm); }
+  img.shot { display: block; max-width: 100%; max-height: 160px; margin-top: 6px; border-radius: var(--radius-sm); border: var(--border-w) solid var(--line2); }
   .upsell { border: var(--border-w) solid var(--upline); background: linear-gradient(160deg,var(--up1),var(--up2)); border-radius: var(--radius-win); padding: 12px; }
   .key-modal-overlay {
     position: fixed; inset: 0; z-index: 9000;
