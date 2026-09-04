@@ -181,23 +181,37 @@ jobs:
             # image, and a probe that needs a missing binary fails as a false
             # red on a healthy image. 2406 is hex for 9222; 0100007F is
             # 127.0.0.1 little-endian, 00000000 is the wildcard bind.
+            #
+            # Filter on st == 0A (LISTEN). /proc/net/tcp also lists ESTABLISHED
+            # connections, and a connection ACCEPTED by a wildcard-bound socket
+            # has local_address 127.0.0.1 — so matching the address alone lets a
+            # connection vouch for the listener and passes on exactly the
+            # wildcard bind this exists to catch. Not hypothetical: the Next app
+            # connects to CDP over loopback, so that line is essentially always
+            # present in a running container.
+            #
+            # IPv4 only. An IPv6-only bind therefore reads as "no listener" and
+            # errors, which is failing closed and intended. If /proc/net/tcp6 is
+            # ever added here, it needs the same 0A filter or it reintroduces
+            # the bug above.
             for attempt in $(seq 1 15); do
-              line=$(docker exec "$cid" sh -lc 'grep -i ":2406 " /proc/net/tcp || true')
-              if [ -n "$line" ]; then break; fi
+              listeners=$(docker exec "$cid" sh -lc \
+                'awk "\$4 == \"0A\" && \$2 ~ /:2406$/ {print \$2}" /proc/net/tcp' || true)
+              if [ -n "$listeners" ]; then break; fi
               sleep 2
             done
-            if [ -z "$line" ]; then
-              echo "::error::[$platform] nothing is listening on 9222 — chromium never came up:"
-              docker exec "$cid" sh -lc 'cat /proc/1/fd/2' 2>/dev/null || true
+            if [ -z "$listeners" ]; then
+              echo "::error::[$platform] nothing is LISTENING on 9222 — chromium never came up:"
               docker logs "$cid" 2>&1 | tail -30 || true
               exit 1
             fi
-            if ! echo "$line" | awk '{print $2}' | grep -qi '^0100007F:2406$'; then
-              echo "::error::[$platform] CDP port is NOT bound to loopback:"
-              echo "$line"
+            bad=$(echo "$listeners" | grep -vi '^0100007F:2406$' || true)
+            if [ -n "$bad" ]; then
+              echo "::error::[$platform] CDP port is NOT bound to loopback only:"
+              echo "$bad"
               exit 1
             fi
-            echo "ok: CDP bound to 127.0.0.1:9222 only"
+            echo "ok: CDP listener bound to 127.0.0.1:9222 only"
 
             docker rm -f "$cid" >/dev/null
             trap - EXIT
