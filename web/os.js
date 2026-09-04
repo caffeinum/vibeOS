@@ -3392,6 +3392,10 @@ function BrowserApp(body) {
   frame.addEventListener('load', () => {
     const doc = frame.contentDocument;
     if (!doc) return;
+    // The parsed document is visible before this load event fires, so anyone
+    // polling for the form can click it before the handlers below exist. The
+    // flag says when they do; the e2e waits on it rather than on the form.
+    doc.__vibeosWired = true;
     doc.addEventListener('click', (e) => {
       const a = e.target && e.target.closest && e.target.closest('a[href]');
       if (!a) return;
