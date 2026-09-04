@@ -2590,14 +2590,51 @@ function ChatApp(body) {
 // BASE is defined by the loader in index.html.
 const V86_ASSETS = BASE + 'v86/';
 
-// Two machines. BusyBox is bundled (7 MB, boots in seconds, no package
-// manager). Debian is streamed: a 1 GB ext4 disk cut into 128 KB zstd chunks
-// that v86 fetches from a CDN as the kernel touches them, so "install apt" is
-// a reboot, not a download. Built by scripts/debian/build.sh.
+// Three machines. Alpine is the default: a 256 MB ext4 disk cut into 128 KB
+// zstd chunks (91 MB on the wire, fetched as the kernel touches them), apk
+// works, and it reaches a shell in 20-30 s (measured, Chrome, host load ~20:
+// 27 s from localhost, 21 s from CloudFront with the boot.txt prefetch)
+// because its initramfs is ours (scripts/alpine/init) and OpenRC runs four
+// services. BusyBox is bundled (7 MB ISO, 5-7 s, no package manager). Debian is
+// the same streaming trick on a 1 GB disk with apt, and takes minutes. Built
+// by scripts/alpine/build.sh and scripts/debian/build.sh.
 const DEBIAN_BASE = 'https://d3je35hqch090t.cloudfront.net/debian-3/';
+// A build in progress boots from public/alpine-dev/ (git-ignored; build.sh
+// copies its output there) by pointing this at new URL('../alpine-dev/', location.href).href.
+const ALPINE_BASE = 'https://d3je35hqch090t.cloudfront.net/alpine-2/';
 const IMAGES = {
+  alpine: {
+    label: 'Alpine', blurb: 'streamed 91 MB disk, apk works, usually 20-30 s to a shell — longer on a busy machine',
+    // The same budget as the bundled image: 20-40 s measured, and a laptop on
+    // battery with the tab in the background is slower by more than 2x.
+    memoryMB: 128, bootTimeoutMs: 120000,
+    preflight: ALPINE_BASE + 'bzImage',
+    warm: ALPINE_BASE + 'boot.txt',
+    config: () => ({
+      bzimage: { url: ALPINE_BASE + 'bzImage' },
+      initrd:  { url: ALPINE_BASE + 'initrd' },
+      // acpi on, and GPE 1 masked, both measured on Alpine's 6.6 linux-lts:
+      // without v86's ACPI tables the kernel reads the MP table and panics in
+      // setup_IO_APIC (NULL deref at 0.4s); with them, v86 answers the PCI
+      // hotplug GPE with "every slot ejected" and the kernel removes the IDE
+      // controller, the NIC and the 9p device one by one, so /dev/sda never
+      // appears. acpi_mask_gpe=0x01 keeps the devices; noapic instead hangs
+      // the IDE probe waiting for IRQ 14.
+      cmdline: 'root=/dev/sda rw rootfstype=ext4 modules=ext4 console=ttyS0 acpi_mask_gpe=0x01 loglevel=3',
+      acpi: true,
+      hda: { url: ALPINE_BASE + 'chunk.img.zst', async: true, use_parts: true,
+             fixed_chunk_size: 128 * 1024, size: 256 * 1024 * 1024 },
+    }),
+    dhcp: 'ifconfig eth0 up; udhcpc -i eth0 -n -q 2>&1 | tail -1',
+    ip: "ifconfig eth0 | grep -o 'inet addr:[0-9.]*' | cut -d: -f2",
+    // Measured on alpine-2: /sys/class/net/lo/flags is 0x8 after boot (no UP),
+    // and a connect to 127.0.0.1 hangs until curl's --max-time, so the
+    // Browser's localhost never answered on the default image.
+    loopback: 'ifconfig lo up',
+    shellLine: 'Then a POSIX shell script for Alpine Linux 3.20 (BusyBox ash, musl). apk works (run apk update first; the network is on): apk add <pkg>. Installed: busybox sh grep sed awk find, curl wget ca-certificates, git nano less. No bash, no glibc — a glibc binary will not run without gcompat. The workspace is at /mnt. Print results to stdout.',
+  },
   busybox: {
-    label: 'BusyBox', blurb: 'bundled, boots in seconds, no package manager',
+    label: 'BusyBox', blurb: 'tiny: bundled 7 MB ISO, boots in about 10 s, no package manager',
     memoryMB: 64, bootTimeoutMs: 120000,
     config: () => ({ cdrom: { url: V86_ASSETS + 'linux4.iso' } }),
     dhcp: 'udhcpc -i eth0 -n -q 2>&1 | tail -1',
@@ -2610,7 +2647,7 @@ const IMAGES = {
     shellLine: 'Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.',
   },
   debian: {
-    label: 'Debian', blurb: 'streamed from a CDN, has apt, takes a few minutes to boot',
+    label: 'Debian', blurb: 'full: streamed 1 GB disk, apt works, slow — 80 to 120 s to a shell',
     memoryMB: 256, bootTimeoutMs: 360000,
     preflight: DEBIAN_BASE + 'bzImage',
     config: () => ({
@@ -2648,6 +2685,10 @@ const NET_OURS = 'wisps://wisp.mercurywork.shop/';
 // The shell prompt at the end of the serial line: busybox `~% ` / `~# `,
 // debian `root@vibeos:~# `.
 const PROMPT_TAIL = /(?:[\w.@()-]*:)?~[%#$]\s*$/;
+// The same prompt for cutting it off captured output, with the hostname spelt
+// out (see _exec): the class above is right for "is the shell back", wrong
+// for "where does the output end".
+const PROMPT_STRIP = /(?:(?:root@)?vibeos:)?~ ?[%#$]\s*$/;
 
 // One socket, as far as v86 is concerned, over as many real ones as it takes.
 //
@@ -2882,9 +2923,15 @@ const VM = {
   },
   // Which Linux boots. Persisted like the relay; takes effect on restart.
   get image() {
+    const chosen = this.chosenImage;
+    return chosen || 'alpine';
+  },
+  // The image someone picked in Settings, or null for the default. The default
+  // may fall back when it cannot boot; a choice never silently does.
+  get chosenImage() {
     let stored = null;
     try { stored = localStorage.getItem('vibeos-image'); } catch {}
-    return IMAGES[stored] ? stored : 'busybox';
+    return IMAGES[stored] ? stored : null;
   },
   setImage(id) {
     if (!IMAGES[id]) throw new Error('unknown image: ' + id);
@@ -2976,7 +3023,7 @@ const VM = {
   // Five redials have failed, or the image is being switched: the machine has
   // to come back. Apps survive because they are files on disk; VM state does
   // not.
-  async restart() {
+  teardown() {
     // v86's network adapter arms a 10 s redial in onclose (register_ws) that
     // destroy() never clears, and destroy() is async. Left alone, the dead
     // emulator kept dialing through the wrapper and the desktop showed the
@@ -2990,12 +3037,35 @@ const VM = {
     this.relaySocket = null; this.bootedRelay = '';
     window.__v86loaded = null;
     this.set('off');
-    await this.boot();
+  },
+  // No image named while the default's fallback is running: reboot the
+  // BusyBox that works, not the Alpine that just failed — retryFallback is
+  // the one path that retries it. A choice made in Settings still wins.
+  async restart(imageId) {
+    const stayOnFallback = !imageId && !!this.fallback && !this.chosenImage;
+    const id = stayOnFallback ? this.bootedImage : (imageId || this.image);
+    this.teardown();
+    if (!stayOnFallback) this.fallback = null;
+    await this.boot(id);
+  },
+  // The Machine pane's "retry Alpine" after a fallback. Not setImage: the
+  // person did not choose Alpine, the default is still the default.
+  retryFallback() {
+    if (!this.fallback) throw new Error('nothing fell back');
+    return this.restart(this.fallback.from);
   },
 
-  async boot() {
+  // The default image lives on a CDN. A network that blocks it, or a host too
+  // loaded to reach a prompt inside the budget, used to end at 'vm failed'
+  // where the bundled BusyBox always worked. So the default — never an image
+  // someone chose in Settings — falls back to BusyBox once, and says so.
+  fallback: null,          // { from, reason } while a fallback is booting or running
+  fellBack: false,         // once per page: the retry after a fallback shows 'failed'
+  async boot(imageId) {
     if (this.state === 'booting' || this.state === 'ready') return;
     if (!(await this.available())) return this.set('unavailable');
+    const id = imageId || this.image;
+    if (!IMAGES[id]) throw new Error('unknown image: ' + id);
     this.set('booting');
     this.bootStarted = Date.now();
     try {
@@ -3008,14 +3078,27 @@ const VM = {
       this.screen.innerHTML = `<div style="white-space:pre;font:14px/1.15 'JetBrains Mono',monospace;color:var(--titletext);padding:6px"></div><canvas style="display:none"></canvas>`;
       this.screen.addEventListener('click', () => this.screen.focus());
 
-      const image = IMAGES[this.image];
-      this.bootedImage = this.image;
+      const image = IMAGES[id];
+      this.bootedImage = id;
       this.bootedRelay = this.relay;
       // v86 retries a missing disk forever; check the CDN once so a bad URL or
       // a blocked network fails in a second with a reason, not in six minutes.
       if (image.preflight) {
         const ok = await fetch(image.preflight, { method: 'HEAD' }).then(r => r.ok, () => false);
-        if (!ok) throw new Error(`${image.label} image is not reachable at ${image.preflight}`);
+        if (!ok) throw Object.assign(new Error(`${image.label} image is not reachable at ${image.preflight}`), { fallbackReason: 'unreachable' });
+      }
+      // v86 fetches a streamed disk one chunk at a time, when the kernel asks
+      // and not before, so a boot is ~100 round trips in a row: the same build
+      // booted in 27 s from localhost and 55 s from CloudFront. boot.txt is
+      // the list a boot touches (scripts/alpine/warm.mjs); fetching them all
+      // at once lands them in the HTTP cache, where v86's own requests find
+      // them. Not awaited: v86 asks for whatever is missing anyway.
+      if (image.warm) {
+        const base = image.warm.slice(0, image.warm.lastIndexOf('/') + 1);
+        fetch(image.warm).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status + ' for ' + image.warm)))
+          .then(list => Promise.all(list.trim().split('\n').map(name =>
+            fetch(base + name).then(r => r.arrayBuffer(), () => null))))
+          .catch(e => console.warn('warm list skipped:', e.message));
       }
       this.emu = new V86({
         wasm_path: V86_ASSETS + 'v86.wasm',
@@ -3044,7 +3127,7 @@ const VM = {
           if (/~[%#$] $/.test(this.serial) || /~[%#$] /.test(this.serial.slice(-40))) {
             clearInterval(tick); res();
           } else if (Date.now() - t0 > image.bootTimeoutMs) {
-            clearInterval(tick); rej(new Error('the VM never reached a shell prompt'));
+            clearInterval(tick); rej(Object.assign(new Error('the VM never reached a shell prompt'), { fallbackReason: 'timeout' }));
           }
         }, 500);
       });
@@ -3073,11 +3156,21 @@ const VM = {
         this.syncNet();
       }
     } catch (e) {
-      this.set('failed', e.message);
-      track('vm_failed', {
-        image: this.image,
-        seconds: Math.round((Date.now() - this.bootStarted) / 1000),
-      });
+      const seconds = Math.round((Date.now() - this.bootStarted) / 1000);
+      const reachedReady = this.state === 'ready';
+      const canFallBack = !reachedReady && !!e.fallbackReason && id !== 'busybox'
+        && !this.chosenImage && !this.fellBack;
+      // vm_failed is what the visitor sees; a default that falls back and
+      // boots is vm_fallback, not a failure, or the two would double count.
+      if (!canFallBack) {
+        track('vm_failed', { image: id, seconds });
+        return this.set('failed', e.message);
+      }
+      this.fellBack = true;
+      this.fallback = { from: id, reason: e.fallbackReason };
+      track('vm_fallback', { from: id, reason: e.fallbackReason });
+      this.teardown();
+      await this.boot('busybox');
     }
   },
 
@@ -3225,7 +3318,8 @@ const VM = {
       // __VOSn__ let a command that outlived its timeout hand its late
       // sentinel to the NEXT exec, which returned the wrong output as its own;
       // matching the typed echo returned "" or "^Cecho again" for `echo again`
-      // whenever its bytes landed while the tty was still in cooked mode.
+      // whenever its bytes landed while the tty was still in cooked mode, and
+      // `mount | grep /mnt` came back empty right after boot on Alpine.
       if (chunk.includes('\n' + mark + '\r\n')) {
         const clean = chunk.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');   // colour and bracketed-paste
         // Output ends where the shell echoes back the sentinel command we
@@ -3239,8 +3333,13 @@ const VM = {
           .split(/\r?\n/)
           .filter(l => l.trim() !== cmd.trim())        // the terminal echoing what we typed
           .join('\n')
-          // Strip only the prompt itself, not the line it sits on.
-          .replace(PROMPT_TAIL, '')
+          // Strip only the prompt itself, not the line it sits on. Not
+          // PROMPT_TAIL: its hostname class ([\w.@()-]*) before the colon
+          // swallowed output sharing that line — `printf no-trailing-newline`
+          // on Alpine came back "" and `printf "a\nb\nc"` came back "a\nb",
+          // because "no-trailing-newlinevibeos:" is all word characters. Every
+          // image we build is hostname vibeos; BusyBox prints no hostname.
+          .replace(PROMPT_STRIP, '')
           .trim();
       }
       const interrupted = this.interruptedAt > t0;
@@ -3283,44 +3382,76 @@ const VM_LABEL = {
   ready: 'vm ready', failed: 'vm failed',
 };
 
+const FALLBACK_REASON = { unreachable: 'could not be fetched', timeout: 'took too long' };
+// 'alpine could not be fetched — running busybox': the whole story in the pill.
+function fallbackLine() {
+  const f = VM.fallback;
+  if (!f) return '';
+  const what = `${f.from} ${FALLBACK_REASON[f.reason]}`;
+  return VM.state === 'ready' ? `${what} — running ${VM.bootedImage}` : `${what} — starting ${IMAGES.busybox.label.toLowerCase()}`;
+}
+
 function paintVM() {
   const dot = document.getElementById('lxDot'), txt = document.getElementById('lxText');
   if (!dot) return;
   const dropped = VM.state === 'ready' && VM.net === 'disconnected';
   const redialing = VM.state === 'ready' && VM.net === 'reconnecting';
   txt.textContent = dropped ? 'network dropped' : redialing ? 'reconnecting…'
-    : VM.state === 'ready' && VM.bootedImage === 'debian' ? 'debian ready' : VM_LABEL[VM.state];
+    : VM.fallback && (VM.state === 'ready' || VM.state === 'booting') ? fallbackLine()
+    : VM.state === 'ready' ? `${VM.bootedImage} ready` : VM_LABEL[VM.state];
   dot.className = 'dot' + (dropped || redialing ? ' warn' : VM.state === 'ready' ? '' :
                            VM.state === 'booting' ? ' warn' : ' off');
+  const bootNote = () => VM.bootedImage === 'debian' ? 'Booting Debian — streams the disk as it goes, a few minutes.'
+    : VM.bootedImage === 'alpine' ? 'Booting Alpine from the CDN — usually 20-30 s, longer on a busy machine.'
+    : `Booting ${IMAGES[VM.bootedImage].label} — under half a minute.`;
   document.getElementById('lxPill').title =
-    VM.state === 'ready'   ? ('The VM is up. api.shell() runs real commands.'
+    VM.state === 'ready'   ? ((VM.fallback ? `${IMAGES[VM.fallback.from].label} ${FALLBACK_REASON[VM.fallback.reason]}; ${IMAGES[VM.bootedImage].label} is running instead. Settings › Machine can retry.  ` : 'The VM is up. api.shell() runs real commands.')
                               + (VM.net ? '  Network: ' + VM.net + (VM.ip ? ', ' + VM.ip : '') : '  No network.')) :
-    VM.state === 'booting' ? (VM.bootedImage === 'debian' ? 'Booting Debian — streams the disk as it goes, a few minutes.' : 'Booting — about 30 seconds.') :
+    VM.state === 'booting' ? (VM.fallback ? `${fallbackLine()} instead.` : bootNote()) :
     VM.state === 'failed'  ? ('Boot failed: ' + (VM.detail || '')) :
     VM.state === 'unavailable' ? 'The 11 MB of v86 assets are not served here.' :
     'Click to start the VM.';
 }
 
-// "Install apt" is really "boot Debian instead": the image is streamed, so
-// switching costs a restart and a slower boot, not a download.
+// Switching images is a restart into a different streamed disk, not a
+// download; whatever was installed lives in memory and goes away with it.
 function imageSwitch() {
   const box = document.createElement('div');
-  box.style.cssText = 'padding:8px 10px;border-bottom:1px solid var(--barline);display:flex;gap:10px;align-items:center;flex-wrap:wrap';
-  const running = IMAGES[VM.bootedImage || VM.image];
-  const other = (VM.bootedImage || VM.image) === 'debian' ? 'busybox' : 'debian';
+  box.style.cssText = 'padding:8px 10px;border-bottom:1px solid var(--barline);display:flex;flex-direction:column;gap:6px';
+  const current = VM.bootedImage || VM.image;
   box.innerHTML = `
-    <span class="small">Running <b>${running.label}</b> <span class="dimmer">· ${running.blurb}</span></span>
-    <button class="btn p sm" id="swapImage">${other === 'debian' ? 'Install apt (switch to Debian)' : 'Back to BusyBox'}</button>
-    <span class="tiny dimmer">${other === 'debian' ? 'streams ~1 GB lazily, needs a fresh reboot; apt installs live in memory and go away on reload' : 'restarts into the 7 MB image'}</span>`;
-  box.querySelector('#swapImage').onclick = async (e) => {
-    // Whether anyone actually reaches for apt, and whether Debian boots for
-    // real people, was completely unmeasured — the switch shipped blind.
-    track('image_switch', { to: other });
-    e.target.disabled = true; e.target.textContent = 'restarting…';
-    track(other === 'debian' ? 'install_apt_click' : 'back_to_busybox_click');
-    VM.setImage(other);
-    await VM.restart();
-  };
+    <span class="small">Running <b>${IMAGES[current].label}</b> <span class="dimmer">· ${IMAGES[current].blurb}</span></span>
+    ${Object.entries(IMAGES).map(([id, im]) => `
+      <div style="display:flex;gap:8px;align-items:baseline">
+        <button class="btn sm${id === current ? ' p' : ''}" id="img-${id}" ${id === current ? 'disabled' : ''}>${id === current ? 'running' : 'switch to'} ${im.label}</button>
+        <span class="tiny dimmer">${im.blurb}${id === VM.image && id !== current ? ' · boots next time' : ''}</span>
+      </div>`).join('')}
+    <span class="tiny dimmer">switching restarts the machine; packages you installed live in memory and go away with it</span>`;
+  if (VM.fallback) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;align-items:baseline';
+    const note = document.createElement('span');
+    note.className = 'small';
+    note.id = 'fallbackNote';
+    note.textContent = fallbackLine();
+    const retry = document.createElement('button');
+    retry.className = 'btn sm'; retry.id = 'retryFallback';
+    retry.textContent = 'retry ' + IMAGES[VM.fallback.from].label;
+    retry.disabled = VM.state !== 'ready';
+    retry.onclick = () => { retry.disabled = true; retry.textContent = 'restarting…'; VM.retryFallback(); };
+    row.append(note, retry);
+    box.prepend(row);
+  }
+  Object.keys(IMAGES).forEach(id => {
+    box.querySelector('#img-' + id).onclick = async (e) => {
+      // Whether anyone actually reaches for a package manager, and whether the
+      // streamed images boot for real people, was unmeasured — it shipped blind.
+      track('image_switch', { to: id });
+      e.target.disabled = true; e.target.textContent = 'restarting…';
+      VM.setImage(id);
+      await VM.restart();
+    };
+  });
   return box;
 }
 
