@@ -978,7 +978,9 @@ const RemoteBridge = {
   get token() { return remoteToken; },
   command() {
     if (!remoteToken) throw new Error('RemoteBridge.command: no token — pair first');
-    return 'npx vibeos-mcp --token ' + remoteToken;
+    // github:, not the bare name: the package is not on npm yet, and the pane
+    // advertised a command that 404'd on the first person who tried it.
+    return 'npx github:caffeinum/vibeos-mcp --token ' + remoteToken;
   },
 
   mint() {
