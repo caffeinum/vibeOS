@@ -167,6 +167,22 @@ jobs:
             fi
 
 
+            # The supervisor script must exist and be executable at the path
+            # the CMD names. It is started OUTSIDE the `wait -n` set, so if the
+            # path is wrong bash prints "no such file or directory" into the
+            # logs and the container boots healthy with no browser and no
+            # supervisor. The CDP check below would catch that, but it would
+            # report "chromium never came up" — true, and the wrong cause. A
+            # rename is exactly the change that ships this.
+            if out=$(docker exec "$cid" sh -lc \
+                  'test -x /app/scripts/browser-supervise.sh && echo present' 2>&1); then
+              echo "ok: supervisor script $out and executable"
+            else
+              echo "::error::[$platform] /app/scripts/browser-supervise.sh missing or not executable — the CMD references it:"
+              docker exec "$cid" sh -lc 'ls -l /app/scripts/ 2>&1' || true
+              exit 1
+            fi
+
             # The local CDP port must be bound to loopback ONLY. An
             # unauthenticated CDP endpoint is equivalent to remote code
             # execution and can navigate file:// to read this container's
