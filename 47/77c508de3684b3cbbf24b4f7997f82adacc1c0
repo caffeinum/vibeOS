@@ -1,0 +1,19 @@
+web/os.js
+  s_0085eb92de6cba::t_88e8620f43ad04 3305-3312,3792-3797
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "4777c508de3684b3cbbf24b4f7997f82adacc1c0",
+  "prompts": {},
+  "sessions": {
+    "s_0085eb92de6cba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "12d15d45-af7b-4c70-a6ae-7f28cf657da5",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
