@@ -1,6 +1,6 @@
 /**
  * Minimal Chrome DevTools Protocol client for the local chromium started by
- * scripts/chromium-supervise.sh.
+ * scripts/browser-supervise.sh.
  *
  * The endpoint is loopback-only and MUST stay that way: an unauthenticated CDP
  * port is equivalent to remote code execution and can navigate file:// to read
@@ -26,7 +26,7 @@ async function cdpFetch(path: string, init?: RequestInit): Promise<Response> {
   if (!res.ok) {
     throw new Error(
       `CDP ${path} failed: ${res.status} ${res.statusText}. Is chromium running? ` +
-        `scripts/chromium-supervise.sh should keep it alive on ${cdpBase}.`
+        `scripts/browser-supervise.sh should keep it alive on ${cdpBase}.`
     );
   }
   return res;

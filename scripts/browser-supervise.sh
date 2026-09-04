@@ -1,6 +1,16 @@
 #!/bin/bash
 # Keep a headless chromium alive for the local CDP browser.
 #
+# NAMED browser-supervise.sh ON PURPOSE — do not rename it back to
+# chromium-supervise.sh. Linux truncates a process's comm to 15 characters, so
+# that name becomes "chromium-superv", which CONTAINS "chromium" and is
+# therefore matched by `pkill chromium` / `pgrep chromium`. Anyone debugging in
+# this container who types the obvious thing kills this supervisor along with
+# the browser, and chromium then stays dead while the container reports healthy
+# — the exact silent death the `while true` loop below exists to prevent,
+# reachable by one plausible keystroke. "browser-supervi" does not match.
+# (Use `pkill -x chromium` to kill only the browser.)
+#
 # NOT part of the CMD's `wait -n` set. The mcp daemon is both always-running and
 # load-bearing, so the container should die with it. Chromium is neither —
 # browsers crash under load routinely, and taking the user's dev server down
@@ -46,7 +56,7 @@ while true; do
   # increment below and you get the status of the assignment, which is always 0
   # — a diagnostic that reports a clean exit for every crash.
   n=$((n + 1))
-  echo "[chromium-supervise] exited rc=$rc, restart #$n" >&2
+  echo "[browser-supervise] exited rc=$rc, restart #$n" >&2
 
   # Capped backoff, so a permanently broken chromium is loud and cheap rather
   # than a hot loop that spins once a second forever behind a healthy-looking
