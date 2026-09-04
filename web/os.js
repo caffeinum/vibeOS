@@ -3311,7 +3311,11 @@ function BrowserApp(body) {
     // The sandbox already blocks scripts; removing them as well keeps the
     // rendered DOM honest and stops noisy console errors.
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<\s*(iframe|object|embed|form)\b/gi, '<disabled-$1')
+    // Forms stay forms: a GET form is a link with fields, and the load handler
+    // below turns its submit into a navigation through the proxy. It used to
+    // be renamed away with iframe/object/embed, so Google's search box drew a
+    // button that did nothing.
+    .replace(/<\s*(iframe|object|embed)\b/gi, '<disabled-$1')
     .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
 
   // What you typed is a URL if it looks like a host; anything else is a search.
@@ -3395,6 +3399,46 @@ function BrowserApp(body) {
       if (!/^https?:/i.test(href)) return;   // mailto:, tel:, in-page anchors
       e.preventDefault();
       open(href);
+    });
+    // GET forms navigate through the proxy like a link with fields. The frame
+    // has no allow-forms on purpose — with it, a native submission would
+    // navigate the frame to the real site — and without it no submit event
+    // ever fires. So the submit is caught one step earlier: a click on the
+    // form's submit button, or Enter in one of its fields. POST is refused out
+    // loud: the proxy forwards no bodies, and posting logins or uploads
+    // through our relay to arbitrary sites is a different posture.
+    const submitForm = (form, submitter) => {
+      const method = (form.getAttribute('method') || 'get').toLowerCase();
+      if (method !== 'get') {
+        status.innerHTML = '<span class="no"></span>';
+        status.querySelector('.no').textContent = 'this form posts (method=' + method + '); a scripts-off browser cannot submit it through the proxy';
+        return;
+      }
+      let action;
+      try { action = new URL(form.getAttribute('action') || '', doc.baseURI); } catch { return; }
+      const params = new URLSearchParams();
+      for (const [k, v] of new FormData(form)) if (typeof v === 'string') params.append(k, v);
+      if (submitter && submitter.name) params.append(submitter.name, submitter.value || '');
+      action.search = params.toString();
+      open(action.href);
+    };
+    doc.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest && e.target.closest('button, input[type="submit"], input[type="image"]');
+      if (!btn) return;
+      const form = btn.form || btn.closest('form');
+      if (!form) return;
+      const type = (btn.getAttribute('type') || (btn.tagName === 'BUTTON' ? 'submit' : '')).toLowerCase();
+      if (type !== 'submit' && type !== 'image') return;
+      e.preventDefault();
+      submitForm(form, btn);
+    });
+    doc.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const field = e.target;
+      if (!field || !/^(INPUT)$/.test(field.tagName) || !field.form) return;
+      if (/^(checkbox|radio|button|submit|file)$/i.test(field.type || '')) return;
+      e.preventDefault();
+      submitForm(field.form, field.form.querySelector('button[type="submit"], input[type="submit"], button:not([type])'));
     });
   });
 
