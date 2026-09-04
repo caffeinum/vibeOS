@@ -148,11 +148,269 @@ async function storedOS() {
   try {
     const sys = await root.getDirectoryHandle('system');
     const js = await (await (await sys.getFileHandle('os.js')).getFile()).text();
-    let css = '';
+    let css = null;
     try { css = await (await (await sys.getFileHandle('os.css')).getFile()).text(); } catch {}
-    return js.trim() ? { js, css } : null;
+    return js.trim() ? { root, sys, js, css } : null;
   } catch { return null; }
 }
+
+/* ---------- fork versioning -----------------------------------------------
+
+   A fork pins the OS to the day it was made: once system/os.js exists, the
+   served os.js is never looked at again, and updates stop reaching that
+   browser without anyone being told. So the served copy carries a version,
+   the fork records the version it came from, and a boot of the fork compares
+   the two.
+
+   The version is a hash of the served text, computed here at boot, not a
+   number written by a build step: there is no build step, and a version file
+   next to os.js would be one hand-edit, mirror sync or half-deployed CDN away
+   from describing a file it no longer matches. A hash of the bytes the loader
+   just fetched cannot go stale. FNV-1a over the string, because it is three
+   lines, synchronous, and works on plain http:// where crypto.subtle does not.
+   Same function, same text, on both sides: os.js calls this one to write the
+   record, so the two can only disagree when the file did.
+   -------------------------------------------------------------------- */
+
+function versionId(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+const FORK_DISMISSED = 'vibeos-fork-dismissed';
+const OS_FILES = ['os.js', 'os.css'];
+
+// no-cache is a conditional GET, not a bypass: a version probe must see what
+// the server has now, and a heuristically cached os.js would say "unchanged"
+// for as long as the browser felt like it.
+async function fetchServed(name) {
+  const r = await fetch(BASE + name, { cache: 'no-cache' });
+  if (!r.ok) throw new Error('could not fetch the served ' + name + ' (' + r.status + ')');
+  return r.text();
+}
+
+// The record is { "os.js": { base, at }, "os.css": { base, at } }, one entry
+// per forked file, written by Workspace.writePath on the first write of each.
+// Anything else is reported, not skipped: a record that cannot be read is the
+// one case where "no news" would be wrong news.
+function parseVersionRecord(text, files) {
+  let rec;
+  try { rec = JSON.parse(text); } catch (e) { throw new Error('system/os.version.json is not JSON: ' + e.message); }
+  if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error('system/os.version.json is not an object');
+  for (const f of files) {
+    const e = rec[f];
+    if (!e || typeof e !== 'object' || !/^[0-9a-f]{8}$/.test(String(e.base)))
+      throw new Error('system/os.version.json has no base version for ' + f);
+  }
+  return rec;
+}
+
+async function forkCheck(stored) {
+  const files = stored.css === null ? ['os.js'] : OS_FILES;
+  const servedText = {}, served = {};
+  for (const f of files) { servedText[f] = await fetchServed(f); served[f] = versionId(servedText[f]); }
+  const id = files.map(f => f + '=' + served[f]).join(' ');
+  const fork = { files, served, id, base: null, at: null, moved: false, error: '', dismissed: false,
+                 stored, storedText: { 'os.js': stored.js, 'os.css': stored.css }, servedText };
+  let text = null;
+  try { text = await (await (await stored.sys.getFileHandle('os.version.json')).getFile()).text(); }
+  catch { fork.error = 'system/os.version.json is missing: this copy was forked before versions were recorded, or copied in by hand'; }
+  if (text !== null) {
+    try {
+      const rec = parseVersionRecord(text, files);
+      fork.base = Object.fromEntries(files.map(f => [f, rec[f].base]));
+      fork.at = Object.fromEntries(files.map(f => [f, rec[f].at || null]));
+      fork.moved = files.some(f => rec[f].base !== served[f]);
+    } catch (e) { fork.error = e.message; }
+  }
+  try { fork.dismissed = localStorage.getItem(FORK_DISMISSED) === id; } catch {}
+  return fork;
+}
+
+// Styled like recoveryBar, and for the same reason: it reports on the thing
+// that owns the theme.
+function forkBar(fork) {
+  if (document.getElementById('forkBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'forkBar';
+  bar.style.cssText = 'position:fixed;inset:0 0 auto 0;z-index:99998;background:#78350f;color:#fff;' +
+    'font:13px system-ui,-apple-system,sans-serif;padding:9px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+  const btn = 'flex:0 0 auto;border:0;border-radius:6px;padding:5px 10px;cursor:pointer;font-weight:600;';
+  bar.innerHTML =
+    '<span style="flex:1;min-width:200px"><b></b> <span class="d" style="opacity:.8"></span></span>' +
+    '<button class="keep" style="' + btn + 'background:transparent;color:#fff;border:1px solid rgba(255,255,255,.5)">Keep mine</button>' +
+    '<button class="take" style="' + btn + 'background:#fff;color:#78350f">Take the update</button>' +
+    '<button class="diff" style="' + btn + 'background:transparent;color:#fff;border:1px solid rgba(255,255,255,.5)">Show diff</button>';
+  bar.querySelector('b').textContent = fork.error
+    ? 'vibeOS could not read the version record of your copy.'
+    : 'vibeOS updated since your copy was forked.';
+  const movedFiles = fork.base ? fork.files.filter(f => fork.base[f] !== fork.served[f]) : [];
+  bar.querySelector('.d').textContent = (fork.error
+    ? fork.error + '. The served vibeOS is ' + fork.served['os.js'] + '.'
+    : movedFiles.map(f => 'Your system/' + f + ' came from ' + fork.base[f] + (fork.at[f] ? ' on ' + fork.at[f].slice(0, 10) : '') +
+      '; the served one is now ' + fork.served[f] + '.').join(' ')).slice(0, 260);
+  bar.querySelector('.keep').onclick = () => window.__vibeosFork.keep();
+  bar.querySelector('.take').onclick = () => window.__vibeosFork.take().catch(e => recoveryBar('Could not take the update.', e.message));
+  bar.querySelector('.diff').onclick = () => window.__vibeosFork.diff();
+  (document.body || document.documentElement).appendChild(bar);
+}
+
+/* Myers' O(ND) line diff. D is capped: a fork and a served file that have
+   drifted apart by more than DIFF_MAX_EDITS lines get counts and no hunks,
+   and the window says so, rather than a diff nobody can read or a tab that
+   hangs while it is computed. The trace keeps one row per edit, so the cap
+   also bounds memory: 2000 edits keeps ~2001 rows of Int32Array(4003) — ~32 MB. */
+const DIFF_MAX_EDITS = 2000;
+function lineDiff(a, b) {
+  const n = a.length, m = b.length, max = Math.min(DIFF_MAX_EDITS, n + m), off = max + 1;
+  const v = new Int32Array(2 * max + 3);
+  const trace = [];
+  let found = -1;
+  for (let d = 0; d <= max && found < 0; d++) {
+    trace.push(v.slice());
+    for (let k = -d; k <= d; k += 2) {
+      let x = (k === -d || (k !== d && v[off + k - 1] < v[off + k + 1])) ? v[off + k + 1] : v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) { x++; y++; }
+      v[off + k] = x;
+      if (x >= n && y >= m) { found = d; break; }
+    }
+  }
+  if (found < 0) return null;
+  const ops = [];
+  let x = n, y = m;
+  for (let d = found; d >= 0; d--) {
+    const t = trace[d], k = x - y;
+    const prevK = (k === -d || (k !== d && t[off + k - 1] < t[off + k + 1])) ? k + 1 : k - 1;
+    const prevX = t[off + prevK], prevY = prevX - prevK;
+    while (x > prevX && y > prevY) { ops.push([' ', a[x - 1], x, y]); x--; y--; }
+    if (d > 0) { if (x === prevX) { ops.push(['+', b[y - 1], x, y]); y--; } else { ops.push(['-', a[x - 1], x, y]); x--; } }
+  }
+  return ops.reverse();
+}
+
+// Which top-level function or const a served line sits in, so a hunk has a
+// name and not only a line number: "BrowserApp changed" is what the reader
+// wants to know. Nested functions are not tracked; the nearest top-level wins.
+function regionName(lines, idx) {
+  for (let i = Math.min(idx, lines.length - 1); i >= 0; i--) {
+    const m = /^(?:async\s+)?function\s+(\w+)|^(?:const|let|var)\s+(\w+)\s*=/.exec(lines[i]);
+    if (m) return m[1] || m[2];
+  }
+  return '(top)';
+}
+
+const DIFF_MAX_LINES = 400;
+function renderDiff(fork, file) {
+  const mine = fork.storedText[file].split('\n'), theirs = fork.servedText[file].split('\n');
+  const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const ops = lineDiff(mine, theirs);
+  if (!ops) return `<p><b>${file}</b>: your copy (${mine.length} lines) and the served one (${theirs.length} lines) differ by more than ${DIFF_MAX_EDITS} lines, which is past what this diff will draw. Ask the agent to compare them, or take the update and re-apply your edits from the .bak.</p>`;
+  const added = ops.filter(o => o[0] === '+').length, removed = ops.filter(o => o[0] === '-').length;
+  if (!added && !removed) return `<p><b>${file}</b>: identical to the served copy.</p>`;
+  const hunks = [];
+  let cur = null;
+  ops.forEach((o, i) => {
+    if (o[0] === ' ') {
+      if (cur && i - cur.last <= 2) cur.lines.push(o);
+      else if (cur) { hunks.push(cur); cur = null; }
+      return;
+    }
+    if (!cur) {
+      cur = { last: i, lines: ops.slice(Math.max(0, i - 2), i), name: regionName(theirs, o[3] - 1), at: o[3] };
+    }
+    cur.lines.push(o); cur.last = i;
+  });
+  if (cur) hunks.push(cur);
+  let html = `<p><b>${file}</b>: the served copy against yours, line by line. <span style="color:#3fb950">+${added}</span> only in the served copy (the update); <span style="color:#f85149">−${removed}</span> only in yours (your edits, or lines the update removed). ${hunks.length} region${hunks.length === 1 ? '' : 's'}.</p>`;
+  let shown = 0, cut = false;
+  for (const h of hunks) {
+    html += `<div style="opacity:.7;margin:10px 0 2px">@@ served line ${h.at} · in ${esc(h.name)}</div>`;
+    for (const o of h.lines) {
+      if (shown++ >= DIFF_MAX_LINES) { cut = true; break; }
+      const col = o[0] === '+' ? '#3fb950' : o[0] === '-' ? '#f85149' : 'inherit';
+      html += `<div style="color:${col};white-space:pre-wrap">${o[0]} ${esc(o[1])}</div>`;
+    }
+    if (cut) break;
+  }
+  if (cut) html += `<p>… stopped after ${DIFF_MAX_LINES} lines; ${hunks.length} regions differ in total.</p>`;
+  return html;
+}
+
+// The three answers to "vibeOS moved since you forked". Settings > Design
+// offers the same three, through these, so there is one implementation.
+window.__vibeosFork = {
+  keep() {
+    const fork = window.__vibeosBoot.fork;
+    if (!fork) throw new Error('nothing to keep: this boot ran the served OS');
+    try { localStorage.setItem(FORK_DISMISSED, fork.id); } catch {}
+    fork.dismissed = true;
+    const bar = document.getElementById('forkBar'); if (bar) bar.remove();
+  },
+  // Not a delete: the fork moves to os.js.bak (with a line saying when and
+  // from what), the record goes, and the served copy boots on reload. The
+  // agent can still read the .bak and re-apply what mattered.
+  async take() {
+    const b = window.__vibeosBoot;
+    const fork = b.fork;
+    // The stored handles are stashed at boot, so this works even when the
+    // version check could not run (served os.js unreachable): Settings
+    // promised it would, and a promise that throws is the worse outcome.
+    const stored = (fork && fork.stored) || b.stored;
+    if (!stored || !stored.root) throw new Error('nothing to take: this boot ran the served OS');
+    const root = stored.root;
+    const sys = stored.sys || await root.getDirectoryHandle('system');
+    if (root.requestPermission && (await root.requestPermission({ mode: 'readwrite' })) !== 'granted')
+      throw new Error('write access to the workspace was refused');
+    const when = new Date().toISOString();
+    const files = fork ? fork.files : (await Promise.all(['os.js', 'os.css'].map(async f => {
+      try { await sys.getFileHandle(f); return f; } catch { return null; }
+    }))).filter(Boolean);
+    if (!files.length) throw new Error('nothing to take: no system/os.js or os.css in the workspace');
+    for (const f of files) {
+      const base = fork && fork.base ? fork.base[f] : 'unknown';
+      const servedV = fork && fork.served ? fork.served[f] : 'unknown';
+      const text = fork && fork.storedText ? fork.storedText[f] : await (await (await sys.getFileHandle(f)).getFile()).text();
+      const note = `vibeOS: your fork of ${f}, set aside by "Take the update" at ${when}. Forked from version ${base}; the served version was ${servedV} when this was written.`;
+      const bak = (f.endsWith('.css') ? `/* ${note} */` : `// ${note}`) + '\n' + text;
+      // A second Take must not overwrite the first fork's .bak: suffix instead.
+      let name = f + '.bak';
+      try { await sys.getFileHandle(name); name = `${f}.${when.replace(/[:.]/g, '-')}.bak`; } catch {}
+      const fh = await sys.getFileHandle(name, { create: true });
+      const w = await fh.createWritable(); await w.write(bak); await w.close();
+      await sys.removeEntry(f);
+    }
+    try { await sys.removeEntry('os.version.json'); } catch {}
+    try { localStorage.removeItem(FORK_DISMISSED); } catch {}
+    // This reload is intentional and the boot it interrupts was healthy: clear
+    // the boot-pending flag, or the served boot that follows counts as a
+    // recovery and drops the saved theme with a red bar.
+    bootFinished();
+    window.__vibeosIntentionalUnload = true;
+    location.reload();
+  },
+  // The OS's own window when the OS is up, a plain panel when it is not: the
+  // diff must still be reachable when the fork is what broke openWindow.
+  diff() {
+    const fork = window.__vibeosBoot.fork;
+    if (!fork) throw new Error('nothing to diff: this boot ran the served OS');
+    const body = document.createElement('div');
+    body.id = 'forkDiff';
+    body.style.cssText = 'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px;overflow:auto;height:100%;box-sizing:border-box';
+    body.innerHTML = fork.files.map(f => renderDiff(fork, f)).join('<hr style="border:0;border-top:1px solid rgba(128,128,128,.3)">');
+    if (typeof openWindow === 'function') {
+      openWindow({ title: 'vibeOS update — served vs your copy', w: 760, h: 480, render: b => { b.style.padding = '0'; b.appendChild(body); } });
+      return;
+    }
+    const panel = document.createElement('div');
+    panel.style.cssText = 'position:fixed;left:40px;top:60px;width:min(760px,calc(100% - 80px));height:min(480px,calc(100% - 120px));z-index:99997;background:#fff;color:#111;border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.4)';
+    panel.innerHTML = '<button style="position:absolute;right:8px;top:6px;border:0;background:transparent;font-size:16px;cursor:pointer">&times;</button>';
+    panel.querySelector('button').onclick = () => panel.remove();
+    panel.appendChild(body);
+    (document.body || document.documentElement).appendChild(panel);
+  },
+};
 
 (async () => {
   const b = window.__vibeosBoot;
@@ -165,13 +423,26 @@ async function storedOS() {
     b.source = 'stored';
     link.remove();
     const st = document.createElement('style'); st.id = 'osStyle';
-    st.textContent = stored.css || await (await fetch(BASE + 'os.css')).text();
+    st.textContent = stored.css === null ? await fetchServed('os.css') : stored.css;
     document.head.appendChild(st);
     const s = document.createElement('script');
     s.src = URL.createObjectURL(new Blob([stored.js], { type: 'text/javascript' }));
     s.onerror = () => recoveryBar('Your edited OS failed to load.', 'Reloading will boot the stock one.');
     document.body.appendChild(s);
+    // The check runs after the fork is booting, never in its way: a served
+    // copy that cannot be fetched is reported and the fork runs regardless.
+    // b.fork is undefined until the check has an answer, null if it has none.
+    b.stored = stored;   // take() needs the handles even if the check below fails
+    try {
+      const fork = await forkCheck(stored);
+      b.fork = fork;
+      if ((fork.moved || fork.error) && !fork.dismissed) forkBar(fork);
+    } catch (e) {
+      b.fork = null;
+      recoveryBar('vibeOS could not check whether your copy is current.', e.message);
+    }
   } else {
+    b.fork = null;
     link.href = BASE + 'os.css';
     const s = document.createElement('script');
     s.src = BASE + 'os.js';

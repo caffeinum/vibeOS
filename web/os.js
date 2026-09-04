@@ -6,6 +6,8 @@
  * write_file over the workspace and reload_os to apply, so "add a button to the
  * Browser" is an edit to this file, not a request for a feature. A copy that
  * fails to boot is skipped on the next load and the served one runs instead.
+ * A copy also pins the OS to the served version it was forked from — recorded
+ * in system/os.version.json — and the loader says so when vibeos.sh moves on.
  */
 /* =========================================================================
    vibeOS Web — capability-provider prototype
@@ -211,88 +213,85 @@ const Workspace = {
   },
 
   // Path-addressed access for the agent's file tools. Reads of the OS source
-
   // fall back to the served copy, so the very first edit_file has the real
-
   // file to edit and writing it is what forks the OS into this workspace.
-
   async dirFromPath(path, create) {
-
     const parts = String(path).replace(/^\/+/, '').split('/').filter(Boolean);
-
     if (!parts.length || parts.some(x => x === '..')) throw new Error('bad path: ' + path);
-
     let dir = this.root;
-
     for (const seg of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(seg, { create });
-
     return { dir, name: parts[parts.length - 1] };
-
   },
-
+  osFile(path) {
+    const m = /^system\/(os\.js|os\.css)$/.exec(String(path).replace(/^\/+/, ''));
+    return m ? m[1] : null;
+  },
   async readPath(path) {
-
     if (!this.open) throw new Error('no workspace is open');
-
     try {
-
       const { dir, name } = await this.dirFromPath(path, false);
-
       return (await (await dir.getFileHandle(name)).getFile()).text();
-
     } catch (e) {
-
-      const m = /^system\/(os\.js|os\.css)$/.exec(String(path).replace(/^\/+/, ''));
-
-      if (!m) throw new Error('not found: ' + path);
-
-      const r = await fetch(BASE + m[1]);
-
-      if (!r.ok) throw new Error('could not fetch the served ' + m[1]);
-
-      return r.text();
-
+      const file = this.osFile(path);
+      if (!file) throw new Error('not found: ' + path);
+      return (await this.fetchServed(file)).text;
     }
-
   },
-
+  // The served text is in hand here, so this is where its version is taken:
+  // the loader hashes the same bytes with the same function (versionId lives
+  // in index.html), and a fork records the value so a later boot can tell
+  // whether vibeos.sh has moved on since.
+  async fetchServed(file) {
+    // Same policy as the loader's probe: a conditional GET, or a host with no
+    // Cache-Control hands back a heuristically cached os.js and the fork is
+    // pinned to a version the server stopped serving minutes ago.
+    const r = await fetch(BASE + file, { cache: 'no-cache' });
+    if (!r.ok) throw new Error('could not fetch the served ' + file + ' (' + r.status + ')');
+    const text = await r.text();
+    if (typeof versionId !== 'function') throw new Error('versionId is missing: os.js must boot from the vibeOS loader');
+    return { text, version: versionId(text) };
+  },
   async writePath(path, text) {
-
     if (!this.open) throw new Error('no workspace is open');
-
     const { dir, name } = await this.dirFromPath(path, true);
-
+    const file = this.osFile(path);
+    let forking = false;
+    if (file) { try { await dir.getFileHandle(name); } catch { forking = true; } }
+    if (forking) await this.recordFork(file);
     const fh = await dir.getFileHandle(name, { create: true });
-
     const w = await fh.createWritable(); await w.write(text); await w.close();
-
   },
-
+  // First write of system/os.js or os.css: pin the version it came from in
+  // system/os.version.json, one entry per file since the two fork on
+  // different days. Written before the fork itself, so a fork with no record
+  // cannot come out of this path — the loader reports one as an error, and
+  // the only honest way to get there is a copy made by hand.
+  async recordFork(file) {
+    const { version } = await this.fetchServed(file);
+    const sys = await this.systemDir();
+    let rec = {};
+    let existing = null;
+    try { existing = await (await (await sys.getFileHandle('os.version.json')).getFile()).text(); } catch {}
+    if (existing !== null) {
+      try { rec = JSON.parse(existing); } catch (e) { throw new Error('system/os.version.json is not JSON (' + e.message + '); write it back as valid JSON before forking ' + file); }
+      if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error('system/os.version.json is not an object; write it back as {} before forking ' + file);
+    }
+    rec[file] = { base: version, at: new Date().toISOString() };
+    await this.writeSystem('os.version.json', JSON.stringify(rec, null, 2) + '\n');
+  },
 
   // system/ holds the shell's own overrides. It is deliberately outside the
-
   // apps/data mapping below: overlay.js is a patch to the desktop, and
-
   // routing it by extension would have listed it in the dock as an app.
-
   async systemDir() { return this.root.getDirectoryHandle('system', { create: true }); },
-
   async readSystem(name) {
-
     const fh = await (await this.systemDir()).getFileHandle(name);
-
     return (await fh.getFile()).text();
-
   },
-
   async writeSystem(name, text) {
-
     const fh = await (await this.systemDir()).getFileHandle(name, { create: true });
-
     const w = await fh.createWritable(); await w.write(text); await w.close();
-
   },
-
 
   // Generated code lives in apps/, everything else in data/. The VM's 9p mount
   // is flat, so map by extension rather than inventing a second tree inside it.
@@ -3237,6 +3236,7 @@ function DesignAppRender(body, rerender) {
     <p class="tiny dimmer" style="margin-top:0">${window.__vibeosBoot && window.__vibeosBoot.source === 'stored'
       ? 'This desktop is running <b>your</b> copy: system/os.js in the workspace. The agent edits it with edit_file; delete it to go back to stock.'
       : 'Running the served desktop. The agent\'s first edit_file on system/os.js forks it into your workspace, and yours boots from then on.'}</p>
+    ${forkVersionHtml()}
     <p class="note">The agent can change this itself &mdash; ask it for light mode. Apps mount inside this document, so the tokens above are inherited &mdash;
     a generated app using <code>var(--text)</code> follows the desktop instead of drifting from it.</p>`;
 
@@ -3245,6 +3245,46 @@ function DesignAppRender(body, rerender) {
   });
   const clear = body.querySelector('#themeReset');
   if (clear) clear.onclick = () => { Theme.set(Theme.id, {}); rerender(); };
+  const fv = body.querySelector('#forkVersion');
+  if (fv) {
+    fv.querySelector('.d').textContent = forkVersionText();
+    const keep = fv.querySelector('#forkKeep'), take = fv.querySelector('#forkTake'), diff = fv.querySelector('#forkDiffBtn');
+    if (keep) keep.onclick = () => { window.__vibeosFork.keep(); rerender(); };
+    if (take) take.onclick = () => window.__vibeosFork.take().catch(e => recoveryBar('Could not take the update.', e.message));
+    if (diff) diff.onclick = () => window.__vibeosFork.diff();
+  }
+}
+
+// A fork pins the OS to a version. The loader (index.html) compares the
+// version the fork was taken from with the one vibeos.sh serves now, and
+// this is where that answer lives in the UI, with the same three actions as
+// the loader's bar. Text goes in through textContent: the record and its
+// parse errors are guest strings, and a JSON.parse message quotes the file.
+function forkVersionHtml() {
+  const b = window.__vibeosBoot;
+  if (!b || b.source !== 'stored') return '';
+  const fork = b.fork;
+  const moved = !fork || !!fork.moved || !!fork.error;
+  return `<p class="tiny dimmer" id="forkVersion" style="margin-top:0"><span class="d"></span></p>
+    <div class="row" style="gap:6px;margin:0 0 12px">
+      ${moved && fork && !fork.dismissed ? '<button class="btn sm" id="forkKeep">Keep mine</button>' : ''}
+      <button class="btn sm${moved ? ' p' : ''}" id="forkTake">Take the update</button>
+      <button class="btn sm" id="forkDiffBtn">Show diff</button>
+    </div>`;
+}
+
+function forkVersionText() {
+  const fork = window.__vibeosBoot.fork;
+  if (fork === undefined) return 'Still checking whether the served vibeOS has moved on since this copy was forked…';
+  if (fork === null) return (window.__vibeosBoot.stored
+    ? 'The version check could not run this boot (the served os.js was unreachable), so whether the served vibeOS has moved on is unknown. "Take the update" still sets your copy aside and boots the served one.'
+    : 'Running the served desktop; nothing is forked.');
+  if (fork.error) return 'Its version record could not be read: ' + fork.error + '. The served vibeOS is ' + fork.served['os.js'] + ' now; which version this copy came from is unknown.';
+  const from = fork.files.map(f => f + ' from version ' + fork.base[f] + (fork.at[f] ? ' (' + fork.at[f].slice(0, 10) + ')' : '')).join(', ');
+  if (!fork.moved) return 'Forked: ' + from + '. That is still what vibeos.sh serves, so this copy is up to date with it.';
+  const now = fork.files.filter(f => fork.base[f] !== fork.served[f]).map(f => f + ' is ' + fork.served[f]).join(', ');
+  return 'Forked: ' + from + '. vibeOS has moved since: ' + now + ' now' + (fork.dismissed ? ' (you chose to keep yours for this version)' : '') +
+    '. Keep mine hides the notice until the next served change; Take the update sets your copy aside as system/os.js.bak and boots the served one; Show diff lists what changed between them.';
 }
 
 function ModelApp(body) {
