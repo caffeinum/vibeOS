@@ -3302,8 +3302,14 @@ function BrowserApp(body) {
             bits[0] = one(bits[0]);
             return bits.join(' ');
           }).join(', ') + '"')
-        // Same problem inside inline styles: url(...) references.
-        .replace(/url\((['"]?)([^'")]+)\1\)/gi, (m, q, val) => `url(${q}${one(val)}${q})`);
+        // Same problem inside inline styles: url(...) references. Fonts are the
+        // one asset the frame cannot load cross-origin (CORS-checked), so
+        // they go through the proxy — every proxied page with an icon font
+        // spat six CORS errors into the console for nothing.
+        .replace(/url\((['"]?)([^'")]+)\1\)/gi, (m, q, val) => {
+          const abs = one(val);
+          return /\.(woff2?|ttf|otf|eot)(\?|#|$)/i.test(abs) ? `url(${q}${PROXY}${encodeURIComponent(abs)}${q})` : `url(${q}${abs}${q})`;
+        });
     } catch { return html; }
   };
 
@@ -3783,7 +3789,12 @@ window.addEventListener('beforeunload', (e) => {
   VM.on(async s => {
     if (s !== 'ready') return;
     GuestBridge.start();
-    await GuestBridge.install();   // the CLI lives in the VM's RAM, so re-add it each boot
+    // The CLI lives in the VM's RAM, so it is re-added each boot. A slow guest
+    // can time this out; that is a missing convenience, not a broken desktop,
+    // and it must not surface as the red "vibeOS hit an error" bar — which is
+    // exactly what an unhandled rejection from this listener did.
+    try { await GuestBridge.install(); }
+    catch (e) { console.warn('guest CLI not installed this boot:', e.message); }
     // A fresh machine has none of the user's files. Sync once now rather than
     // waiting up to a minute for the timer — until this runs, the workspace
     // exists on disk but not in the VM the agent is about to run commands in.
