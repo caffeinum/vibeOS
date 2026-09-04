@@ -2193,9 +2193,225 @@ const IMAGES = {
 const NET_DEFAULT = 'wisps://vibeos.sh/api/wisp';
 const NET_OURS = 'wisps://wisp.mercurywork.shop/';
 
+// One socket, as far as v86 is concerned, over as many real ones as it takes.
+//
+// The relay is a Vercel function with maxDuration 800, so every ~13 minutes the
+// WebSocket closes under a guest that is still using it. v86's WISP adapter
+// does redial — libv86.js register_ws: onclose → setTimeout(register_ws, 10 s)
+// — but measured with the socket closed by hand: a wget started inside those
+// 10 s timed out, and nothing told the desktop the network was back, so the
+// pill said "network dropped" and the pane offered a restart for a network
+// that had been working again for minutes. This redials in 0.5 s instead, in
+// place: v86 keeps the object it constructed, the native socket is swapped
+// underneath it, and 'close' reaches v86 only once redialing has failed for
+// good (five tries, 0.5/1/2/2/2 s apart).
+//
+// WISP semantics after a redial: the relay's stream table lived in the
+// function invocation that just ended, so every guest TCP connection that was
+// open at the drop is gone on the server side. Frames from CONNECT to CLOSE
+// are watched here to know their ids, and once the new socket is open v86 is
+// handed a CLOSE (reason 0x03, network error) for each of them, so the guest
+// sees those connections fail now rather than after a TCP timeout. Frames v86
+// sent during the gap are held and replayed on the new socket, minus the dead
+// streams', so a connection the guest opened while this was dialing goes
+// through. Open connections are dropped; new ones work. The Network pane says
+// exactly that.
+class RelaySocket {
+  static delays = [500, 1000, 2000, 2000, 2000];
+
+  // `probe` is for the sockets v86 itself constructs every 10 s after this has
+  // given up: one dial, no backoff, so a relay that is down costs one failed
+  // connection per 10 s rather than five, and a relay that comes back is found.
+  // A probe that opens is the relay socket from then on, with the full
+  // backoff: measured before, it kept delays = [] for its whole life, so the
+  // next ~800 s expiry got no in-place redial at all and the pane said five
+  // redials had failed when none had been tried.
+  constructor(url, Native, { onLink, probe = false }) {
+    this.url = url;
+    this.Native = Native;
+    this.onLink = onLink;
+    this.probe = probe;
+    this.delays = probe ? [] : RelaySocket.delays;
+    this.__inner = null;            // the native socket of the moment; a test hook, and named so
+    this.handlers = { open: new Set(), message: new Set(), close: new Set(), error: new Set() };
+    this.onopen = null; this.onmessage = null; this.onclose = null; this.onerror = null;
+    this._binaryType = 'blob';
+    this.opened = false;            // v86 has seen 'open'; from here on it is told about no close but the last
+    this.ended = false;             // closed by v86, or given up: nothing dials again
+    this.attempt = 0;
+    this.redials = 0;
+    this.timer = null;
+    this.lastError = null;
+    this.streams = new Set();       // WISP stream ids with a CONNECT sent and no CLOSE either way
+    this.dropped = new Set();       // the streams open when the current gap began
+    this.held = [];                 // frames v86 sent during the gap
+    // A probe says nothing until it knows: 'connecting' every 10 s would turn
+    // a dead relay into a pill that flickers.
+    if (!probe) this.onLink('connecting');
+    this.dial();
+  }
+
+  dial() {
+    const inner = new this.Native(this.url);
+    inner.binaryType = this._binaryType;
+    this.__inner = inner;
+    inner.addEventListener('open', e => { if (inner === this.__inner) this.opened_(inner, e); });
+    inner.addEventListener('message', e => {
+      if (inner !== this.__inner) return;
+      this.watch(e.data, true);
+      this.dispatch('message', e);
+    });
+    inner.addEventListener('error', e => {
+      if (inner !== this.__inner) return;
+      if (this.ended) this.dispatch('error', e); else this.lastError = e;
+    });
+    inner.addEventListener('close', e => { if (inner === this.__inner) this.closed_(e); });
+  }
+
+  opened_(inner, e) {
+    this.attempt = 0;
+    this.lastError = null;
+    if (this.probe) { this.probe = false; this.delays = RelaySocket.delays; }
+    if (!this.opened) {
+      this.opened = true;
+      this.onLink('open');
+      this.dispatch('open', e);
+      return;
+    }
+    this.redials++;
+    // Fail the streams the relay forgot before anything else moves, then let
+    // through what the guest did while we were dialing.
+    const dropped = this.dropped; this.dropped = new Set();
+    for (const id of dropped) {
+      this.streams.delete(id);
+      this.dispatch('message', new MessageEvent('message', { data: RelaySocket.closeFrame(id, 3).buffer }));
+    }
+    const held = this.held; this.held = [];
+    for (const frame of held) {
+      if (!dropped.has(RelaySocket.streamId(frame))) inner.send(frame);
+    }
+    this.onLink('open');
+  }
+
+  closed_(e) {
+    if (this.ended) { this.dispatch('close', e); return; }
+    const delay = this.delays[this.attempt];
+    if (delay === undefined) {
+      this.ended = true;
+      // v86's onclose only schedules its own redial and keeps its connection
+      // table, so guest connections open at the drop would hang until a TCP
+      // timeout. We know their ids: fail them now, then say the link died.
+      for (const id of new Set([...this.dropped, ...this.streams])) {
+        this.dispatch('message', new MessageEvent('message', { data: RelaySocket.closeFrame(id, 3).buffer }));
+      }
+      this.dropped = new Set(); this.streams.clear();
+      this.onLink('dead');
+      if (this.lastError) this.dispatch('error', this.lastError);
+      this.dispatch('close', e);
+      return;
+    }
+    // A socket that has never opened is still connecting, not reconnecting:
+    // the desktop must not say the link was lost when there was none, nor
+    // that open connections were dropped.
+    if (this.attempt === 0 && this.opened) {
+      this.dropped = new Set(this.streams);
+      this.onLink('reconnecting');
+    }
+    this.attempt++;
+    this.timer = setTimeout(() => { this.timer = null; this.dial(); }, delay);
+  }
+
+  // Between real sockets v86 has been told nothing, so this answers what v86
+  // has been told: OPEN. Not for v86's sake — its wisps adapter never reads
+  // readyState (send_packet calls wispws.send whatever the state, and it
+  // redials from onclose alone) — but for whoever else asks, and it is
+  // send() below, not this, that holds frames across the gap.
+  get readyState() {
+    if (this.opened && !this.ended) return 1;
+    return this.__inner.readyState;
+  }
+  get bufferedAmount() {
+    return this.__inner.bufferedAmount + this.held.reduce((n, f) => n + f.byteLength, 0);
+  }
+  get binaryType() { return this._binaryType; }
+  set binaryType(v) { this._binaryType = v; this.__inner.binaryType = v; }
+  get protocol() { return this.__inner.protocol; }
+  get extensions() { return this.__inner.extensions; }
+
+  send(data) {
+    this.watch(data, false);
+    const gap = this.opened && !this.ended && this.__inner.readyState !== 1;
+    if (gap) this.held.push(data); else this.__inner.send(data);
+  }
+
+  close(code, reason) {
+    if (this.ended) return;
+    this.ended = true;
+    clearTimeout(this.timer);
+    this.held = [];
+    // A dial timer was pending: nothing is open, so there is nothing to close
+    // and no close event will come. Say so ourselves, as a real socket would.
+    if (this.__inner.readyState === 3) { this.dispatch('close', { code: code || 1000, reason: reason || '', wasClean: true }); return; }
+    this.__inner.close(code, reason);
+  }
+
+  addEventListener(type, fn) {
+    if (!this.handlers[type]) throw new Error('RelaySocket: no such event: ' + type);
+    this.handlers[type].add(fn);
+  }
+  removeEventListener(type, fn) {
+    if (!this.handlers[type]) throw new Error('RelaySocket: no such event: ' + type);
+    this.handlers[type].delete(fn);
+  }
+  dispatch(type, e) {
+    const h = this['on' + type];
+    if (typeof h === 'function') h.call(this, e);
+    this.handlers[type].forEach(fn => fn.call(this, e));
+  }
+
+  // The host a relay URL names, as the URL parser sees it — the only thing
+  // that decides whether a dial is the relay. v86 hands the string through
+  // verbatim but for the scheme (register_ws: replace 'wisps://' → 'wss://'),
+  // so 'wisps://VIBEOS.sh/api/wisp' is dialed as 'wss://VIBEOS.sh/…' while
+  // new URL() lowercases; a substring match on the lowercased host missed it
+  // and the guest got a native socket nobody watched. wisps: is not a special
+  // scheme, so its host would come back verbatim too: everything is parsed as
+  // https:. null for a string that is not a URL.
+  static host(url) {
+    try { return new URL(String(url).replace(/^(wisps?|wss?):/, 'https:')).host; } catch { return null; }
+  }
+
+  // WISP frames: byte 0 is the type, bytes 1-4 the stream id, little-endian.
+  // 1 CONNECT, 2 DATA, 3 CONTINUE, 4 CLOSE.
+  static streamId(frame) {
+    const u8 = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
+    return u8.length >= 5 ? new DataView(u8.buffer, u8.byteOffset, u8.byteLength).getUint32(1, true) : null;
+  }
+  static closeFrame(id, reason) {
+    const f = new Uint8Array(6);
+    const v = new DataView(f.buffer);
+    v.setUint8(0, 4); v.setUint32(1, id, true); v.setUint8(5, reason);
+    return f;
+  }
+  watch(frame, incoming) {
+    const u8 = frame instanceof Uint8Array ? frame : frame instanceof ArrayBuffer ? new Uint8Array(frame) : null;
+    if (!u8 || u8.length < 5) return;
+    const id = RelaySocket.streamId(u8);
+    if (u8[0] === 1 && !incoming) this.streams.add(id);
+    else if (u8[0] === 4) this.streams.delete(id);
+  }
+}
+
 const VM = {
   state: 'off',
-  net: '',                 // '' = no relay, 'connecting', an IP, or 'no lease'
+  net: '',                 // '' = no relay, 'connecting' (lease or relay dial pending), 'no lease', then the link: connected | reconnecting | disconnected | unwatched
+  ip: '',                  // the guest's lease, once it has one
+  leased: false,           // dhcp has answered, one way or the other; net follows the link from here
+  link: '',                // what the relay socket reports: connecting | open | reconnecting | dead
+  linkWasOpen: false,      // the relay has been open at least once this boot; 'reconnected' means something only then
+  netNote: '',             // shown next to the state once a redial has happened
+  relaySocket: null,       // the RelaySocket v86 holds; .__inner is the native socket of the moment
+  bootedRelay: '',         // the relay URL this boot gave v86; the setting can change under a running machine
   // Networking is on by default now. An absent setting means "use the default
   // relay"; the explicit string 'off' is how someone turns it off, so that is
   // distinguishable from never having chosen.
@@ -2236,37 +2452,87 @@ const VM = {
   },
 
   // v86 owns the relay WebSocket internally and exposes no event for it, so
-  // wrap the constructor while it connects. Without this a dropped relay is
-  // invisible: the guest simply stops reaching anything, with no signal at all.
+  // the constructor is wrapped: a dial to the relay's host gets a RelaySocket,
+  // which redials under v86 and reports the link here; everything else gets
+  // the native socket. Wrapped once per page — a restart used to reset the
+  // flag and wrap the wrapper — and the host is read per dial from the URL
+  // this boot gave v86, not the setting: that can be edited while the machine
+  // runs, and v86 dials what it was given. Hosts are compared parsed and
+  // equal, not by substring of the lowercased setting in the verbatim dial —
+  // 'wisps://VIBEOS.sh/api/wisp' got a native socket that way.
   watchRelay() {
-    if (!this.relay || window.__wsWrapped) return;
+    if (window.__wsWrapped) return;
     window.__wsWrapped = true;
     const Native = window.WebSocket;
     const self = this;
-    const host = (() => { try { return new URL(self.relay.replace(/^wisps?:/, 'https:')).host; } catch { return ''; } })();
     window.WebSocket = function (url, protocols) {
-      const ws = protocols === undefined ? new Native(url) : new Native(url, protocols);
-      if (host && String(url).includes(host)) {
-        self.relaySocket = ws;
-        ws.addEventListener('close', () => {
-          if (self.state !== 'ready') return;
-          self.net = 'disconnected';
-          self.emit();
-        });
+      const host = self.bootedRelay && RelaySocket.host(self.bootedRelay);
+      if (!host || RelaySocket.host(url) !== host || protocols !== undefined) {
+        return protocols === undefined ? new Native(url) : new Native(url, protocols);
       }
-      return ws;
+      self.relaySocket = new RelaySocket(String(url), Native, {
+        probe: self.link === 'dead',
+        onLink: link => self.setLink(link),
+      });
+      return self.relaySocket;
     };
     window.WebSocket.prototype = Native.prototype;
     Object.assign(window.WebSocket, Native);
   },
 
-  // The relay is gone and v86 cannot redial, so the machine has to come back.
-  // Apps survive because they are files on disk; VM state does not.
+  setLink(link) {
+    const was = this.link;
+    this.link = link;
+    // Only a link that was open has connections to drop: a first dial that
+    // failed and then opened is a connection, not a reconnection.
+    if (link === 'open' && this.linkWasOpen && (was === 'reconnecting' || was === 'dead')) {
+      this.netNote = 'reconnected; open connections were dropped';
+    }
+    if (link === 'open') this.linkWasOpen = true;
+    this.syncNet();
+  },
+
+  // net is what the pill and the Network pane show. Boot owns it until dhcp
+  // has answered; from then on it follows the link. The link comes first: a
+  // dead relay is 'disconnected' whether or not the guest holds a lease (v86
+  // answers DHCP itself, so a lease says nothing about the relay), and 'no
+  // lease' is only for a relay that is up with nothing to route to.
+  //
+  // No link at all means v86 dialed a socket the wrapper did not claim. That
+  // was a throw here, which landed in boot()'s try after set('ready') and
+  // flipped a running, networked machine to 'failed' — with the emulator still
+  // running and boot()'s guard ready to build a second one over it. It is a
+  // state now: the guest may well have the internet, and nothing here will
+  // notice when it loses it.
+  syncNet() {
+    if (this.state !== 'ready' || !this.leased) return;
+    const byLink = { connecting: 'connecting', reconnecting: 'reconnecting', dead: 'disconnected' };
+    if (byLink[this.link]) this.net = byLink[this.link];
+    else if (this.link === 'open') this.net = this.ip ? 'connected' : 'no lease';
+    else if (this.link === '') {
+      this.net = 'unwatched';
+      console.error(new Error('relay ' + JSON.stringify(this.bootedRelay) + ' is configured but v86 dialed no socket the wrapper claimed; the link cannot be watched'));
+    }
+    else throw new Error('unknown relay link state: ' + JSON.stringify(this.link));
+    this.emit();
+  },
+
+  // Five redials have failed, or the image is being switched: the machine has
+  // to come back. Apps survive because they are files on disk; VM state does
+  // not.
   async restart() {
+    // v86's network adapter arms a 10 s redial in onclose (register_ws) that
+    // destroy() never clears, and destroy() is async. Left alone, the dead
+    // emulator kept dialing through the wrapper and the desktop showed the
+    // zombie's link instead of the new guest's. Measured: two open relay
+    // sockets after a restart. The timer calls this.register_ws by name.
+    try { if (this.emu && this.emu.network_adapter) this.emu.network_adapter.register_ws = () => {}; } catch {}
     try { this.emu && this.emu.stop(); } catch {}
     try { this.emu && this.emu.destroy && this.emu.destroy(); } catch {}
-    this.emu = null; this.screen = null; this.serial = ''; this.net = '';
-    window.__v86loaded = null; window.__wsWrapped = false;
+    this.emu = null; this.screen = null; this.serial = '';
+    this.net = ''; this.ip = ''; this.leased = false; this.link = ''; this.linkWasOpen = false; this.netNote = '';
+    this.relaySocket = null; this.bootedRelay = '';
+    window.__v86loaded = null;
     this.set('off');
     await this.boot();
   },
@@ -2288,6 +2554,7 @@ const VM = {
 
       const image = IMAGES[this.image];
       this.bootedImage = this.image;
+      this.bootedRelay = this.relay;
       // v86 retries a missing disk forever; check the CDN once so a bad URL or
       // a blocked network fails in a second with a reason, not in six minutes.
       if (image.preflight) {
@@ -2301,7 +2568,7 @@ const VM = {
         bios:     { url: V86_ASSETS + 'seabios.bin' },
         vga_bios: { url: V86_ASSETS + 'vgabios.bin' },
         ...image.config(),
-        ...(this.relay ? { net_device: { type: 'ne2k', relay_url: this.relay } } : {}),
+        ...(this.bootedRelay ? { net_device: { type: 'ne2k', relay_url: this.bootedRelay } } : {}),
         filesystem: {},        // the 9p mount at /mnt — the file bridge
         screen_container: this.screen,
         autostart: true,
@@ -2331,15 +2598,16 @@ const VM = {
 
       // The image brings the NIC up but does not ask for a lease, so a
       // configured relay would look broken until someone ran udhcpc by hand.
-      if (this.relay) {
-        this.set('ready');
+      if (this.bootedRelay) {
+        this.net = 'connecting';
+        this.emit();
         try {
-          this.net = 'connecting';
           await this.exec(image.dhcp, 45000);
           const ip = (await this.exec(image.ip)).trim();
-          this.net = /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip : 'no lease';
-        } catch { this.net = 'no lease'; }
-        this.emit();
+          this.ip = /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip : '';
+        } catch { this.ip = ''; }
+        this.leased = true;
+        this.syncNet();
       }
     } catch (e) {
       this.set('failed', e.message);
@@ -2502,13 +2770,14 @@ function paintVM() {
   const dot = document.getElementById('lxDot'), txt = document.getElementById('lxText');
   if (!dot) return;
   const dropped = VM.state === 'ready' && VM.net === 'disconnected';
-  txt.textContent = dropped ? 'network dropped'
+  const redialing = VM.state === 'ready' && VM.net === 'reconnecting';
+  txt.textContent = dropped ? 'network dropped' : redialing ? 'reconnecting…'
     : VM.state === 'ready' && VM.bootedImage === 'debian' ? 'debian ready' : VM_LABEL[VM.state];
-  dot.className = 'dot' + (dropped ? ' warn' : VM.state === 'ready' ? '' :
+  dot.className = 'dot' + (dropped || redialing ? ' warn' : VM.state === 'ready' ? '' :
                            VM.state === 'booting' ? ' warn' : ' off');
   document.getElementById('lxPill').title =
     VM.state === 'ready'   ? ('The VM is up. api.shell() runs real commands.'
-                              + (VM.net ? '  Network: ' + VM.net : '  No network.')) :
+                              + (VM.net ? '  Network: ' + VM.net + (VM.ip ? ', ' + VM.ip : '') : '  No network.')) :
     VM.state === 'booting' ? (VM.bootedImage === 'debian' ? 'Booting Debian — streams the disk as it goes, a few minutes.' : 'Booting — about 30 seconds.') :
     VM.state === 'failed'  ? ('Boot failed: ' + (VM.detail || '')) :
     VM.state === 'unavailable' ? 'The 11 MB of v86 assets are not served here.' :
@@ -3154,12 +3423,18 @@ function NetworkApp(body) {
           ${on ? '<button class="btn sm" id="off">Turn off</button>' : ''}
         </div>
       </div>
-      <p class="small ${VM.net && !['no lease','connecting','disconnected'].includes(VM.net) ? 'yes' : 'dimmer'}" style="margin:0 0 8px">
-        ${!on ? '' : VM.net === 'connecting' ? 'getting a lease…'
+      <p class="small ${VM.net === 'connected' ? 'yes' : 'dimmer'}" id="netState" style="margin:0 0 8px">
+        ${!on ? '' : VM.net === 'connecting'
+            ? (VM.leased ? (VM.ip ? 'guest has <b>' + VM.ip + '</b>; ' : 'no DHCP lease; ') + 'dialing the relay…' : 'getting a lease…')
           : VM.net === 'no lease' ? 'connected to the relay but got no DHCP lease'
+          : VM.net === 'unwatched'
+            ? '<span class="part">the relay socket could not be watched.</span> v86 dialed a socket this desktop did not recognise as the relay, so a drop will not be noticed here' + (VM.ip ? '; the guest has <b>' + VM.ip + '</b>' : '') + '.'
+          : VM.net === 'reconnecting'
+            ? '<span class="part">the relay dropped this connection; redialing…</span> the relay is a serverless function and its socket closes at its maximum duration. connections the guest had open are lost; new ones work once this is back.'
           : VM.net === 'disconnected'
-            ? '<span class="no">the relay dropped this connection.</span> serverless functions have a maximum duration, so a long session will hit it. v86 cannot redial, so the machine has to restart — your apps are files and survive; anything only in VM memory does not.'
-          : VM.net ? 'guest has <b>' + VM.net + '</b>' : ''}
+            ? `<span class="no">${VM.linkWasOpen ? 'the relay dropped this connection and five redials in a row failed.' : 'the relay never answered: five dials in a row failed.'}</span> it is tried once more every 10 s; if it never answers, restart the machine — your apps are files and survive; anything only in VM memory does not.`
+          : VM.net === 'connected' ? 'guest has <b>' + VM.ip + '</b>' + (VM.netNote ? ' <span class="dimmer">· ' + VM.netNote + '</span>' : '')
+          : ''}
       </p>
       ${VM.net === 'disconnected' ? '<button class="btn p sm" id="reconnect" style="margin-bottom:10px">Restart the machine</button>' : ''}
       <p class="note">
@@ -3176,8 +3451,8 @@ function NetworkApp(body) {
             <td class="dimmer tiny">same reason</td></tr>
         <tr><td>Arbitrary destinations</td><td class="part"><b>public only</b></td>
             <td class="dimmer tiny">the relay refuses loopback, private ranges and odd ports, so the guest cannot reach our infrastructure</td></tr>
-        <tr><td>Staying connected</td><td class="part"><b>time-limited</b></td>
-            <td class="dimmer tiny">the relay is a serverless function; the socket closes at its max duration and the guest loses the network until the VM restarts</td></tr>
+        <tr><td>Staying connected</td><td class="part"><b>redials</b></td>
+            <td class="dimmer tiny">the relay is a serverless function and its socket closes at its max duration (800 s); the desktop redials in place — connections open at that moment are dropped, new ones work</td></tr>
       </tbody></table>`;
     const rc = body.querySelector('#reconnect');
     if (rc) rc.onclick = async () => { rc.disabled = true; rc.textContent = 'restarting…'; await VM.restart(); render(); };
@@ -3195,6 +3470,17 @@ function NetworkApp(body) {
     if (off) off.onclick = () => { VM.setRelay(''); render(); };
   };
   render();
+  // The state line follows the link while the pane is open. The subscription
+  // lets go once the pane is gone, since nothing tells it when, and stays out
+  // of the way while the relay URL has focus or has been edited: a failed
+  // probe emits every 10 s while 'disconnected', and a re-render replaces the
+  // input, so a focused one lost its caret on every probe.
+  const unsub = VM.on(() => {
+    if (!body.isConnected) return unsub();
+    const input = body.querySelector('#relay');
+    if (document.activeElement === input || input.value !== (VM.relay || '')) return;
+    render();
+  });
 }
 
 function DesignApp(body) {
