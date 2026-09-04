@@ -859,7 +859,7 @@ async function jsonOf(r, who) {
 
 /* ---------- bring your own agent ---------------------------------------
 
-   The alternative login. Claude Code, Cursor or Codex runs `npx vibeos-mcp
+   The alternative login. Claude Code, Cursor or Codex runs `npx @caffeinum/vibeos-mcp
    --token <token>` and drives this desktop with its own model and its own
    subscription; vibeOS supplies the tools and the machine. A tab cannot
    listen, so both ends dial the relay (app/api/mcp/[token]) and it pairs them
@@ -978,9 +978,9 @@ const RemoteBridge = {
   get token() { return remoteToken; },
   command() {
     if (!remoteToken) throw new Error('RemoteBridge.command: no token — pair first');
-    // github:, not the bare name: the package is not on npm yet, and the pane
-    // advertised a command that 404'd on the first person who tried it.
-    return 'npx github:caffeinum/vibeos-mcp --token ' + remoteToken;
+    // the scoped name: the publish token is scoped to @caffeinum, so the
+    // unscoped name was never ours; the pane once advertised one that 404'd.
+    return 'npx @caffeinum/vibeos-mcp --token ' + remoteToken;
   },
 
   mint() {
