@@ -2,6 +2,8 @@
  * pills, the clock. A ui module (see ui/windows.js). start() subscribes the
  * painters and returns the function that unsubscribes them, so a reload_ui
  * can retire this copy without leaving a painter behind on VM.on.
+ * paintDock stops after its await when the element it was painting has been
+ * retired by a reload_ui swap meanwhile; a trial's detached #dock is painted.
  */
 
 export function paintVM() {
@@ -62,8 +64,10 @@ export async function paintDock(dock = document.getElementById('dock')) {
   add(ICONS.vibeos, 'vibeOS — ask for an app', () => focusOrOpen(SHELL.chat));
   add('🌐', 'Browser', () => openWindow(SHELL.browser));
 
+  const live = dock.isConnected;
   let apps = [];
   try { apps = (await Apps.list()).apps; } catch {}
+  if (live && !dock.isConnected) return;
   if (apps.length) {
     const sep = document.createElement('span');
     sep.style.cssText = 'width:1px;background:rgba(0,0,0,.18);margin:4px 2px';

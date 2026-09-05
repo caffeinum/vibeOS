@@ -391,7 +391,7 @@ const Theme = {
           // the #desktop rule, and the error says where rather than letting
           // the model guess a fourth name for it.
           const hint = /wallpaper|bg|background/i.test(key) ? ' Wallpaper is an edit to system/os.css (#desktop rule).' : '';
-          throw new Error('unknown theme token: ' + key + hint);
+          throw new Error('unknown theme token: ' + key + hint + ' Known tokens: ' + Object.keys(known).join(', ') + ' (list_themes has every theme\'s).');
         }
         if (!this.safeValue(value)) {
           throw new Error('theme token ' + key + ' must be a plain colour value, got: ' + String(value).slice(0, 40));
@@ -421,22 +421,42 @@ function forImage(prompt) {
   return prompt.replace(IMAGES.busybox.shellLine, line);
 }
 
-const PASTE_KEY_SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
-
-TARGET 1, a desktop window (default). Header exactly:
-// @title <Short Name>
+// The contract a window app is held to: the three headers, what api offers,
+// the layout rules, the size hint. The same text as lib/system-prompt.ts
+// APP_CONTRACT (pinned byte-equal by tests/agent-tools.test.ts); the paste-key
+// prompt embeds it and create_app's description carries it, so an agent on
+// vibeos-mcp — which never sees a prompt of ours — reads the same rules.
+const APP_CONTRACT = `// @title <Short Name>
 // @target browser
 // @requires <space-separated caps, or none>
 Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs), net (raw TCP through the relay). Use none unless needed.
 Then: export default function (mount, api) { ... }
-mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size.
+mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size. api.mountSize() -> {width,height}.
 api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): one-shot commands. Waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app that uses it and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted — those want api.tty(). List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
 api.tty() -> { write(bytesOrString), onData(fn) -> off, resize(cols, rows), close() } (needs tty): a terminal is api.tty(): bytes both ways, ctrl-c, top, nano, passwords work; api.shell is for one-shot commands. It is its own shell on the machine's second serial line, not the one api.shell and the agent share, so a cd there stays there. The line echoes what you write: paint what onData delivers (\\r, \\n, \\b and ANSI escapes; answer \\x1b[6n with \\x1b[row;colR or vi and ash wait on it) instead of echoing keys yourself; send Enter as \\r, Ctrl-C as \\x03, arrows as \\x1b[A..D, and resize(cols, rows) when the pane changes. One tty per machine: while the built-in Terminal or another app holds it, api.tty() throws naming the holder — show that message; closing that window releases it.
 api.net.connect(host, port) -> { write(bytesOrString), onData(fn) -> off, onClose(fn) -> off, close(), state, reason } (needs net): opens raw TCP through the relay for a TCP client — a redis, irc or smtp toy; http stays on the proxy and the Browser, not this. Plain TCP only (no tls option; https means fetch or curl in the machine). localhost, private and loopback addresses and ports outside the relay's list (80, 443, 21, 22, 70, 1965, 3000, 8080, 8443) throw naming the rule; the relay closes a stream it refuses and onClose says why. The relay is a serverless function that ends about every 13 minutes: every open stream then closes with "network error: the relay reconnected and the connection was lost", so a long-lived client (irc, redis) must reconnect from onClose. A write after close throws. Closing the window closes the connection.
 
-Layout rules (required): root width/height 100%, box-sizing:border-box, display:flex, flex-direction:column, overflow:hidden on mount. No document scroll, no min-height exceeding the window. Modest type and padding; empty states must fit. Scroll inner panes only (overflow:auto, scrollbar-width:thin), never mount.
+Layout rules (required):
+- Root element: width:100%; height:100%; box-sizing:border-box; display:flex; flex-direction:column; overflow:hidden. No document scroll, no min-height larger than the window, no fat browser scrollbars on mount.
+- Fit the actual mount, not a desktop-sized page. Modest type (13-15px body, not huge serif headlines) and tight padding. Empty states must fit without overflowing.
+- Do not imitate getslash.co / Slash-style UIs with oversized serif titles and generous vertical padding — those overflow a ~430×320px window immediately.
+- If a region scrolls, use an inner child with overflow:auto and scrollbar-width:thin (or class app-scroll) — never scroll mount itself.
+- Respond to resize: use flex/%/min-height:0 throughout, or api.onResize to reflow.
 
-Plain JavaScript only, no JSX, no imports, no external URLs. Under 60 lines and it must work.
+Plain JavaScript only, no JSX, no imports, no external URLs. Under 60 lines and it must work.`;
+
+const CREATE_APP_LEAD = 'Create a vibeOS desktop window app (// @target browser, the contract below) or install a VM script (// @title, // @target vm, // @file <name.sh>, then a shell script for the Linux the prompt names). Pass complete source with the headers; the reply names the dock entry and the file. A window app is held to this contract:';
+const CREATE_APP_DESCRIPTION = CREATE_APP_LEAD + '\n' + APP_CONTRACT;
+// Word for word lib/agent-tools.ts; the test pins them.
+const SEARCH_FILE_DESCRIPTION = 'Find lines matching a regex. path is one file, a directory (system/, system/ui/) or a glob (system/**/*.js, apps/*.js): a directory or glob searches every text file under it and each hit carries file and line; 60 hits at most, binaries and files over 1 MB skipped and named; system/chat.json and the snapshots are never searched or listed. Use before edit_file on a system/ file. A path that matches nothing is refused naming what exists there.';
+const LIST_FILES_DESCRIPTION = 'List the workspace. path is \'\' for the top (apps/, data/, system/) or a directory: apps/, data/, system/, system/kernel, system/ui. Entries carry kind (file|dir), size and modified; under system/ every file the OS loads is listed whether or not a copy is stored, with source (stored: your fork boots next; served: stock) and booted (which one this page runs — stored but booted served means reload_os is pending). A path that does not exist is refused naming what its parent holds.';
+const READ_DESKTOP_DESCRIPTION = 'What the desktop looks like, as text: every open window (app id, title, minimized, z-order — first is on top — geometry, whether it is the built-in chat/Browser/Settings or a generated app and its file), the dock entries, the machine pill (VM.state, image, net, tty) and the theme. Pass { window: <title or app id> } for that window\'s body as trimmed text, one line per block (scripts and styles dropped, 8 KB cap); add { dom: true } for its sanitised outerHTML instead (no script, style, link or on* attributes, no javascript: urls, media and form urls replaced by data:, 16 KB cap); either way the value of a password or hidden input is withheld. { screen: \'png\' } is the machine\'s VGA screen as image {mimeType, data} (a jpeg no wider than 1024, under the relay\'s 128 KB frame) with the text console\'s rows as text when it is in text mode. A bitmap of the desktop itself is not available (no html2canvas is vendored): the text and DOM views are the substitute. Everything here is read; nothing runs.';
+const LIST_THEMES_DESCRIPTION = 'The themes set_theme can wear: id, title, summary and the token names each defines (--accent, --panel, --radius-win…), plus the current theme id, its custom overrides and the effective value of every token. Use before set_theme with tokens: an unknown token is refused naming the known ones.';
+
+const PASTE_KEY_SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
+
+TARGET 1, a desktop window (default). Header exactly:
+${APP_CONTRACT}
 
 TARGET 2, a program inside the VM. Use when the request is about files, text processing or system tasks. Header exactly:
 // @title <Short Name>
@@ -675,7 +695,7 @@ const WebTools = {
    archive) can create an app or restyle the desktop without a click.
    -------------------------------------------------------------------- */
 
-const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'set_theme', 'read_file', 'search_file', 'edit_file', 'write_file', 'reload_ui', 'reload_os', 'web_fetch', 'web_search']);
+const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'list_files', 'read_desktop', 'list_themes', 'set_theme', 'read_file', 'search_file', 'edit_file', 'write_file', 'reload_ui', 'reload_os', 'web_fetch', 'web_search']);
 
 // What the agent is told about the shell's own apps. They are functions in
 // os.js, so "change the Browser" is an edit to system/os.js — not a request.
@@ -822,19 +842,388 @@ const GuestBridge = {
 // Tool schemas for the paste-key path. lib/agent-tools.ts is the server's copy
 // and tests/agent-tools.test.ts pins the two name lists equal, so a tool added
 // on one side cannot quietly go missing on the other.
+/* ---------- what the desktop looks like, as text --------------------
+
+   An agent on vibeos-mcp has no eyes: it built a window and could not tell
+   whether the window said anything. read_desktop is the substitute for a
+   screenshot of the page (nothing that rasterises the DOM is vendored):
+   the window records, the dock, the machine pill, and on request one
+   window's body as text per block or as markup with nothing executable
+   left in it, or the machine's VGA screen, which v86 can draw. Every
+   string is a value in a JSON reply; nothing here runs anything.
+   -------------------------------------------------------------------- */
+const Desktop = {
+  TEXT_MAX: 8 * 1024, DOM_MAX: 16 * 1024,
+  // The relay carries 128 KB a frame and the reply is JSON around the
+  // image, so the picture itself stays under 110 KB of base64.
+  IMAGE_WIDE: 1024, IMAGE_B64_MAX: 110 * 1024,
+  BLOCK: /^(DIV|P|LI|TR|H[1-6]|PRE|SECTION|ARTICLE|HEADER|FOOTER|UL|OL|TABLE|TEXTAREA|BUTTON|LABEL|FORM|DETAILS|SUMMARY|BLOCKQUOTE|DT|DD|OPTION|NAV|ASIDE|MAIN|HR|BR)$/,
+  DROP: /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|IFRAME|FRAME|FRAMESET|OBJECT|EMBED|APPLET|LINK|BASE|META)$/,
+  // Anything that loads bytes or names a document: its url is dropped in dom().
+  URL_ATTR: /^(src|srcset|href|xlink:href|poster|action|formaction|data|background|ping|cite|longdesc|codebase|manifest|usemap)$/,
+  MEDIA: /^(IMG|VIDEO|AUDIO|SOURCE|TRACK|PICTURE|INPUT|IMAGE|USE|FEIMAGE)$/,
+  SECRET_INPUT: /^(password|hidden)$/i,
+
+  px(v) { const n = parseFloat(v); return Number.isFinite(n) ? Math.round(n) : null; },
+
+  windows() {
+    const shell = UI.stable().SHELL;
+    return Windows.list.map(rec => {
+      const el = rec.el, s = rec.spec;
+      const app = s.opts && s.opts.app;
+      const builtin = s.id && shell[s.id] ? shell[s.id] : null;
+      const out = {
+        id: rec.id, app: this.appId(rec), title: String(s.title), badge: String(s.badge || ''),
+        builtin: !!builtin, kind: builtin ? 'builtin' : app ? 'app' : 'other',
+        minimized: !!el && el.classList.contains('min'), zoomed: !!el && el.dataset.full === '1',
+        z: el ? Number(el.style.zIndex) || 0 : 0,
+        x: el ? this.px(el.style.left) : null, y: el ? this.px(el.style.top) : null,
+        w: el ? this.px(el.style.width) : null, h: el ? this.px(el.style.height) : null,
+      };
+      if (builtin) out.file = 'system/' + builtin.file;
+      else if (app && app.name) out.file = 'apps/' + app.name;
+      if (app) out.requires = Array.isArray(app.requires) ? app.requires.slice() : [];
+      if (s.opts && typeof s.opts.tab === 'string') out.tab = s.opts.tab;
+      return out;
+    }).sort((a, b) => b.z - a.z);
+  },
+
+  // What paintDock paints, from the list it paints from: the shell's two
+  // icons, the first eight apps, Settings.
+  async dock() {
+    const shell = UI.stable().SHELL;
+    const { apps } = await Apps.list();
+    const entry = (id, title) => ({ id, title: String(title), builtin: true, file: 'system/' + shell[id].file });
+    return [
+      entry('chat', shell.chat.title), entry('browser', shell.browser.title),
+      ...apps.slice(0, 8).map(a => ({ id: 'apps/' + a.name, title: String(a.title), builtin: false, file: 'apps/' + a.name, requires: a.requires })),
+      entry('settings', shell.settings.title),
+    ];
+  },
+
+  vm() {
+    const pill = document.getElementById('lxText');
+    return { state: VM.state, image: VM.bootedImage || null, net: VM.net || null, tty: VM.ttyState || null, ip: VM.ip || null, restored: !!VM.restored, pill: pill ? pill.textContent : '' };
+  },
+
+  async overview() {
+    const windows = this.windows();
+    return { ok: true, windows, dock: await this.dock(), vm: this.vm(), theme: Theme.id, workspace: Workspace.label,
+             remote: { state: RemoteBridge.state, agent: RemoteBridge.agentName || null },
+             note: windows.length ? 'windows are top first; pass { window: <title or app id> } for one window\'s text' : 'no window is open' };
+  },
+
+  // A window's app id is its shell id (chat, browser, settings) or its
+  // app file (apps/<name>.js) — what the windows list and the dock print.
+  appId(rec) {
+    const app = rec.spec.opts && rec.spec.opts.app;
+    return rec.spec.id || (app && app.name ? 'apps/' + app.name : null);
+  },
+
+  find(which) {
+    const want = String(which), lower = want.toLowerCase();
+    const recs = Windows.list;
+    const byId = recs.find(r => r.id === want) || recs.find(r => this.appId(r) === want) || recs.find(r => (this.appId(r) || '').toLowerCase() === lower)
+      || recs.find(r => String(r.spec.title) === want) || recs.find(r => String(r.spec.title).toLowerCase() === lower);
+    if (!byId) throw new Error('no open window is "' + want + '"; open: ' + (recs.map(r => '"' + r.spec.title + '"' + (this.appId(r) ? ' (' + this.appId(r) + ')' : '')).join(', ') || 'none'));
+    if (!byId.el) throw new Error('the window "' + byId.spec.title + '" has no chrome yet');
+    return byId;
+  },
+
+  // One line per block, whitespace collapsed, form values in brackets so a
+  // typed-but-unsent line is visible. Hidden nodes and script/style are not
+  // text anyone sees, so they are not text here either — nor is a password
+  // or a hidden field's value, which the reply would hand a remote agent.
+  text(root) {
+    const out = [];
+    const walk = node => {
+      for (const n of node.childNodes) {
+        if (n.nodeType === 3) { out.push(n.nodeValue); continue; }
+        if (n.nodeType !== 1) continue;
+        if (this.DROP.test(n.tagName) || n.hidden) continue;
+        const block = this.BLOCK.test(n.tagName);
+        if (block) out.push('\n');
+        if (n.tagName === 'INPUT' && this.SECRET_INPUT.test(n.type)) continue;
+        if (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA' || n.tagName === 'SELECT') out.push(n.value ? '[' + n.value + ']' : '');
+        else walk(n);
+        if (block) out.push('\n');
+      }
+    };
+    walk(root);
+    const lines = out.join('').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const text = lines.join('\n');
+    return { text: text.slice(0, this.TEXT_MAX), truncated: text.length > this.TEXT_MAX, lines: lines.length };
+  },
+
+  // The markup with nothing that could run or fetch left in it: no script,
+  // style, link or handler attributes; a url whose scheme is a script
+  // (javascript:, vbscript: — the scheme read the way a browser reads it,
+  // whitespace and control characters dropped, so java\nscript: is caught)
+  // is removed from any attribute; every url on a media element, a form
+  // or an svg image is replaced by data:, (a chat card's src is a whole
+  // screenshot in base64, and a guest url would be fetched by the host).
+  dom(root) {
+    const copy = root.cloneNode(true);
+    for (const n of [...copy.querySelectorAll('*')]) {
+      if (this.DROP.test(n.tagName)) { n.remove(); continue; }
+      const tag = n.tagName.toUpperCase();
+      const secret = tag === 'INPUT' && this.SECRET_INPUT.test(n.type);
+      for (const a of [...n.attributes]) {
+        const name = a.name.toLowerCase();
+        const scheme = a.value.replace(/[\s\x00-\x1f\x7f]/g, '').toLowerCase();
+        if (name.startsWith('on') || name === 'srcdoc' || name === 'style' || /^(javascript|vbscript|livescript):|^data:text\/html/.test(scheme)) { n.removeAttribute(a.name); continue; }
+        if (secret && name === 'value') { n.removeAttribute(a.name); continue; }
+        if (this.URL_ATTR.test(name) && (this.MEDIA.test(tag) || tag === 'FORM' || tag === 'BUTTON' || name !== 'href')) n.setAttribute(a.name, 'data:,');
+      }
+    }
+    const html = copy.outerHTML;
+    return { dom: html.slice(0, this.DOM_MAX), truncated: html.length > this.DOM_MAX };
+  },
+
+  // The VGA screen: v86 draws text mode to a div of rows and graphics to a
+  // canvas, and its screen adapter renders either as a PNG. The rows travel
+  // as text too, so a text-mode console needs no image at all. The PNG is
+  // re-encoded as a JPEG no wider than 1024 and under the relay's frame.
+  async screen() {
+    if (!VM.emu || !VM.screen) throw new Error('the machine is ' + VM.state + ': no screen');
+    const adapter = VM.emu.screen_adapter;
+    if (!adapter || typeof adapter.make_screenshot !== 'function' || typeof adapter.get_text_screen !== 'function') throw new Error('this v86 build has no screen adapter to draw from');
+    const canvas = VM.screen.querySelector('canvas');
+    const graphical = !!canvas && canvas.style.display !== 'none' && canvas.width > 0;
+    const rows = adapter.get_text_screen().map(r => r.replace(/\s+$/, ''));
+    const text = rows.join('\n').replace(/\n+$/, '');
+    const png = adapter.make_screenshot().src;
+    if (typeof png !== 'string' || !png.startsWith('data:image/png')) throw new Error('the screen adapter drew no PNG');
+    const image = await this.jpeg(png);
+    return { mode: graphical ? 'graphical' : 'text', image, text, size: graphical ? { width: canvas.width, height: canvas.height } : { cols: rows[0] ? rows[0].length : 0, rows: rows.length },
+             note: graphical ? 'the machine is in graphics mode; the image is the frame' : 'text mode: the rows are the screen, the image is the same rows drawn' };
+  },
+
+  async jpeg(src) {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    const scale = Math.min(1, this.IMAGE_WIDE / (img.naturalWidth || 1));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    for (const quality of [0.85, 0.7, 0.55, 0.4, 0.3, 0.2]) {
+      const url = c.toDataURL('image/jpeg', quality);
+      const data = url.slice(url.indexOf(',') + 1);
+      if (data.length <= this.IMAGE_B64_MAX) return { mimeType: 'image/jpeg', data, width: c.width, height: c.height, quality };
+    }
+    throw new Error('the screen image is over ' + Math.round(this.IMAGE_B64_MAX / 1024) + ' KB of base64 at every quality; the relay carries 128 KB a frame');
+  },
+
+  async read(input) {
+    const i = input || {};
+    if (i.screen !== undefined) {
+      if (i.screen !== 'image' && i.screen !== 'png') throw new Error('screen must be "image" (png is accepted as an alias), got ' + JSON.stringify(i.screen));
+      return { ok: true, ...(await this.screen()) };
+    }
+    if (i.window === undefined) return this.overview();
+    const rec = this.find(i.window);
+    const body = rec.el.querySelector('.body');
+    if (!body) throw new Error('the window "' + rec.spec.title + '" has no body');
+    const head = { id: rec.id, app: this.appId(rec), title: String(rec.spec.title), minimized: rec.el.classList.contains('min') };
+    return { ok: true, window: { ...head, ...(i.dom ? this.dom(body) : this.text(body)) } };
+  },
+};
+
+/* ---------- the workspace tree, for list_files and search_file ----------
+
+   apps/ and data/ are directories on disk; system/ is the OS: what the
+   loader boots is OS_FILES whether or not a copy is stored, so the listing
+   is the loader's list merged with what the folder holds, each file saying
+   which copy boots next and which one this page ran. A miss is refused
+   naming what the parent holds — an agent guessing at system/os.js finds
+   the kernel/ and ui/ it should have looked in.
+   -------------------------------------------------------------------- */
+const Files = {
+  TOP: ['apps', 'data', 'system'],
+  // The chat log and the machine snapshots live under system/ but are not
+  // the OS: the mount rule keeps them out of /mnt, and the tools keep them
+  // out of every listing, walk and read — a remote agent is not the person
+  // whose chat that is.
+  PRIVATE: /^system\/(chat\.json|vm-[^/]+\.state)$/,
+  PRIVATE_NAME: /^(chat\.json|vm-[^/]+\.state)$/,
+  isPrivate(rel) { return this.PRIVATE.test(this.norm(rel)); },
+  refusePrivate(rel) { if (this.isPrivate(rel)) throw new Error(this.norm(rel) + ' is not readable through the tools: the chat log and the machine snapshots are the person\'s, not the OS'); },
+  SKIP: /\.(state|png|jpe?g|gif|webp|zip|gz|tgz|wasm|bin|iso|pdf|woff2?|ttf)$/i,
+  SKIP_BYTES: 1024 * 1024,
+  HITS_MAX: 60,
+
+  norm(path) { return String(path == null ? '' : path).trim().replace(/^\/+/, '').replace(/\/+$/, ''); },
+  parts(rel) {
+    if (rel === '') return [];
+    const parts = rel.split('/');
+    if (parts.some(p => p === '..' || p === '.' || !p)) throw new Error('bad path: ' + rel + ' (paths are relative to the workspace: apps/, data/, system/)');
+    return parts;
+  },
+
+  async dirHandle(parts) {
+    let dir = Workspace.root;
+    try { for (const seg of parts) dir = await dir.getDirectoryHandle(seg); }
+    catch (e) { if (e.name === 'NotFoundError' || e.name === 'TypeMismatchError') return null; throw e; }
+    return dir;
+  },
+
+  // The entries of one directory, or a throw naming what its parent holds.
+  async entries(rel) {
+    if (!Workspace.open) throw new Error('no workspace is open');
+    const parts = this.parts(rel);
+    if (!parts.length) return this.TOP.map(name => ({ name, kind: 'dir', source: 'stored' }));
+    if (!this.TOP.includes(parts[0])) throw new Error('not found: ' + rel + ' — the workspace has: ' + this.TOP.map(t => t + '/').join(', '));
+    if (parts.length > 1 && (Workspace.systemFile(rel) || await this.isFile(rel))) throw new Error(rel + ' is a file, not a directory: read_file or search_file it');
+    const dir = await this.dirHandle(parts);
+    const out = [];
+    if (dir) for await (const [name, h] of dir.entries()) {
+      if (parts[0] === 'system' && parts.length === 1 && this.PRIVATE_NAME.test(name)) continue;
+      if (h.kind === 'directory') out.push({ name, kind: 'dir', source: 'stored' });
+      else { const f = await h.getFile(); out.push({ name, kind: 'file', source: 'stored', size: f.size, modified: f.lastModified }); }
+    }
+    if (parts[0] === 'system') await this.systemEntries(parts.slice(1).join('/'), out, !!dir || parts.length === 1);
+    else if (!dir) throw new Error(await this.missing(rel));
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  },
+
+  // OS_FILES under system/: a loaded file is listed with or without a copy.
+  async systemEntries(sub, out, exists) {
+    const prefix = sub ? sub + '/' : '';
+    const loaded = OS_FILES.filter(f => f.startsWith(prefix));
+    if (!loaded.length && !exists) throw new Error(await this.missing('system/' + sub));
+    for (const f of loaded) {
+      const rest = f.slice(prefix.length);
+      if (rest.includes('/')) {
+        const name = rest.split('/')[0];
+        if (!out.some(e => e.name === name)) out.push({ name, kind: 'dir', source: 'served' });
+        continue;
+      }
+      const stored = await Workspace.readStoredSystem(f);
+      const entry = out.find(e => e.name === rest) || (out.push({ name: rest, kind: 'file', source: 'served' }), out[out.length - 1]);
+      entry.loads = true;
+      entry.source = stored !== null && stored.trim() ? 'stored' : 'served';
+      entry.booted = window.__vibeosBoot.files[f];
+      if (stored !== null && !stored.trim()) entry.note = 'blank copy: retired, the served file boots';
+    }
+  },
+
+  // "not found: X — <parent> has: a, b/" walking up to the nearest directory that exists.
+  async missing(rel) {
+    const parts = this.parts(rel);
+    for (let n = parts.length - 1; n >= 0; n--) {
+      const parent = parts.slice(0, n).join('/');
+      let names;
+      try { names = (await this.entries(parent)).map(e => e.name + (e.kind === 'dir' ? '/' : '')); } catch { continue; }
+      return 'not found: ' + rel + ' — ' + (parent ? parent + '/' : 'the workspace') + ' has: ' + (names.join(', ') || 'nothing');
+    }
+    return 'not found: ' + rel;
+  },
+
+  async walk(rel, out = []) {
+    for (const e of await this.entries(rel)) {
+      const path = rel ? rel + '/' + e.name : e.name;
+      if (e.kind === 'dir') await this.walk(path, out);
+      else out.push({ path, size: e.size, source: e.source });
+    }
+    return out;
+  },
+
+  globRe(glob) {
+    const re = glob.split('/').map(seg => seg === '**' ? '(?:.*)' : seg.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')).join('/').replace(/\(\?:\.\*\)\//g, '(?:.*/)?');
+    return new RegExp('^' + re + '$');
+  },
+
+  // One file, every file under a directory, or a glob's matches — as paths.
+  async resolve(spec) {
+    const rel = this.norm(spec);
+    if (/[*?]/.test(rel)) {
+      const segs = rel.split('/');
+      const fixed = []; for (const s of segs) { if (/[*?]/.test(s)) break; fixed.push(s); }
+      const files = await this.walk(fixed.join('/'));
+      const re = this.globRe(rel);
+      const hit = files.filter(f => re.test(f.path));
+      if (!hit.length) throw new Error('no file matches ' + rel + ' — ' + (fixed.length ? fixed.join('/') + '/' : 'the workspace') + ' has: ' + (await this.entries(fixed.join('/'))).map(e => e.name + (e.kind === 'dir' ? '/' : '')).join(', '));
+      return { kind: 'glob', files: hit };
+    }
+    this.refusePrivate(rel);
+    if (rel && Workspace.systemFile(rel)) return { kind: 'file', files: [{ path: rel, size: (await Workspace.readPath(rel)).length }] };
+    const st = rel ? await this.stat(rel) : null;
+    if (st) return { kind: 'file', files: [{ path: rel, size: st.size }] };
+    const dir = await this.entries(rel).catch(() => null);
+    if (dir) return { kind: 'dir', files: await this.walk(rel) };
+    throw new Error(await this.missing(rel));
+  },
+
+  async isFile(rel) { return !!(await this.stat(rel)); },
+  async stat(rel) {
+    try { return await Workspace.statPath(rel); }
+    catch (e) { if (e.name === 'TypeMismatchError') return null; throw e; }
+  },
+
+  // The matching runs in a worker with a deadline: a pattern with nested
+  // quantifiers (^(\w+\s?)+$ on a long line that does not match) is
+  // exponential, and on the main thread it froze the desktop for 50 s —
+  // measured by vibeos-mcp with one search_file call from a remote agent. A
+  // worker can be terminated; the main thread cannot interrupt itself.
+  SEARCH_MS: 3000,
+  matchInWorker(files, pattern, cap) {
+    const src = `onmessage = e => { const { files, pattern, cap } = e.data; let re; try { re = new RegExp(pattern, 'i'); } catch (err) { postMessage({ error: 'bad regex: ' + err.message }); return; }
+      const hits = []; let truncated = false;
+      for (const f of files) { const lines = f.text.split('\\n'); for (let i = 0; i < lines.length; i++) { if (!re.test(lines[i])) continue; if (hits.length >= cap) { truncated = true; break; } hits.push({ path: f.path, line: i + 1, text: lines[i].slice(0, 200) }); } if (truncated) break; }
+      postMessage({ hits, truncated }); };`;
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    const w = new Worker(url);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { w.terminate(); URL.revokeObjectURL(url); reject(new Error(`the pattern took longer than ${this.SEARCH_MS / 1000} s over ${files.length} file${files.length === 1 ? '' : 's'} and was stopped — a regex with nested quantifiers such as (\\w+\\s?)+ can run forever on a line that does not match; simplify it or narrow the path`)); }, this.SEARCH_MS);
+      w.onmessage = e => { clearTimeout(timer); w.terminate(); URL.revokeObjectURL(url); if (e.data.error) reject(new Error(e.data.error)); else resolve(e.data); };
+      w.onerror = e => { clearTimeout(timer); w.terminate(); URL.revokeObjectURL(url); reject(new Error('search worker failed: ' + (e.message || 'unknown'))); };
+      w.postMessage({ files, pattern, cap });
+    });
+  },
+  async search(spec, pattern) {
+    if (typeof pattern !== 'string' || !pattern) throw new Error('pattern must be a non-empty regex string' + (pattern === '' ? ' (an empty pattern matches every line: read_file instead)' : ', got ' + JSON.stringify(pattern)));
+    new RegExp(pattern, 'i');   // a bad regex is named here, before any file is read
+    const { kind, files } = await this.resolve(spec);
+    const texts = [], skipped = [];
+    let searched = 0;
+    for (const f of files) {
+      if (this.SKIP.test(f.path)) { skipped.push({ path: f.path, why: 'not text' }); continue; }
+      if (f.size > this.SKIP_BYTES) { skipped.push({ path: f.path, why: Math.round(f.size / 1024) + ' KB, over the 1 MB cap' }); continue; }
+      searched++;
+      texts.push({ path: f.path, text: await Workspace.readPath(f.path) });
+    }
+    const { hits, truncated } = await this.matchInWorker(texts, pattern, this.HITS_MAX);
+    const out = { ok: true, path: String(spec), hits };
+    if (kind !== 'file') out.files = searched;
+    if (skipped.length) out.skipped = skipped;
+    if (truncated) { out.truncated = true; out.note = 'stopped at ' + this.HITS_MAX + ' hits; narrow the pattern or the path'; }
+    return out;
+  },
+};
+
 const TOOL_SCHEMAS = [
-  { name: 'create_app', description: 'Create a vibeOS desktop window app or install a VM script. Pass complete source with the // @title, // @target and // @requires headers.',
+  { name: 'create_app', description: CREATE_APP_DESCRIPTION,
     parameters: { type: 'object', properties: { title: { type: 'string' }, source: { type: 'string' } }, required: ['title', 'source'] } },
   { name: 'vm_exec', description: 'Run a shell command in the vibeOS Linux VM and return its output (stdout and stderr, ANSI stripped). Waits 20 s by default; pass timeout_s (up to 600) for an install or a build, or background it (cmd > /mnt/job.log 2>&1 &) and tail the log.',
     parameters: { type: 'object', properties: { command: { type: 'string' }, timeout_s: { type: 'integer', minimum: 1, maximum: 600, description: 'Seconds to wait before the command is interrupted with Ctrl-C and the call fails. Default 20.' } }, required: ['command'] } },
   { name: 'list_apps', description: 'List apps already saved in the vibeOS workspace. .js files without a // @title header are not apps and come back under unlisted with the reason; add the header with edit_file if the user wants one in the dock. The reply also carries the /mnt mapping: the mount is flat and subdirectories under /mnt are not mirrored, and unmirrored names the root entries the mirror skipped (directories, symlinks, special files).',
     parameters: { type: 'object', properties: {}, required: [] } },
-  { name: 'set_theme', description: 'Restyle the desktop itself: a theme id, or individual colour tokens.',
+  { name: 'read_desktop', description: READ_DESKTOP_DESCRIPTION,
+    parameters: { type: 'object', properties: { window: { type: 'string', description: 'A window\'s title or app id: its body as text, one line per block' }, dom: { type: 'boolean', description: 'With window: the sanitised outerHTML instead of text' }, screen: { type: 'string', enum: ['image', 'png'], description: 'The machine\'s VGA screen as an image, with the text console\'s rows' } }, required: [] } },
+  { name: 'list_files', description: LIST_FILES_DESCRIPTION,
+    parameters: { type: 'object', properties: { path: { type: 'string', description: "'' for the top, or a directory: apps/, data/, system/, system/kernel, system/ui" } }, required: [] } },
+  { name: 'list_themes', description: LIST_THEMES_DESCRIPTION,
+    parameters: { type: 'object', properties: {}, required: [] } },
+  { name: 'set_theme', description: 'Restyle the desktop itself: a theme id, or individual colour tokens (list_themes names them).',
     parameters: { type: 'object', properties: { theme: { type: 'string', enum: ['vibeos-dark', 'vibeos-light', 'win95'] },
                   tokens: { type: 'object', additionalProperties: { type: 'string' } } }, required: [] } },
   { name: 'read_file', description: 'Read a file from the workspace. The operating system is system/kernel/*.js (the machine, workspace, agent loop; reload_os) and system/ui/*.js (windows, dock, chat, Browser, Settings; reload_ui), styled by system/os.css. Optional line range for big files.',
     parameters: { type: 'object', properties: { path: { type: 'string' }, from: { type: 'integer' }, to: { type: 'integer' } }, required: ['path'] } },
-  { name: 'search_file', description: 'Find lines in a workspace file matching a regex; returns line numbers and text. Use before edit_file on a system/ file.',
+  { name: 'search_file', description: SEARCH_FILE_DESCRIPTION,
     parameters: { type: 'object', properties: { path: { type: 'string' }, pattern: { type: 'string' } }, required: ['path', 'pattern'] } },
   { name: 'edit_file', description: 'Replace one exact occurrence of old with new in a workspace file. The first edit of a system/ file forks it from the served copy; from then on yours boots. Call reload_ui to apply a system/ui edit live, reload_os for system/kernel or system/os.css.',
     parameters: { type: 'object', properties: { path: { type: 'string' }, old: { type: 'string' }, new: { type: 'string' } }, required: ['path', 'old', 'new'] } },
@@ -842,7 +1231,7 @@ const TOOL_SCHEMAS = [
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
   { name: 'reload_ui', description: 'Re-import the ui — system/ui/*.js — under the running kernel, live: the machine, the workspace, the chat log and this turn all stay, open windows are repainted by the new ui, and the turn goes on, so say what changed after it. A ui that does not parse, fails to import or throws while painting is refused with the error and the previous ui keeps running. Refuses when no system/ui file has been edited.',
     parameters: { type: 'object', properties: {}, required: [] } },
-  { name: 'reload_os', description: 'Reload the page so edits to system/kernel/*.js or system/os.css take effect (a system/ui edit needs only reload_ui). The reload ends this turn — nothing you say after it reaches the user — so make every edit first, call it once, last, and pass a note: it is shown in the chat after boot. Refuses when nothing has been edited. If the edited OS fails to boot, the stock one runs next time and says so — you cannot lock yourself out. Through vibeos-mcp the reload ends the pairing as well: the token dies with the page, the package is told it was revoked, and driving the desktop again needs a new token from Settings > Capabilities.',
+  { name: 'reload_os', description: 'Reload the page so edits to system/kernel/*.js or system/os.css take effect (a system/ui edit needs only reload_ui). The reload ends this turn — nothing you say after it reaches the user — so make every edit first, call it once, last, and pass a note: it is shown in the chat after boot. Refuses when nothing has been edited. If the edited OS fails to boot, the stock one runs next time and says so — you cannot lock yourself out. Through vibeos-mcp the pairing survives the reload: the tab resumes it after boot and the package reconnects on its own; a call made while the page is down fails with peer not connected — wait a few seconds and call again.',
     parameters: { type: 'object', properties: { note: { type: 'string', description: 'One line shown in the chat after the reboot, e.g. what changed' } }, required: [] } },
   { name: 'web_fetch', description: 'Read a web page as text.',
     parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
@@ -929,6 +1318,21 @@ async function jsonOf(r, who) {
    -------------------------------------------------------------------- */
 
 let remoteToken = null;
+// The token's home for the life of the TAB: sessionStorage is per tab and
+// gone when it closes, the same lifetime a module variable had — but it
+// survives reload_os, which a module variable did not, so an agent that
+// edited the kernel and reloaded read "revoked" for its own reload. The
+// keep flag is set by reload_os alone: pagehide without it (a close, a
+// hand reload) still revokes, and a boot without it does not resume — a
+// duplicated tab (Chrome's Duplicate, window.open(location.href)) gets a
+// copy of sessionStorage, token included, and used to dial with it, kick
+// the original to 4001 and revoke the token when it closed.
+const MCP_TOKEN_KEY = 'vibeos-mcp-token', MCP_AGENT_KEY = 'vibeos-mcp-agent', MCP_KEEP_KEY = 'vibeos-mcp-keep';
+function setRemoteToken(token) {
+  remoteToken = token;
+  try { if (token) sessionStorage.setItem(MCP_TOKEN_KEY, token); else { sessionStorage.removeItem(MCP_TOKEN_KEY); sessionStorage.removeItem(MCP_AGENT_KEY); } }
+  catch (e) { console.warn('RemoteBridge: sessionStorage refused the token; the pairing will not survive reload_os: ' + e.message); }
+}
 
 // The revoke is a hello with the token and `revoke: true` (lib/mcp-relay.ts
 // revokeFrame, the same bytes): it carries the token, so it does not depend
@@ -1114,7 +1518,11 @@ const RemoteBridge = {
     // (aleks tried exactly that). Cursor and codex take the same npx part.
     // `--relay` names the relay THIS tab is on: the package's default is the
     // origin relay, and a tab on the durable relay would never meet it.
-    return 'claude mcp add vibeos -- npx vibeos-mcp --token ' + remoteToken + ' --relay ' + this.relayUrl();
+    // vibeos-mcp 0.1.8+ defaults to the durable relay, so the line carries
+    // --relay only when this tab is somewhere else (the origin fallback, or
+    // the e2e's local relay); a shorter line is one fewer thing to get wrong.
+    const relay = this.relayUrl();
+    return 'claude mcp add vibeos -- npx vibeos-mcp --token ' + remoteToken + (relay === this.awsUrl ? '' : ' --relay ' + relay);
   },
 
   mint() {
@@ -1173,10 +1581,44 @@ const RemoteBridge = {
     if (remoteToken) return true;
     const probe = await this.available();
     if (!probe.ok) { this.set('error', probe.reason); return false; }
-    remoteToken = this.mint();
+    setRemoteToken(this.mint());
     this.agentName = '';
     this.set('pairing', 'dialing the relay');
     this.dial();
+    return true;
+  },
+
+  // After reload_os: the token the page before left in sessionStorage is
+  // this tab's, so dial with it. The durable relay kept the agent side; the
+  // package redials and asks for the tools on its own, and a call it made
+  // while the page was down failed with peer not connected — its retry lands.
+  // The keep flag is the proof this boot is that reload: it is consumed
+  // here, so a copied tab (no flag) drops the copied token instead.
+  resume() {
+    let stored = null, name = '', keep = false;
+    try {
+      stored = sessionStorage.getItem(MCP_TOKEN_KEY); name = sessionStorage.getItem(MCP_AGENT_KEY) || '';
+      keep = sessionStorage.getItem(MCP_KEEP_KEY) === '1'; sessionStorage.removeItem(MCP_KEEP_KEY);
+    } catch { return false; }
+    if (!stored) return false;
+    if (!keep) { setRemoteToken(null); console.warn('RemoteBridge: a pairing token without the reload flag (a duplicated tab?); dropped it — the tab it belongs to keeps the pairing'); return false; }
+    if (!MCP_TOKEN_RE.test(stored)) { setRemoteToken(null); throw new Error('the pairing token in sessionStorage is not 64 hex; dropped it'); }
+    if (this.refusal()) { setRemoteToken(null); return false; }
+    remoteToken = stored;
+    this.agentName = name.slice(0, 80);
+    this.resumed = true;
+    track('mcp_resumed');
+    this.set('pairing', 'resuming the pairing after a reload');
+    this.dial();
+    return true;
+  },
+
+  // reload_os is about to replace the page: keep the token so the next boot
+  // resumes instead of revoking. Only with a token — a stale flag would
+  // spare the next pairing's real close — and not one another tab took.
+  keepAcrossReload() {
+    if (!remoteToken || this.displaced) return false;
+    try { sessionStorage.setItem(MCP_KEEP_KEY, '1'); } catch (e) { console.warn('RemoteBridge: could not flag the reload; the pairing will be revoked: ' + e.message); return false; }
     return true;
   },
 
@@ -1191,6 +1633,7 @@ const RemoteBridge = {
   },
 
   dial() {
+    this.displaced = false;
     this.socket = new RemoteSocket(this.relayUrl(), {
       hello: () => ({ hello: 'tab', token: remoteToken }),
       onOpen: () => {
@@ -1204,8 +1647,8 @@ const RemoteBridge = {
       onEnd: ({ code, reason, gaveUp }) => {
         this.socket = null;
         this.stopKeepalive();
-        if (code === 4003) { remoteToken = null; this.set('off'); return; }
-        if (code === 4001) { this.set('error', 'another tab paired with this token and took its place; revoke here, or pair again there'); return; }
+        if (code === 4003) { setRemoteToken(null); this.set('off'); return; }
+        if (code === 4001) { this.displaced = true; this.set('error', 'another tab paired with this token and took its place; revoke here, or pair again there'); return; }
         const what = 'the relay ended the socket on a code it does not mean: ' + code + (gaveUp ? ' (gave up)' : '');
         this.set('error', what);
         throw new Error('RemoteSocket: ' + what);
@@ -1282,7 +1725,7 @@ const RemoteBridge = {
   },
 
   connected(name = '') {
-    if (name) this.agentName = name;
+    if (name) { this.agentName = name; try { sessionStorage.setItem(MCP_AGENT_KEY, name); } catch {} }
     const label = this.agentName || 'an agent';
     if (this.state !== 'connected') track('mcp_paired');
     this.set('connected', label);
@@ -1334,7 +1777,7 @@ const RemoteBridge = {
     const s = this.socket;
     this.socket = null;
     this.stopKeepalive();
-    remoteToken = null;
+    setRemoteToken(null);
     this.agentName = '';
     // On an open socket the relay ends it (bye 4003, then the close); the
     // socket is released to take that on its own, 5 s at most.
@@ -1359,18 +1802,27 @@ const RemoteBridge = {
   // and the package answering "peer not connected" for good, with no way
   // back but a new token pasted into its config.
   unload() {
+    let keep = false;
+    try { keep = sessionStorage.getItem(MCP_KEEP_KEY) === '1'; } catch {}
     if (!remoteToken) return;
+    // reload_os: the token and the flag stay in sessionStorage for the boot
+    // after this one (resume consumes the flag); the socket dies with the
+    // page and the relay tells the agent "peer not connected" until the tab
+    // is back.
+    if (keep) return;
     const s = this.socket;
     if (s && s.open) s.send(mcpRevokeFrame(remoteToken));
     else this.deliverRevoke(remoteToken);
     this.socket = null;
     this.stopKeepalive();
-    remoteToken = null;
+    setRemoteToken(null);
     this.agentName = '';
     this.set('off');
   },
 };
 window.addEventListener('pagehide', () => RemoteBridge.unload());
+// Loud, never fatal: a bad stored token must not take the kernel down with it.
+try { RemoteBridge.resume(); } catch (e) { console.error('RemoteBridge.resume failed: ' + e.message); }
 
 const Agent = {
   // 5 was one read, one search, one edit, one reload and nothing left over for
@@ -1536,7 +1988,7 @@ const Agent = {
         if (VM.state === 'ready') {
           try { await VM.writeText(file, source); installed = true; } catch {}
         }
-        return { ok: true, kind: 'vm', title, file, installed, source };
+        return { ok: true, kind: 'vm', title, file: '/mnt/' + file, installed, source };
       }
       const requires = parseRequires(source);
       const lint = lintApp(`${title} ${parseTitle(source) || ''}`, requires, source);
@@ -1554,13 +2006,16 @@ const Agent = {
         return { ok: false, kind: 'window', title, error: 'the module does not parse: ' + syntax };
       }
       const saved = await Apps.save(title, source).catch(e => ({ error: e.message }));
+      if (saved.error) return { ok: false, kind: 'window', title, error: 'the app was not saved: ' + saved.error };
       paintDock();
       // Launch what was written, not what was passed: they differ when the
       // header had to be added, and the window must match the file.
       const written = saved.source || source;
-      launchApp({ title, source: written, requires: parseRequires(written) });
+      launchApp({ title, name: saved.file, source: written, requires: parseRequires(written) });
       const { source: _written, ...report } = saved;
-      return { ok: true, kind: 'window', title, saved: report,
+      // The dock shows the header's title, not input.title: they differ
+      // when the source carried its own // @title line.
+      return { ok: true, kind: 'window', title, dockTitle: parseTitle(written), file: 'apps/' + saved.file, saved: report,
                ...(saved.headerAdded?.length ? { note: `the source had no ${saved.headerAdded.map(t => '// @' + t).join(', ')} line; it was prepended so the file is a dock app and not unlisted` } : {}) };
     }
     if (toolName === 'vm_exec') {
@@ -1607,6 +2062,24 @@ const Agent = {
       track('web_search');
       return WebTools.search(String(input.query || ''));
     }
+    if (toolName === 'list_themes') {
+      const themes = Object.values(VibeOSSkills.THEMES).map(t => ({ id: t.id, title: t.title, summary: t.summary, tokens: Object.keys(t.tokens) }));
+      return { ok: true, themes, current: { theme: Theme.id, custom: Theme.custom, effective: Theme.tokens() },
+               note: 'set_theme takes a theme id, tokens (any name listed, a plain colour or length value), or both' };
+    }
+    if (toolName === 'read_desktop') {
+      onStatus?.('reading the desktop…');
+      try { return await Desktop.read(input); }
+      catch (e) { return { ok: false, error: e.message }; }
+    }
+    if (toolName === 'list_files') {
+      onStatus?.('listing ' + (input.path || 'the workspace') + '…');
+      try {
+        const rel = Files.norm(input.path);
+        const entries = await Files.entries(rel);
+        return { ok: true, path: rel, entries, ...(rel === '' ? { note: 'apps/ holds the dock apps (a .js with a // @title header), data/ what the machine sees at /mnt, system/ the OS; list system/kernel or system/ui for the files that boot' } : {}) };
+      } catch (e) { return { ok: false, error: e.message }; }
+    }
     if (toolName === 'list_apps') {
       onStatus?.('listing apps…');
       const { apps, unlisted } = await Apps.list();
@@ -1620,7 +2093,15 @@ const Agent = {
     if (toolName === 'read_file') {
       onStatus?.('reading ' + input.path + '…');
       try {
-        const text = await Workspace.readPath(input.path);
+        Files.refusePrivate(input.path);
+        let text;
+        try { text = await Workspace.readPath(input.path); }
+        catch (e) {
+          // A miss names what exists, like list_files and search_file do: the
+          // feedback that asked for this named read_file first.
+          if (/^not found:/.test(e.message)) throw new Error(await Files.missing(input.path));
+          throw e;
+        }
         const lines = text.split('\n');
         const from = Math.max(1, input.from || 1), to = Math.min(lines.length, input.to || lines.length);
         const slice = lines.slice(from - 1, to).map((l, i) => `${from + i}: ${l}`).join('\n');
@@ -1629,12 +2110,8 @@ const Agent = {
     }
     if (toolName === 'search_file') {
       onStatus?.('searching ' + input.path + '…');
-      try {
-        const re = new RegExp(input.pattern, 'i');
-        const hits = [];
-        (await Workspace.readPath(input.path)).split('\n').forEach((l, i) => { if (re.test(l) && hits.length < 60) hits.push({ line: i + 1, text: l.slice(0, 200) }); });
-        return { ok: true, path: input.path, hits };
-      } catch (e) { return { ok: false, error: e.message }; }
+      try { return await Files.search(input.path, input.pattern); }
+      catch (e) { return { ok: false, error: e.message }; }
     }
     if (toolName === 'edit_file') {
       onStatus?.('editing ' + input.path + '…');
@@ -1693,8 +2170,9 @@ const Agent = {
       try { localStorage.setItem(RELOAD_NOTE, JSON.stringify({ note, files: forked, at: Date.now() })); } catch {}
       onStatus?.('reloading the desktop…');
       window.__vibeosIntentionalUnload = true;   // our own reload must not trip the leave-page guard
+      const pairing = RemoteBridge.keepAcrossReload();
       setTimeout(() => location.reload(), 400);
-      return { ok: true, note: 'reloading ' + forked.join(' and ') + ' — this turn ends here; the chat shows your note after boot', reloading: forked };
+      return { ok: true, note: 'reloading ' + forked.join(' and ') + ' — this turn ends here; the chat shows your note after boot' + (pairing ? '; the vibeos-mcp pairing resumes after boot, so call again once the page is back' : ''), reloading: forked, pairing: pairing ? 'kept' : 'none' };
     }
     throw new Error('unknown tool: ' + toolName);
   },
