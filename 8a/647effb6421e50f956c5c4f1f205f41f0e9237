@@ -1,0 +1,14 @@
+web/kernel/machine.js
+  h_e9fef506e0f829 127-129,193,196,213-217,1304-1308,1310
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "8a647effb6421e50f956c5c4f1f205f41f0e9237",
+  "prompts": {},
+  "humans": {
+    "h_e9fef506e0f829": {
+      "author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
