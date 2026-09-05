@@ -1,0 +1,14 @@
+web/ui/settings.js
+  h_e9fef506e0f829 695
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "8f3b3e83b0ebb611cb072db6b6b4cf3d1da24312",
+  "prompts": {},
+  "humans": {
+    "h_e9fef506e0f829": {
+      "author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
