@@ -126,10 +126,13 @@ const V86_ASSETS = BASE + 'v86/';
 // by scripts/alpine/build.sh and scripts/debian/build.sh.
 // A build in progress boots from public/debian-dev/ (build.sh copies its
 // output there) by pointing this at new URL('../debian-dev/', location.href).href.
-const DEBIAN_BASE = 'https://d3je35hqch090t.cloudfront.net/debian-4/';
+// image-bases.js (loaded by index.html, not an OS file) overrides this when
+// the disks are served locally — the self-contained image. Absent, or absent
+// an entry, this is unchanged.
+const DEBIAN_BASE = window.__vibeosImageBases?.debian ?? 'https://d3je35hqch090t.cloudfront.net/debian-4/';
 // A build in progress boots from public/alpine-dev/ (git-ignored; build.sh
 // copies its output there) by pointing this at new URL('../alpine-dev/', location.href).href.
-const ALPINE_BASE = 'https://d3je35hqch090t.cloudfront.net/alpine-2/';
+const ALPINE_BASE = window.__vibeosImageBases?.alpine ?? 'https://d3je35hqch090t.cloudfront.net/alpine-2/';
 const IMAGES = {
   alpine: {
     id: 'alpine', label: 'Alpine', blurb: 'streamed 91 MB disk, apk works, usually 20-30 s to a shell — longer on a busy machine',
