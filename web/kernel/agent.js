@@ -196,7 +196,7 @@ const Gen = {
       overlay.querySelector('#keySaveBtn').onclick = () => {
         const k = overlay.querySelector('#keyInput').value.trim();
         this.saveKey(k);
-        if (k) track('key_added');
+        if (k) track('key_added', { via: 'paste' });
         finish();
       };
       overlay.querySelector('#keyCreateBtn').onclick = () => {
@@ -228,7 +228,7 @@ const Gen = {
             },
           });
           this.saveOAuth(tokens);
-          track('key_added');
+          track('key_added', { via: 'codex' });
           finish();
         } catch (e) {
           if (slot.querySelector('#oauthPanel')) {
@@ -524,6 +524,17 @@ const CREATE_APP_DESCRIPTION = CREATE_APP_LEAD + '\n' + APP_CONTRACT;
 // Word for word lib/agent-tools.ts; the test pins them.
 const SEARCH_FILE_DESCRIPTION = 'Find lines matching a regex. path is one file, a directory (system/, system/ui/) or a glob (system/**/*.js, apps/*.js): a directory or glob searches every text file under it and each hit carries file and line; 60 hits at most, binaries and files over 1 MB skipped and named; system/chat.json and the snapshots are never searched or listed. Use before edit_file on a system/ file. A path that matches nothing is refused naming what exists there.';
 const LIST_FILES_DESCRIPTION = 'List the workspace. path is \'\' for the top (apps/, data/, system/) or a directory: apps/, data/, system/, system/kernel, system/ui. Entries carry kind (file|dir), size and modified; under system/ every file the OS loads is listed whether or not a copy is stored, with source (stored: your fork boots next; served: stock) and booted (which one this page runs — stored but booted served means reload_os is pending). A path that does not exist is refused naming what its parent holds.';
+// What a remote agent is told on every pairing, as the MCP server's
+// instructions: not the prompt (aleks: basic instructions), the map. The app
+// contract rides behind it so the two never drift.
+const MCP_INSTRUCTIONS_LEAD = `You are driving vibeOS through vibeos-mcp: a small desktop OS running in one browser tab, with a Linux VM (v86, i686) inside it. Every tool here runs in that tab; you see nothing else of it, so start with read_desktop (windows, dock, machine state; { window } for a window's text, { screen: 'png' } for the VM's VGA screen — there is no screenshot of the desktop itself).
+
+The OS is files in the person's workspace, and you have root on them. system/kernel/*.js never hot-reloads (machine.js the VM, workspace.js the folder and sync, agent.js the model and these tools, boot.js the window registry and the boot); system/ui/*.js is what people see (windows.js, dock.js, chat.js, browser.js, settings.js) and reloads live; system/os.css is every style, and a theme is a [data-theme="id"] block there with a /* @theme id: Title — summary */ header on the line before. A change to the desktop is an edit to one of those files: search_file, read_file around the place, edit_file with an exact unique anchor, then reload_ui for a ui file (live, the turn continues) or reload_os for a kernel file or os.css (the page reloads; call it once, last — the pairing survives it, call again a few seconds later if a call fails right after). Your first edit forks the served file into the workspace; a fork that fails to load is skipped on the next boot and the desktop says so, and write_file('') retires it.
+
+The machine: vm_exec runs a shell line on ttyS0 and returns its output (timeout_s up to 600); /mnt is the workspace's data/ and apps/ flat, /mnt/system a read-only copy of the OS source for cat, grep and diff. Apps are files under apps/: a .js with a // @title header is a dock entry, and create_app writes one and opens it. Generated apps must use the desktop's CSS custom properties (var(--text), var(--panel), var(--accent) …), never hardcoded colours.
+
+Results are JSON. A reply over 128 KB is refused naming the size — narrow the request. Everything you send and read goes through a relay in plaintext, and the token you hold is root on this desktop.`;
+
 const READ_DESKTOP_DESCRIPTION = 'What the desktop looks like, as text: every open window (app id, title, minimized, z-order — first is on top — geometry, whether it is the built-in chat/Browser/Settings or a generated app and its file), the dock entries, the machine pill (VM.state, image, net, tty) and the theme. Pass { window: <title or app id> } for that window\'s body as trimmed text, one line per block (scripts and styles dropped, 8 KB cap); add { dom: true } for its sanitised outerHTML instead (no script, style, link or on* attributes, no javascript: urls, media and form urls replaced by data:, 16 KB cap); either way the value of a password or hidden input is withheld. { screen: \'png\' } is the machine\'s VGA screen as image {mimeType, data} (a jpeg no wider than 1024, under the relay\'s 128 KB frame) with the text console\'s rows as text when it is in text mode. A bitmap of the desktop itself is not available (no html2canvas is vendored): the text and DOM views are the substitute. Everything here is read; nothing runs.';
 
 const PASTE_KEY_SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
@@ -1650,6 +1661,10 @@ const RemoteBridge = {
   originUrl() { return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/mcp/relay'; },
   // override | aws | origin — which relay the next dial goes to.
   get relay() { return this.override() ? 'override' : this.fellBack ? 'origin' : 'aws'; },
+  toolsFrame() {
+    return { tools: TOOL_SCHEMAS, instructions: MCP_INSTRUCTIONS_LEAD + '\n\n' + APP_CONTRACT };
+  },
+
   relayUrl() {
     const override = this.override();
     if (override) return override;
@@ -1767,7 +1782,7 @@ const RemoteBridge = {
       onOpen: () => {
         // Unsolicited, for an agent already waiting; the package also asks on
         // every connect of its own, and `want` is answered every time.
-        this.socket.send(JSON.stringify({ tools: TOOL_SCHEMAS }));
+        this.socket.send(JSON.stringify(this.toolsFrame()));
         this.set('waiting');
       },
       onFrame: raw => this.handle(raw),
@@ -1845,7 +1860,7 @@ const RemoteBridge = {
     if ('paired' in msg) { if (msg.paired) this.connected(); else this.set('waiting'); return; }
     if (msg.want === 'tools') {
       this.connected(typeof msg.agent === 'string' ? msg.agent.slice(0, 80) : '');
-      this.socket.send(JSON.stringify({ tools: TOOL_SCHEMAS }));
+      this.socket.send(JSON.stringify(this.toolsFrame()));
       return;
     }
     if (msg.error && msg.code === 4002) { this.set('waiting'); return; }
