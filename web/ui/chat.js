@@ -81,20 +81,26 @@ export function ChatApp(body, win) {
   // Offer the two things that actually work, as a button rather than a chore.
   const readyLine = () =>
     `Ask for anything. I build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM — whichever fits.<br><span class="tiny dimmer">${Gen.model}</span>`;
+  // Three shapes: a model is connected; no model but an agent drives the
+  // desktop through vibeos-mcp (then this box is optional, not missing); or
+  // nothing yet. The agent's name is the MCP client's own string: textContent.
+  let introEl = null;
   const paintIntro = () => {
-    const intro = bubble('vibeos', Gen.available ? readyLine()
+    const agent = RemoteBridge.state === 'connected';
+    const html = Gen.available ? readyLine()
+      : agent ? `<b class="part yes"></b> is connected through vibeos-mcp and drives this desktop — talk to it in its own window.<br>
+         <span class="tiny dimmer">This box can run a second model beside it.</span> <span class="row" style="margin-top:8px"><button class="btn sm" id="chatConnect">Connect a model here too</button></span>`
       : `<b class="part">No model connected yet.</b> Prompts fall back to stock modules until one is.<br>
-         <span class="row" style="margin-top:8px"><button class="btn p sm" id="chatConnect">Connect a model</button></span>`);
-    const connectBtn = intro.querySelector('#chatConnect');
-    if (connectBtn) connectBtn.onclick = async () => {
-      await Gen.askForKey();
-      if (Gen.available) intro.innerHTML = readyLine();
-    };
-    // A remote agent (vibeos-mcp) is driven from its own window, not this
-    // box; this chat's agent keeps working beside it. The name is the MCP
-    // client's own string: textContent.
-    if (RemoteBridge.state === 'connected') line(`${RemoteBridge.detail} is connected through vibeos-mcp and drives this desktop — talk to it in its own window. This chat keeps working alongside it; edits can come from either.`);
+         <span class="row" style="margin-top:8px"><button class="btn p sm" id="chatConnect">Connect a model</button></span>`;
+    if (introEl && introEl.isConnected) { introEl.innerHTML = html; }
+    else introEl = bubble('vibeos', html);
+    if (agent && !Gen.available) introEl.querySelector('b').textContent = RemoteBridge.detail || 'your agent';
+    const connectBtn = introEl.querySelector('#chatConnect');
+    if (connectBtn) connectBtn.onclick = async () => { await Gen.askForKey(); paintIntro(); };
   };
+  // The intro follows the bridge: the onboarding modal closes itself when an
+  // agent connects, and the chat behind it must not keep saying "no model".
+  Windows.onDispose(win, RemoteBridge.on(() => { if (introEl) paintIntro(); }));
 
   const paintReload = ({ note, files, source }) => {
     const b = bubble('vibeos', `<b>reloaded</b> <span class="tiny dimmer">${source === 'stored' ? 'running your copy' : 'running the stock desktop'}</span><span class="tiny dimmer" id="files"></span><div id="note"></div>`);
