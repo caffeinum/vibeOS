@@ -1,0 +1,20 @@
+web/kernel/agent.js
+  h_e9fef506e0f829 433,1873,1926,1943-1945,1950-1957,1959,1963-1967,1977-1978,1980-1982,1984-1986,2028-2029,2341-2352
+web/kernel/workspace.js
+  h_e9fef506e0f829 374-395,422-425
+web/ui/chat.js
+  h_e9fef506e0f829 83,97-99,207-227,233
+web/ui/windows.js
+  h_e9fef506e0f829 98-100,251-273,277,279-280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "415a7da1a591e8d7a70b09733fd058cf5b31138d",
+  "prompts": {},
+  "humans": {
+    "h_e9fef506e0f829": {
+      "author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
