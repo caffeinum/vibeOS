@@ -208,8 +208,18 @@ export function BrowserApp(body) {
         searchedFor = host;
         return open(via, push);
       }
-      const r = await (guest ? guestFetch(url) : proxyFetch(url));
-      track('browser_result', { kind, ok: r.ok, status: r.status, seconds: Math.round((Date.now() - t0) / 1000) });
+      let r = await (guest ? guestFetch(url) : proxyFetch(url));
+      // Marginalia throttles softly: a 1 KB "Wait For A Moment" page instead
+      // of results, and the same query answers a second later. One retry,
+      // then the status says what happened rather than showing a blank wait.
+      let throttled = false;
+      if (kind === 'search' && r.ok && /Wait For A Moment/i.test(r.text)) {
+        status.textContent = 'the search engine asked to wait a moment — retrying…';
+        await new Promise(res => setTimeout(res, 1500));
+        r = await proxyFetch(url);
+        throttled = /Wait For A Moment/i.test(r.text);
+      }
+      track('browser_result', { kind, ok: r.ok, status: r.status, seconds: Math.round((Date.now() - t0) / 1000), throttled });
       const { type, finalUrl, text } = r;
       if (!r.ok) {
         let msg = text;
@@ -243,7 +253,8 @@ export function BrowserApp(body) {
       status.innerHTML = '<span class="dimmer"></span>';
       status.querySelector('.dimmer').textContent = `${type.split(';')[0] || 'ok'} · ${(text.length / 1024).toFixed(0)} KB · `
         + (guest ? `served from inside the machine (${r.via}) · scripts off · assets not loaded` : 'scripts disabled')
-        + (searchedFor && kind === 'search' ? ` · ${searchedFor} needs JavaScript, so this search ran on marginalia` : '');
+        + (searchedFor && kind === 'search' ? ` · ${searchedFor} needs JavaScript, so this search ran on marginalia` : '')
+        + (throttled ? ' · marginalia is throttling this address right now: wait a few seconds and search again' : '');
       searchedFor = '';
     } catch (e) {
       track('browser_result', { kind, ok: false, status: 0, seconds: Math.round((Date.now() - t0) / 1000) });
