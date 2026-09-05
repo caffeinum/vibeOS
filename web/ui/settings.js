@@ -692,7 +692,7 @@ export function CapsApp(body, win) {
 function mcpPane(body, win) {
   const state = body.querySelector('#mcpState'), cmd = body.querySelector('#mcpCmd'), code = body.querySelector('#mcpCommand');
   const trust = body.querySelector('#mcpTrust'), pair = body.querySelector('#mcpPair'), retry = body.querySelector('#mcpRetry'), revoke = body.querySelector('#mcpRevoke'), copy = body.querySelector('#mcpCopy');
-  trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token lives in this tab only and dies with it.';
+  trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token is remembered in this browser for seven days — Forget this agent ends it, closing the tab does not.';
   const refusal = RemoteBridge.refusal();
   let probe = null;
   // Which relay this tab is on, and the instance that answered. On the
