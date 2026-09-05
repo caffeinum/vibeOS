@@ -1,0 +1,107 @@
+name: publish the self-contained image
+
+# The self-contained vibeOS image is BUILT from caffeinum/vibeos-landing, but
+# it is PUBLISHED from here, because ghcr.io/caffeinum/vibeos is linked to this
+# repo: only this repo's GITHUB_TOKEN can write that package. vibeos-landing's
+# own workflow builds and verifies the same image on every tag; it just cannot
+# push it.
+#
+# The self-contained image and the 1.x dev container are the same product, so
+# they share a package on purpose rather than sitting beside each other.
+#
+# vibeos-landing is PRIVATE, so checking it out needs a credential this repo's
+# GITHUB_TOKEN does not have. LANDING_READ_TOKEN is a fine-grained PAT with
+# contents:read on that one repo and nothing else. Without it this workflow
+# fails on the first step with a clear message rather than a confusing 404.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'tag in caffeinum/vibeos-landing to build (e.g. 2.0.0-rc1)'
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Fail in seconds, not after a six-minute build and ~300 MB of chunk
+      # downloads. Every failure of this publish so far has been an access
+      # problem discovered at the very end.
+      - name: check the source is readable before building anything
+        env:
+          TOKEN: ${{ secrets.LANDING_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error::secrets.LANDING_READ_TOKEN is not set. It needs a fine-grained PAT with contents:read on caffeinum/vibeos-landing — that repo is private and this repo's GITHUB_TOKEN cannot read it."
+            exit 1
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://api.github.com/repos/caffeinum/vibeos-landing/git/ref/tags/${{ inputs.ref }}")
+          [ "$code" = 200 ] || {
+            echo "::error::cannot read tag ${{ inputs.ref }} in caffeinum/vibeos-landing (HTTP $code). Check the token's repository access and that the tag exists."
+            exit 1
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          repository: caffeinum/vibeos-landing
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.LANDING_READ_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # The input tag, and nothing else. No `latest`: that points at the
+          # 1.x dev container and must keep doing so until 2.0.0 final, when
+          # someone adds it deliberately.
+          tags: ghcr.io/caffeinum/vibeos:${{ inputs.ref }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A green push is not evidence the artifact is right — assert what was
+      # silently wrong while this image was built: the disks have to actually
+      # be in it (bundling only boot.txt's chunks gives one that boots and then
+      # 404s on first real use), and the app has to be wired to read them (a
+      # generated image-bases.js nobody loads is the silent version of not
+      # having written it).
+      - name: verify the published image
+        env:
+          IMAGE: ghcr.io/caffeinum/vibeos@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull --quiet "$IMAGE" >/dev/null
+          cid=$(docker run -d -p 5210:3000 "$IMAGE")
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+
+          for img in alpine debian; do
+            n=$(docker exec "$cid" sh -lc "ls /app/public/images/$img | wc -l")
+            echo "$img: $n files"
+            [ "$n" -gt 2000 ] || { echo "::error::$img looks like a partial disk ($n files)"; exit 1; }
+          done
+
+          docker exec "$cid" sh -lc 'grep -q __vibeosImageBases /app/public/app/image-bases.js'
+          docker exec "$cid" sh -lc 'grep -q image-bases.js   /app/public/app/index.html'
+
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://localhost:5210/api/health && break
+            [ "$i" = 30 ] && { echo "::error::the container never answered /api/health"; docker logs "$cid"; exit 1; }
+            sleep 2
+          done
+          curl -fsS http://localhost:5210/api/health; echo
+          curl -fsS -o /dev/null http://localhost:5210/images/alpine/bzImage
+          curl -fsS -o /dev/null http://localhost:5210/images/debian/bzImage
+          echo "ok: disks present, app wired to them, server answering"
