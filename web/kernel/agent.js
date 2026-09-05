@@ -97,23 +97,31 @@ const Gen = {
       overlay.className = 'key-modal-overlay';
       overlay.innerHTML = `
         <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="keyModalTitle">
-          <h2 id="keyModalTitle">vibeOS needs AI features to work.</h2>
-          <p class="small dimmer" id="keyModalSubtitle" style="margin:0">Sign in with your OpenAI account, or bring your own key.</p>
+          <h2 id="keyModalTitle">vibeOS needs an agent.</h2>
+          <p class="small dimmer" id="keyModalSubtitle" style="margin:0">Connect the one you already have, or sign in.</p>
           <div class="key-modal-actions col">
             <div class="col" id="keyModalStep1">
-              <button type="button" class="btn p" id="keyLoginBtn">Login with OpenAI</button>
+              <button type="button" class="btn p" id="keyConnectBtn">Connect your agent</button>
+              <div class="col" id="keyConnectPanel" hidden>
+                <p class="tiny dimmer" style="margin:0">Claude Code, Cursor or Codex drives this desktop through MCP. Paste this into your terminal, then talk to your agent in its own window:</p>
+                <code class="mono" id="keyConnectCmd" style="display:block;white-space:pre-wrap;word-break:break-all;padding:8px;border:1px solid var(--line);border-radius:var(--radius-sm)"></code>
+                <div class="row" style="gap:6px"><button type="button" class="btn sm" id="keyConnectCopy">Copy</button><span class="tiny dimmer" id="keyConnectState"></span></div>
+                <p class="tiny" style="margin:0;color:var(--no)">An agent with this line has root on this desktop: it can edit the OS and run commands in the machine.</p>
+              </div>
+              <p class="note" id="keyConnectError" hidden style="margin:0;color:var(--no)"></p>
+              <button type="button" class="btn" id="keyLoginBtn">Login with Codex</button>
               <div id="keyOAuthSlot"></div>
               <p class="note oauth-error" id="keyOAuthError" hidden style="margin:0;color:var(--no)"></p>
+              <button type="button" class="btn sm skip" id="keyOtherBtn">Other options</button>
+            </div>
+            <div class="col" id="keyModalStep2" hidden>
+              <button type="button" class="btn sm skip" id="keyBackBtn">← Back</button>
               <button type="button" class="btn" id="keyPasteBtn">Paste API key (OpenAI / Anthropic)</button>
               <div class="col" id="keyPasteForm" hidden>
                 <input type="password" id="keyInput" placeholder="sk-... or sk-ant-..." autocomplete="off" spellcheck="false">
                 <p class="tiny dimmer" style="margin:0">Stored only in this browser, sent straight to the provider — never to vibeos.sh.</p>
                 <button type="button" class="btn p sm" id="keySaveBtn">Save</button>
               </div>
-              <button type="button" class="btn" id="keyOtherBtn">Other options</button>
-            </div>
-            <div class="col" id="keyModalStep2" hidden>
-              <button type="button" class="btn sm skip" id="keyBackBtn">← Back</button>
               <button type="button" class="btn" id="keyCreateBtn">Create account</button>
               <p class="note" id="keyCreateNote" hidden style="margin:0">
                 Coming soon! <a href="/get-access">Subscribe to waitlist</a> to know it first.
@@ -124,8 +132,10 @@ const Gen = {
         </div>`;
       document.body.appendChild(overlay);
 
+      let offBridge = null;
       const finish = () => {
         document.removeEventListener('keydown', onKey);
+        if (offBridge) offBridge();
         overlay.remove();
         this._askModal = null;
         resolve(this.available);
@@ -143,8 +153,37 @@ const Gen = {
         overlay.querySelector('#keyModalStep1').hidden = false;
         overlay.querySelector('#keyModalStep2').hidden = true;
         overlay.querySelector('#keyCreateNote').hidden = true;
-        overlay.querySelector('#keyModalSubtitle').textContent =
-          'Sign in with your OpenAI account, or bring your own key.';
+        overlay.querySelector('#keyModalSubtitle').textContent = 'Connect the one you already have, or sign in.';
+      };
+      // The first door: an agent the person already pays for. Pairing mints a
+      // token for this tab; the modal closes by itself the moment the agent
+      // connects, and says so if this page cannot pair (the static mirror has
+      // no relay; a host shell refuses on purpose).
+      overlay.querySelector('#keyConnectBtn').onclick = async () => {
+        track('connect_agent_click');
+        const btn = overlay.querySelector('#keyConnectBtn'), panel = overlay.querySelector('#keyConnectPanel');
+        const err = overlay.querySelector('#keyConnectError'), cmd = overlay.querySelector('#keyConnectCmd'), st = overlay.querySelector('#keyConnectState');
+        err.hidden = true; btn.disabled = true;
+        if (!RemoteBridge.token) {
+          const ok = await RemoteBridge.pair();
+          if (!ok) { err.textContent = RemoteBridge.detail || 'pairing is not available here'; err.hidden = false; btn.disabled = false; return; }
+        }
+        cmd.textContent = RemoteBridge.command();
+        panel.hidden = false;
+        const paint = (state, detail) => {
+          st.textContent = state === 'connected' ? (detail || 'an agent') + ' connected'
+            : state === 'waiting' ? 'waiting for your agent…'
+            : state === 'pairing' ? detail || 'pairing…'
+            : state === 'error' ? detail : '';
+          if (state === 'connected') { track('key_added', { via: 'mcp' }); finish(); }
+        };
+        offBridge = RemoteBridge.on(paint); paint(RemoteBridge.state, RemoteBridge.detail);
+      };
+      overlay.querySelector('#keyConnectCopy').onclick = () => {
+        const text = overlay.querySelector('#keyConnectCmd').textContent;
+        navigator.clipboard.writeText(text).then(
+          () => { overlay.querySelector('#keyConnectCopy').textContent = 'Copied ✓'; },
+          () => { overlay.querySelector('#keyConnectState').textContent = 'the browser refused the clipboard — select the line and copy it'; });
       };
       overlay.querySelector('#keyPasteBtn').onclick = () => {
         overlay.querySelector('#keyPasteForm').hidden = false;
