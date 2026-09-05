@@ -190,7 +190,7 @@ function createAppMount(body) {
   return mount;
 }
 
-function createAppApi(provider, mount, title) {
+function createAppApi(provider, mount, title, requires = []) {
   let resizeCb = null;
   const ro = new ResizeObserver(entries => {
     const { width, height } = entries[0].contentRect;
@@ -201,7 +201,8 @@ function createAppApi(provider, mount, title) {
   ro.observe(mount);
   Windows.onDispose(mount.closest('.win'), () => ro.disconnect());
   const streams = new Set();
-  Windows.onDispose(mount.closest('.win'), () => { for (const s of streams) s.close(); });
+  let closed = false;
+  Windows.onDispose(mount.closest('.win'), () => { closed = true; for (const s of streams) s.close(); });
   return {
     async list(...args) { return provider.list(...args); },
     async shell(...args) { return provider.shell(...args); },
@@ -225,6 +226,22 @@ function createAppApi(provider, mount, title) {
         return stream;
       },
     },
+    // The connected model, one plain completion (Gen.ask, kernel/agent.js):
+    // no tools, the app's own system line. Gated on the header the way the
+    // dock and the upsell gate the window, so an app that did not declare
+    // ai is told which line to add rather than reaching the person's key
+    // through a capability it never claimed. Refused once the window is
+    // closed, like api.net's streams end with it.
+    ai: {
+      generate(opts) {
+        if (!requires.includes('ai')) return Promise.reject(new Error('this app did not declare // @requires ai — add ai to its // @requires header to call api.ai.generate'));
+        // A window that is gone has nothing to paint into: a timer or a
+        // stream callback that outlived it still posted to the provider and
+        // spent the person's tokens on a reply nobody saw.
+        if (closed) return Promise.reject(new Error('api.ai.generate: the window "' + title + '" is closed'));
+        return Gen.ask(opts);
+      },
+    },
     onResize(fn) {
       resizeCb = fn;
       fn(mount.clientWidth, mount.clientHeight);
@@ -235,8 +252,8 @@ function createAppApi(provider, mount, title) {
   };
 }
 
-async function runModule(source, mount, provider, title) {
-  const api = createAppApi(provider, mount, title);
+async function runModule(source, mount, provider, title, requires) {
+  const api = createAppApi(provider, mount, title, requires);
   const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
   try {
     const mod = await import(url);
@@ -284,28 +301,46 @@ export function launchApp(app) {
 export function AppWindow(body, win, { app }) {
   const missing = missingCaps(app.requires);
   const mount = createAppMount(body);
+  const requires = app.requires || [];
+  // The cap watchers, undone the moment the app starts: an app that has
+  // run owns its DOM, and a watcher left subscribed painted the upsell OVER
+  // a running app (innerHTML) on the next cap loss — forget the key while
+  // an ai app runs, or VM.restart/a restore under a shell app — and, the
+  // start being one-shot, the window was dead when the cap came back.
+  // main called off() before start(); the ai watcher had dropped that.
+  const offs = [];
+  let started = false;
   const start = async () => {
-    try { await runModule(app.source, mount, CAP, app.title); }
+    if (started) return;
+    started = true;
+    for (const off of offs.splice(0)) off();
+    // Whatever the upsell painted goes, and the badge says what the window
+    // is now: an app that appends painted its first reply under "Connect a
+    // model", and the chrome still read "blocked".
+    mount.textContent = '';
+    if (win && win.rec && win.rec.spec.badge === 'blocked') { win.rec.spec.badge = 'app'; win.requestUpdate(); }
+    try { await runModule(app.source, mount, CAP, app.title, requires); }
     catch (e) { mount.textContent = ''; const m = document.createElement('p'); m.className = 'no small'; m.textContent = e.message; mount.appendChild(m); }
   };
   if (!missing.length) return start();
   renderUpsell(mount, missing);
-  // Blocked only on the machine while it boots: open the app the moment
-  // it is ready instead of leaving a "blocked" window behind. The
-  // subscription is the window's: closed or repainted, it lets go. The tty
-  // comes up after 'ready' (its own state, on every emit), so the check is
-  // "nothing missing any more", not the state name.
+  // Blocked only on the machine while it boots, or on a model nobody has
+  // connected yet: open the app the moment the cap is there instead of
+  // leaving a "blocked" window behind. The subscriptions are the window's:
+  // closed or repainted, it lets go. The tty comes up after 'ready' (its
+  // own state, on every emit), so the check is "nothing missing any more",
+  // not the state name.
   // `some`, not `every`: an app on shell AND net while the relay is off is
   // still waiting on the machine, and stayed on "still booting" forever when
   // 'net' in the list switched the watcher off.
-  if (missing.some(c => VM_CAPS.includes(c)) && VM.state !== 'failed' && VM.state !== 'unavailable') {
-    const off = VM.on(() => {
-      const still = missingCaps(app.requires);
-      if (!still.length) { off(); start(); return; }
-      renderUpsell(mount, still);
-    });
-    Windows.onDispose(win, off);
-  }
+  const recheck = () => {
+    const still = missingCaps(requires);
+    if (!still.length) { start(); return; }
+    renderUpsell(mount, still);
+  };
+  const watch = off => { offs.push(off); Windows.onDispose(win, off); };
+  if (missing.some(c => VM_CAPS.includes(c)) && VM.state !== 'failed' && VM.state !== 'unavailable') watch(VM.on(recheck));
+  if (missing.includes('ai')) watch(Gen.on(recheck));
 }
 
 // The capabilities the VM provides once it is up, as against the native build's.
@@ -319,7 +354,24 @@ function renderUpsell(mount, missing) {
   // the exact apps this OS exists to run. Say what is actually true.
   const vmCaps = missing.filter(c => VM_CAPS.includes(c));
   const net = missing.includes('net');
-  const nativeOnly = missing.filter(c => !VM_CAPS.includes(c) && c !== 'net');
+  const nativeOnly = missing.filter(c => !VM_CAPS.includes(c) && c !== 'net' && c !== 'ai');
+  // ai is a model nobody has connected: the same door the chat offers, and
+  // this window starts by itself once one is there (Gen.on in AppWindow).
+  // First, whatever else is missing: a model is the one thing the person
+  // can fix from here.
+  if (missing.includes('ai')) {
+    const others = missing.filter(c => c !== 'ai');
+    mount.innerHTML = `
+      <div class="upsell">
+        <h3 style="margin:0 0 6px">Connect a model</h3>
+        <p class="small muted" style="margin:0 0 10px">This app asks a model (api.ai), and none is connected yet: paste an API key or sign in, and it runs right here. <span class="others"></span></p>
+        <button class="btn p sm" id="upsellConnect">Connect a model</button>
+      </div>`;
+    // The other caps are header words from a file the guest can write: text.
+    mount.querySelector('.others').textContent = others.length ? `It also needs ${others.join(' and ')}.` : '';
+    mount.querySelector('#upsellConnect').onclick = () => Gen.askForKey();
+    return;
+  }
   // net is neither the machine's nor the native build's: it is the relay,
   // and the relay is a setting. Say that instead of sending people to a
   // binary for a switch in Settings — alone, or under the machine's line

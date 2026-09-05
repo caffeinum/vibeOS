@@ -452,6 +452,11 @@ const missingCaps = reqs => reqs.filter(r => !CAP.supports[r]);
 // A "Console log viewer" with @requires none is the accepted false positive:
 // it is refused too, and the message says what to change.
 function lintApp(title, requires, source) {
+  // An app that declares ai and never asks the model is the manual logger
+  // the calorie chip used to produce, with a connect prompt in front of it.
+  if (requires.includes('ai') && !/api\.ai\b/.test(source)) {
+    return { rule: 'unused_ai', error: 'declares // @requires ai but never calls api.ai.generate(). Ask the model through api.ai.generate({ prompt, images, json }) or drop the requirement.' };
+  }
   if (/api\.(shell|tty)\s*\(/.test(source)) return null;
   const machine = `The machine is ${VM.state}.`;
   if (/\b(terminal|term|shell|console)\b/i.test(title)) {

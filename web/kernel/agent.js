@@ -53,7 +53,19 @@ const Gen = {
     this.setProvider();
     return this.key;
   },
+  // Who is told when the model changes: the dock (an app that needs ai is
+  // greyed until one is connected), a blocked window waiting for one, the
+  // Capabilities pane. Announced from setProvider when anything a reader
+  // can see changed, the way VM.on announces the machine.
+  listeners: new Set(),
+  on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
+  emit() { this.listeners.forEach(fn => { try { fn(this); } catch (e) { console.error('Gen listener failed:', e); } }); },
   setProvider() {
+    const was = `${this.available}|${this.provider}|${this.model}|${this.viaServer}`;
+    this._setProvider();
+    if (was !== `${this.available}|${this.provider}|${this.model}|${this.viaServer}`) this.emit();
+  },
+  _setProvider() {
     if (this.viaServer) {
       this.available = true;
       return;
@@ -75,6 +87,11 @@ const Gen = {
     this.model = '';
     this.available = false;
   },
+  // A model an app can call: a pasted key or a ChatGPT login — the page
+  // posts to the provider itself (or to the codex proxy). The local demo
+  // server's /api/generate takes a prompt and answers a module, so it is
+  // not one. CAP.supports.ai reads this.
+  get forApps() { return this.available && !this.viaServer; },
   saveKey(k) {
     this.key = (k || '').trim();
     try { k ? localStorage.setItem('vibeos-key', this.key) : localStorage.removeItem('vibeos-key'); } catch {}
@@ -313,7 +330,93 @@ const Gen = {
     if (this.oauth) return Agent.run(prompt, history, onStatus, images);
     throw new Error('no model configured');
   },
+
+  /* One plain completion for a window app (api.ai.generate): no tools, not
+     the app-builder prompt — the app's own system line, or a one-line
+     default. images are data urls (a canvas frame); json: true asks for one
+     JSON object and returns it parsed, a reply that does not parse throws
+     naming its first 120 characters. Every provider error is the provider's
+     own words with its status. The local demo server has no such route and
+     answers modules, so it is not a model here. */
+  ASK_SYSTEM: 'You answer for a small app running on a desktop; answer only what is asked.',
+  ASK_MAX_TOKENS: 1000, ASK_TOKENS_CAP: 4000,
+  async ask(opts) {
+    if (!opts || typeof opts !== 'object') throw new Error('ask: pass { prompt, system, images, json, maxTokens }');
+    const { prompt, json = false } = opts;
+    if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('ask: prompt must be a non-empty string');
+    if (opts.system !== undefined && (typeof opts.system !== 'string' || !opts.system.trim())) throw new Error('ask: system must be a non-empty string; leave it out for the default');
+    if (opts.images !== undefined && !Array.isArray(opts.images)) throw new Error('ask: images must be an array of data urls, got ' + (typeof opts.images === 'string' ? 'a string — wrap it: images: [dataUrl]' : typeof opts.images));
+    if (opts.maxTokens !== undefined && (!Number.isInteger(opts.maxTokens) || opts.maxTokens <= 0)) throw new Error('ask: maxTokens must be a positive integer');
+    const maxTokens = Math.min(opts.maxTokens || this.ASK_MAX_TOKENS, this.ASK_TOKENS_CAP);
+    const images = (opts.images || []).map(askImage);
+    const system = (opts.system !== undefined ? opts.system : this.ASK_SYSTEM) + (json ? '\nReply with exactly one JSON object and nothing else: no prose, no code fence.' : '');
+    if (!this.forApps) throw new Error('no model connected');
+    const provider = this.provider;
+    let text;
+    try {
+      text = provider === 'anthropic' ? await this.askAnthropic(system, prompt, images, maxTokens)
+           : provider === 'openai' ? await this.askOpenAI(system, prompt, images, maxTokens)
+           : provider === 'openai-codex' ? await this.askCodex(system, prompt, images, maxTokens)
+           : (() => { throw new Error('no model connected'); })();
+    } catch (e) {
+      track('app_ai_call', { provider, images: images.length, ok: false });
+      throw e;
+    }
+    track('app_ai_call', { provider, images: images.length, ok: true });
+    if (!json) return text;
+    let body = text.trim();
+    if (body.startsWith('```')) body = body.split('\n').slice(1).join('\n').replace(/```\s*$/, '').trim();
+    try { return JSON.parse(body); }
+    catch { throw new Error('the model did not answer with JSON: ' + text.trim().slice(0, 120)); }
+  },
+  async askAnthropic(system, prompt, images, maxTokens) {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': this.key,
+                 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({ model: this.model, max_tokens: maxTokens, system,
+        messages: [{ role: 'user', content: Agent.userContent('anthropic', prompt, images) }] }),
+    });
+    const j = await jsonOf(r, 'anthropic');
+    if (!r.ok) throw new Error(`anthropic ${r.status}: ${j.error?.message || 'request failed'}`);
+    if (j.stop_reason === 'max_tokens') throw new Error(`the reply was cut off at maxTokens (${maxTokens})`);
+    return (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  },
+  // /v1/responses, as the agent (stepOpenAI): chat completions is what
+  // gpt-6-astra refuses, and the input_image part is the same shape.
+  async askOpenAI(system, prompt, images, maxTokens) {
+    const r = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + this.key },
+      body: JSON.stringify({ model: this.model, max_output_tokens: maxTokens, store: false, instructions: system,
+        input: [{ role: 'user', content: Agent.userContent('responses', prompt, images) }] }),
+    });
+    const j = await jsonOf(r, 'openai');
+    if (!r.ok) throw new Error(`openai ${r.status}: ${j.error?.message || 'request failed'}`);
+    if (j.status === 'incomplete' && j.incomplete_details?.reason === 'max_output_tokens') throw new Error(`the reply was cut off at maxTokens (${maxTokens})`);
+    if (!Array.isArray(j.output)) throw new Error('openai answered with no output items (status ' + j.status + ')');
+    return j.output.filter(o => o.type === 'message').flatMap(o => o.content || []).filter(c => c.type === 'output_text').map(c => c.text).join('');
+  },
+  // The codex proxy (app/api/openai/generate) with { ask }: the route runs
+  // the same generateText with no tools and this system, and answers { text }.
+  async askCodex(system, prompt, images, maxTokens) {
+    const j = await Agent.callServer(Object.assign(
+      { ask: { system, maxTokens }, messages: [{ role: 'user', content: Agent.userContent('sdk', prompt, images) }] },
+      this.codexModel ? { model: this.codexModel } : {}));
+    if (typeof j.text !== 'string') throw new Error('the codex proxy answered with no text');
+    return j.text;
+  },
 };
+
+// One picture for Gen.ask, from a data url string or { dataUrl }: the three
+// transport shapes (Agent.userContent) want the media type and the bare
+// base64 as well, and an app has only the url a canvas gave it.
+function askImage(img) {
+  const dataUrl = typeof img === 'string' ? img : img && img.dataUrl;
+  const m = typeof dataUrl === 'string' && dataUrl.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) throw new Error('ask: each image must be a base64 data url of a jpeg, png, webp or gif (canvas.toDataURL), got ' + (typeof dataUrl === 'string' ? dataUrl.slice(0, 40) : typeof dataUrl));
+  return { dataUrl, mediaType: m[1], data: m[2] };
+}
 
 // Paste-key path only — talks to the provider directly with one-shot codegen.
 // The prompts describe the BusyBox shell; swap that line for whatever is booted.
@@ -502,13 +605,14 @@ function forImage(prompt) {
 const APP_CONTRACT = `// @title <Short Name>
 // @target browser
 // @requires <space-separated caps, or none>
-Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs), net (raw TCP through the relay). Use none unless needed.
+Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs), net (raw TCP through the relay), ai (the connected model, api.ai.generate). Use none unless needed.
 Optional fourth header, where and how big the window opens: // @geometry <top-left|top-right|bottom-left|bottom-right> [<w>x<h>] or // @geometry <x>,<y>,<w>,<h> or // @geometry <w>x<h> alone (px; without it the window cascades at 430x320; a window is at least 300x180, is kept on screen under the menubar and clear of the dock, and is no bigger than the desktop). A helper, mascot or widget "in the corner of the screen" is a small window with a corner geometry, e.g. // @geometry bottom-right 300x220 — never position:fixed or a transform to escape the window.
 Then: export default function (mount, api) { ... }
 mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size. api.mountSize() -> {width,height}.
 api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): one-shot commands. Waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app that uses it and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted — those want api.tty(). List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
 api.tty() -> { write(bytesOrString), onData(fn) -> off, resize(cols, rows), close() } (needs tty): a terminal is api.tty(): bytes both ways, ctrl-c, top, nano, passwords work; api.shell is for one-shot commands. It is its own shell on the machine's second serial line, not the one api.shell and the agent share, so a cd there stays there. The line echoes what you write: paint what onData delivers (\\r, \\n, \\b and ANSI escapes; answer \\x1b[6n with \\x1b[row;colR or vi and ash wait on it) instead of echoing keys yourself; send Enter as \\r, Ctrl-C as \\x03, arrows as \\x1b[A..D, and resize(cols, rows) when the pane changes. One tty per machine: while the built-in Terminal or another app holds it, api.tty() throws naming the holder — show that message; closing that window releases it.
 api.net.connect(host, port) -> { write(bytesOrString), onData(fn) -> off, onClose(fn) -> off, close(), state, reason } (needs net): opens raw TCP through the relay for a TCP client — a redis, irc or smtp toy; http stays on the proxy and the Browser, not this. Plain TCP only (no tls option; https means fetch or curl in the machine). localhost, private and loopback addresses and ports outside the relay's list (80, 443, 21, 22, 70, 1965, 3000, 8080, 8443) throw naming the rule; the relay closes a stream it refuses and onClose says why. The relay is a serverless function that ends about every 13 minutes: every open stream then closes with "network error: the relay reconnected and the connection was lost", so a long-lived client (irc, redis) must reconnect from onClose. A write after close throws. Closing the window closes the connection.
+api.ai.generate({ prompt, images?, json?, system?, maxTokens? }) -> Promise<string | object> (needs ai): the model connected to this desktop, one plain completion with no tools. Anything that needs judgment — identify what is in a picture, estimate, summarise, classify, write — is a call to it, never a keyword table, a lookup of your own, or a "cannot do this in the browser" note. images is an array of data urls (canvas.toDataURL('image/jpeg') of a video frame, a file read as a data url); json: true asks for one JSON object and returns it parsed (name the keys in prompt); system replaces the one-line default. The reply is text the app shows with textContent; it rejects with the provider's own error — show that too. A window that needs it declares // @requires ai and shows a connect prompt while no model is present, then runs when one is.
 
 Layout rules (required):
 - Root element: width:100%; height:100%; box-sizing:border-box; display:flex; flex-direction:column; overflow:hidden. No document scroll, no min-height larger than the window, no fat browser scrollbars on mount.

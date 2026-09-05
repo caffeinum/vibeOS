@@ -643,6 +643,7 @@ export function CapsApp(body, win) {
     ['Run YOUR shell',        'shell',    'Never. The Terminal runs a real Linux, but on a virtual disk.'],
     ['Your processes',        'process',  'Workers give real concurrency; host processes are out of reach.'],
     ['Arbitrary REST APIs',   'net',      'Blocked without CORS headers. WebSockets are not CORS-bound.'],
+    ['A model for apps',      'ai',       'api.ai.generate: a pasted key or a ChatGPT login. Settings › Model.'],
     ['USB devices',           'usb',      'WebUSB, user gesture, Chromium only.'],
     ['Serial devices',        'serial',   'WebSerial, Chromium only.'],
     ['HID devices',           'hid',      'WebHID, Chromium only.'],
