@@ -170,6 +170,7 @@ const Gen = {
         cmd.textContent = RemoteBridge.command();
         panel.hidden = false;
         const paint = (state, detail) => {
+          if (RemoteBridge.token) cmd.textContent = RemoteBridge.command();
           st.textContent = state === 'connected' ? (detail || 'an agent') + ' connected'
             : state === 'waiting' ? 'waiting for your agent…'
             : state === 'pairing' ? detail || 'pairing…'
@@ -929,9 +930,21 @@ async function jsonOf(r, who) {
 
 let remoteToken = null;
 
-// The relay's one post-hello frame, byte for byte (lib/mcp-relay.ts REVOKE_FRAME).
-const MCP_REVOKE_FRAME = '{"revoke":true}';
+// The revoke is a hello with the token and `revoke: true` (lib/mcp-relay.ts
+// revokeFrame, the same bytes): it carries the token, so it does not depend
+// on the relay still holding this socket's row — the byte-exact revoke frame
+// did, and on the durable relay a socket that closed right behind it raced
+// its own $disconnect and lost the revoke half the time (measured 6 in 12).
+const mcpRevokeFrame = token => JSON.stringify({ hello: 'tab', token, revoke: true });
+// API Gateway's message limit: a larger reply closes the SENDER 1009 and the
+// agent reads "peer not connected" for a result that was merely big.
+const MCP_FRAME_MAX = 128 * 1024;
 const MCP_TOKEN_RE = /^[0-9a-f]{64}$/;
+// The durable relay (infra/mcp-relay: API Gateway WebSockets, pairing rows in
+// DynamoDB). The page is static, so the url is a constant like NET_DEFAULT in
+// machine.js; the same-origin /api/mcp/relay is the fallback when this one
+// cannot be dialed, and `vibeos-mcp-relay` in localStorage overrides both.
+const MCP_RELAY_URL = 'wss://2yetm9bvy2.execute-api.us-east-1.amazonaws.com/prod';
 
 // A WebSocket that redials in place, the shape of RelaySocket without the
 // WISP stream bookkeeping: the relay is a serverless function that ends at
@@ -949,10 +962,14 @@ class RemoteSocket {
   static delays = [500, 1000, 2000, 5000, 10000, 30000];
   static CAP_MS = 30000;
 
-  constructor(url, { hello, onOpen, onFrame, onGap, onEnd }) {
+  constructor(url, { hello, onOpen, onFrame, onGap, onEnd, onFirstFail = null }) {
     this.url = url;
     this.hello = hello;
     this.onOpen = onOpen; this.onFrame = onFrame; this.onGap = onGap; this.onEnd = onEnd;
+    // When set, a first dial that never opens ends this socket and reports
+    // there instead of redialing: the bridge uses it to fall back to another
+    // relay. A drop after an open is a gap, never a fallback.
+    this.onFirstFail = onFirstFail;
     this.__inner = null;            // the native socket of the moment; a test hook, and named so
     this.opened = false;
     this.ended = false;
@@ -975,17 +992,52 @@ class RemoteSocket {
       for (const frame of this.held.splice(0)) inner.send(frame);
       this.onOpen();
     });
-    inner.addEventListener('message', e => { if (inner === this.__inner) this.onFrame(e.data); });
+    inner.addEventListener('message', e => {
+      if (inner !== this.__inner) return;
+      const bye = RemoteSocket.byeOf(e.data);
+      if (bye) this.bye(bye.code, bye.reason); else this.onFrame(e.data);
+    });
     inner.addEventListener('close', e => { if (inner === this.__inner) this.closed_(e); });
+  }
+
+  // {bye, reason} from the relay (API Gateway cannot close with a custom
+  // code). Read here, not in the bridge: a released socket must take its own
+  // bye, and the bridge may already be dialing the next one.
+  static byeOf(raw) {
+    if (typeof raw !== 'string' || raw.length > 300 || !raw.startsWith('{')) return null;
+    let m;
+    try { m = JSON.parse(raw); } catch { return null; }
+    if (!m || typeof m.bye !== 'number') return null;
+    return { code: m.bye, reason: typeof m.reason === 'string' ? m.reason.slice(0, 200) : '' };
+  }
+
+  // The relay is about to end this socket (a revoke was sent on it): stop
+  // reporting, never redial, and close it ourselves only if the relay's bye
+  // has not arrived in `ms`. Closing right after the send raced the frame
+  // against this socket's own $disconnect on the durable relay.
+  release(ms) {
+    if (this.ended) return;
+    this.released = true;
+    this.held = [];
+    this.onOpen = () => {}; this.onFrame = () => {}; this.onGap = () => {}; this.onEnd = () => {}; this.onFirstFail = null;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.close(1000, 'revoked'), ms);
   }
 
   closed_(e) {
     if (this.ended) return;
+    if (this.released) { this.ended = true; clearTimeout(this.timer); return; }
     const meant = e.code === 4001 || e.code === 4003;
     if (meant) {
       this.ended = true;
       this.held = [];
       this.onEnd({ code: e.code, reason: e.reason, gaveUp: false });
+      return;
+    }
+    if (!this.opened && this.onFirstFail) {
+      this.ended = true;
+      this.held = [];
+      this.onFirstFail();
       return;
     }
     const delay = RemoteSocket.delays[Math.min(this.attempt, RemoteSocket.delays.length - 1)];
@@ -996,6 +1048,18 @@ class RemoteSocket {
   }
 
   get open() { return !this.ended && this.__inner.readyState === 1; }
+
+  // The relay meant to end this socket but cannot say so in the close code
+  // (API Gateway closes every socket 1000): a {bye, reason} frame arrives
+  // first and is final exactly as that close code would be.
+  bye(code, reason) {
+    if (this.ended) return;
+    this.ended = true;
+    clearTimeout(this.timer);
+    this.held = [];
+    if (this.__inner.readyState < 2) this.__inner.close(1000, 'bye');
+    this.onEnd({ code, reason, gaveUp: false });
+  }
 
   send(frame) {
     if (this.ended) throw new Error('RemoteSocket: send after close');
@@ -1013,6 +1077,10 @@ class RemoteSocket {
 
 const RemoteBridge = {
   RELAY_KEY: 'vibeos-mcp-relay',
+  awsUrl: MCP_RELAY_URL,
+  // Set when the durable relay's first dial never opened; every later dial
+  // goes to this origin's /api/mcp/relay until the page reloads.
+  fellBack: false,
   KEEPALIVE_MS: 30000,
   // A pong must come back within this, or the socket is dead without a
   // close event (a laptop that slept, a network that changed) and the pane
@@ -1026,6 +1094,7 @@ const RemoteBridge = {
   socket: null,
   agentName: '',
   calls: 0,
+  relayErrors: 0,
   keepalive: null,
   listeners: new Set(),
 
@@ -1043,7 +1112,9 @@ const RemoteBridge = {
     // The whole `claude mcp add` line, not the bare npx command: a stdio mcp
     // server run by hand in a terminal just waits for a client and looks hung
     // (aleks tried exactly that). Cursor and codex take the same npx part.
-    return 'claude mcp add vibeos -- npx vibeos-mcp --token ' + remoteToken;
+    // `--relay` names the relay THIS tab is on: the package's default is the
+    // origin relay, and a tab on the durable relay would never meet it.
+    return 'claude mcp add vibeos -- npx vibeos-mcp --token ' + remoteToken + ' --relay ' + this.relayUrl();
   },
 
   mint() {
@@ -1053,11 +1124,23 @@ const RemoteBridge = {
     return hex;
   },
 
+  override() {
+    try { return localStorage.getItem(this.RELAY_KEY) || null; } catch { return null; }
+  },
+  originUrl() { return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/mcp/relay'; },
+  // override | aws | origin — which relay the next dial goes to.
+  get relay() { return this.override() ? 'override' : this.fellBack ? 'origin' : 'aws'; },
   relayUrl() {
-    let override = null;
-    try { override = localStorage.getItem(this.RELAY_KEY); } catch {}
+    const override = this.override();
     if (override) return override;
-    return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/mcp/relay';
+    return this.fellBack ? this.originUrl() : this.awsUrl;
+  },
+  // For the pane: which relay this tab is on, in words, plus the instance.
+  relayLabel() {
+    const where = this.relay === 'aws' ? 'the durable relay (aws)'
+      : this.relay === 'origin' ? 'this origin (the durable relay could not be reached)'
+      : 'the relay at ' + this.relayUrl();
+    return where + (this.instance ? ', instance ' + this.instance : '');
   },
 
   // Pairing inside a host shell is refused: a remote agent with root on the
@@ -1072,6 +1155,9 @@ const RemoteBridge = {
   // the pane instead of five failed dials behind a spinner.
   async available() {
     if (this.probe) return this.probe;
+    // A WebSocket API answers a HEAD with 403 whatever its state: the first
+    // dial is the probe, and one that never opens falls back to this origin.
+    if (this.relay === 'aws') return { ok: true };
     const url = this.relayUrl().replace(/^ws/, 'http');
     let r;
     try { r = await fetch(url, { method: 'HEAD' }); }
@@ -1120,10 +1206,29 @@ const RemoteBridge = {
         this.stopKeepalive();
         if (code === 4003) { remoteToken = null; this.set('off'); return; }
         if (code === 4001) { this.set('error', 'another tab paired with this token and took its place; revoke here, or pair again there'); return; }
-        throw new Error('RemoteSocket ended on a code it does not mean: ' + code + (gaveUp ? ' (gave up)' : ''));
+        const what = 'the relay ended the socket on a code it does not mean: ' + code + (gaveUp ? ' (gave up)' : '');
+        this.set('error', what);
+        throw new Error('RemoteSocket: ' + what);
       },
+      onFirstFail: this.relay === 'aws' ? () => this.fallBack() : null,
     });
     this.startKeepalive();
+  },
+
+  // The durable relay's first dial never opened (a network that blocks
+  // execute-api, a stack that is gone): the same token, this origin's relay.
+  // Only a failed FIRST dial, never a timeout on a call — a drop after an
+  // open is the 2 h cut or an outage, and RemoteSocket redials in place.
+  async fallBack() {
+    this.socket = null;
+    this.stopKeepalive();
+    this.fellBack = true;
+    track('mcp_relay_fallback');
+    this.set('pairing', 'the durable relay could not be reached; trying this origin');
+    const probe = await this.available();
+    if (!probe.ok) { this.set('error', 'the durable relay could not be reached, and ' + probe.reason); return; }
+    if (!remoteToken) return;
+    this.dial();
   },
 
   // The relay only says "peer not connected" when we send something, so a
@@ -1152,8 +1257,20 @@ const RemoteBridge = {
     let msg;
     try { msg = JSON.parse(raw); } catch (e) { console.error('RemoteBridge: a frame that is not JSON from the relay:', raw); return; }
     if (!msg || typeof msg !== 'object') return;
-    if (typeof msg.instance === 'string') this.instance = msg.instance.slice(0, 16);
+    // The pane names the instance: repaint when it arrives, since the hello
+    // reply lands after 'waiting' was set and `set` dedups an unchanged state.
+    if (typeof msg.instance === 'string' && msg.instance.slice(0, 16) !== this.instance) { this.instance = msg.instance.slice(0, 16); this.emit(); }
     if ('pong' in msg) { clearTimeout(this.pongTimer); this.pongTimer = null; return; }
+    // API Gateway's own reply when the Lambda behind a frame failed or was
+    // throttled: that frame is gone, and a call the agent sent with it will
+    // hang on its side. Loud, never a no-op.
+    if (typeof msg.message === 'string' && typeof msg.connectionId === 'string' && typeof msg.requestId === 'string') {
+      this.relayErrors++;
+      console.error('RemoteBridge: the relay dropped a frame: ' + msg.message.slice(0, 200) + ' (request ' + msg.requestId.slice(0, 64) + ')');
+      track('mcp_relay_error');
+      this.emit();
+      return;
+    }
     if ('paired' in msg) { if (msg.paired) this.connected(); else this.set('waiting'); return; }
     if (msg.want === 'tools') {
       this.connected(typeof msg.agent === 'string' ? msg.agent.slice(0, 80) : '');
@@ -1201,7 +1318,13 @@ const RemoteBridge = {
     const frame = result && result.ok === false
       ? { id: msg.id, error: result.error + (result.available ? ' (available: ' + result.available.join(', ') + ')' : '') }
       : { id: msg.id, result };
-    this.socket.send(JSON.stringify(frame));
+    let wire = JSON.stringify(frame);
+    const bytes = new TextEncoder().encode(wire).length;
+    if (bytes > MCP_FRAME_MAX) {
+      entry.ok = false; entry.error = 'result too big for the relay';
+      wire = JSON.stringify({ id: msg.id, error: 'result is ' + Math.round(bytes / 1024) + ' KB, the relay carries ' + (MCP_FRAME_MAX / 1024) + ' KB: read a smaller range, or pipe through head' });
+    }
+    this.socket.send(wire);
   },
 
   revoke() {
@@ -1213,7 +1336,9 @@ const RemoteBridge = {
     this.stopKeepalive();
     remoteToken = null;
     this.agentName = '';
-    if (s && s.open) { s.send(MCP_REVOKE_FRAME); s.close(1000, 'revoked'); }
+    // On an open socket the relay ends it (bye 4003, then the close); the
+    // socket is released to take that on its own, 5 s at most.
+    if (s && s.open) { s.send(mcpRevokeFrame(token)); s.release(5000); }
     else { if (s) s.close(1000, 'revoked'); this.deliverRevoke(token); }
     this.set('off');
   },
@@ -1225,10 +1350,7 @@ const RemoteBridge = {
   // fresh dial carries the frame; the relay answers 4003 to both ends.
   deliverRevoke(token) {
     const ws = new WebSocket(this.relayUrl());
-    ws.addEventListener('open', () => {
-      ws.send(JSON.stringify({ hello: 'tab', token }));
-      ws.send(MCP_REVOKE_FRAME);
-    });
+    ws.addEventListener('open', () => ws.send(mcpRevokeFrame(token)));
     ws.addEventListener('error', () => console.error('RemoteBridge: the relay did not take the revoke; the token is forgotten here, and the package will read peer not connected until the relay function ends'));
   },
 
@@ -1239,7 +1361,7 @@ const RemoteBridge = {
   unload() {
     if (!remoteToken) return;
     const s = this.socket;
-    if (s && s.open) s.send(MCP_REVOKE_FRAME);
+    if (s && s.open) s.send(mcpRevokeFrame(remoteToken));
     else this.deliverRevoke(remoteToken);
     this.socket = null;
     this.stopKeepalive();

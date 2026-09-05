@@ -694,9 +694,10 @@ function mcpPane(body, win) {
   trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token lives in this tab only and dies with it.';
   const refusal = RemoteBridge.refusal();
   let probe = null;
-  // The relay instance this tab landed on. An agent that reports a different
-  // one never sees this tab: the pairing map is per instance.
-  const inst = () => RemoteBridge.instance ? ' Relay instance ' + RemoteBridge.instance + '.' : '';
+  // Which relay this tab is on, and the instance that answered. On the
+  // durable relay the instance is the region; on the vercel route it is the
+  // function instance, and an agent on another one never sees this tab.
+  const inst = () => ' Via ' + RemoteBridge.relayLabel() + '.';
   const paint = () => {
     const st = RemoteBridge.state, d = RemoteBridge.detail;
     state.className = 'small ' + (st === 'connected' ? 'yes' : st === 'error' ? 'no' : st === 'off' ? 'dimmer' : 'part');
