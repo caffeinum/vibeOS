@@ -1327,11 +1327,41 @@ let remoteToken = null;
 // duplicated tab (Chrome's Duplicate, window.open(location.href)) gets a
 // copy of sessionStorage, token included, and used to dial with it, kick
 // the original to 4001 and revoke the token when it closed.
-const MCP_TOKEN_KEY = 'vibeos-mcp-token', MCP_AGENT_KEY = 'vibeos-mcp-agent', MCP_KEEP_KEY = 'vibeos-mcp-keep';
+// aleks, 2026-09-04: "so i need to reconnect mcp if i come back next day?" — no.
+// The token is remembered in this browser for seven days (localStorage, with
+// its expiry), so tomorrow's tab pairs with yesterday's `claude mcp add` line
+// untouched; the relay needs nothing, its rows are per connection. Forget
+// this agent (the pane) or the expiry end it; a closed tab does not. Two tabs
+// of one browser share the record, so a boot first asks on a BroadcastChannel
+// whether a live tab already holds the pairing and, if one answers, offers
+// take-over instead of displacing it silently. The reload_os keep flag stays:
+// it is the one case where the SAME tab is coming back and nothing should
+// ask.
+const MCP_TOKEN_KEY = 'vibeos-mcp-token', MCP_AGENT_KEY = 'vibeos-mcp-agent', MCP_KEEP_KEY = 'vibeos-mcp-keep', MCP_EXPIRES_KEY = 'vibeos-mcp-expires';
+const MCP_REMEMBER_MS = 7 * 24 * 3600 * 1000;
 function setRemoteToken(token) {
   remoteToken = token;
-  try { if (token) sessionStorage.setItem(MCP_TOKEN_KEY, token); else { sessionStorage.removeItem(MCP_TOKEN_KEY); sessionStorage.removeItem(MCP_AGENT_KEY); } }
-  catch (e) { console.warn('RemoteBridge: sessionStorage refused the token; the pairing will not survive reload_os: ' + e.message); }
+  try {
+    if (token) { localStorage.setItem(MCP_TOKEN_KEY, token); localStorage.setItem(MCP_EXPIRES_KEY, String(Date.now() + MCP_REMEMBER_MS)); }
+    else { for (const k of [MCP_TOKEN_KEY, MCP_AGENT_KEY, MCP_EXPIRES_KEY]) localStorage.removeItem(k); }
+  } catch (e) { console.warn('RemoteBridge: localStorage refused the token; the pairing will not survive this tab: ' + e.message); }
+}
+// The tabs of one browser tell each other who holds the pairing.
+const mcpTabs = (() => { try { return new BroadcastChannel('vibeos-mcp'); } catch { return null; } })();
+if (mcpTabs) mcpTabs.onmessage = e => {
+  const m = e.data || {};
+  // Only the tab holding THIS token answers: two tabs on two tokens are two
+  // pairings, not a conflict.
+  if (m.ask === 'holder' && remoteToken && m.token === remoteToken && RemoteBridge.state !== 'off' && RemoteBridge.state !== 'error') mcpTabs.postMessage({ holder: true, token: remoteToken, state: RemoteBridge.state });
+  if (m.takeover && remoteToken && m.token === remoteToken) { RemoteBridge.set('error', 'another tab of this browser took over the pairing'); if (RemoteBridge.socket) RemoteBridge.socket.close(); RemoteBridge.socket = null; }
+};
+function anotherTabHolds(token, ms = 300) {
+  return new Promise(res => {
+    if (!mcpTabs) return res(false);
+    let done = false; const on = e => { if (e.data && e.data.holder && e.data.token === token && !done) { done = true; mcpTabs.removeEventListener('message', on); res(true); } };
+    mcpTabs.addEventListener('message', on); mcpTabs.postMessage({ ask: 'holder', token });
+    setTimeout(() => { if (!done) { done = true; mcpTabs.removeEventListener('message', on); res(false); } }, ms);
+  });
 }
 
 // The revoke is a hello with the token and `revoke: true` (lib/mcp-relay.ts
@@ -1594,21 +1624,37 @@ const RemoteBridge = {
   // while the page was down failed with peer not connected — its retry lands.
   // The keep flag is the proof this boot is that reload: it is consumed
   // here, so a copied tab (no flag) drops the copied token instead.
-  resume() {
-    let stored = null, name = '', keep = false;
+  async resume() {
+    let stored = null, name = '', keep = false, expires = 0;
     try {
-      stored = sessionStorage.getItem(MCP_TOKEN_KEY); name = sessionStorage.getItem(MCP_AGENT_KEY) || '';
+      stored = localStorage.getItem(MCP_TOKEN_KEY); name = localStorage.getItem(MCP_AGENT_KEY) || ''; expires = Number(localStorage.getItem(MCP_EXPIRES_KEY) || 0);
       keep = sessionStorage.getItem(MCP_KEEP_KEY) === '1'; sessionStorage.removeItem(MCP_KEEP_KEY);
     } catch { return false; }
     if (!stored) return false;
-    if (!keep) { setRemoteToken(null); console.warn('RemoteBridge: a pairing token without the reload flag (a duplicated tab?); dropped it — the tab it belongs to keeps the pairing'); return false; }
-    if (!MCP_TOKEN_RE.test(stored)) { setRemoteToken(null); throw new Error('the pairing token in sessionStorage is not 64 hex; dropped it'); }
+    if (!MCP_TOKEN_RE.test(stored)) { setRemoteToken(null); throw new Error('the remembered pairing token is not 64 hex; dropped it'); }
+    if (!expires || Date.now() > expires) { setRemoteToken(null); this.set('off', 'the remembered pairing expired after 7 days; pair again'); return false; }
     if (this.refusal()) { setRemoteToken(null); return false; }
+    if (!keep && await anotherTabHolds(stored)) {
+      // Another tab of this browser is paired: do not dial over it. The
+      // pane offers take-over; RemoteBridge.takeOver() tells that tab to
+      // step aside and dials.
+      remoteToken = stored; this.agentName = name.slice(0, 80); this.heldElsewhere = true;
+      this.set('error', 'another tab of this browser holds this pairing — take it over here, or use that tab');
+      return false;
+    }
     remoteToken = stored;
     this.agentName = name.slice(0, 80);
     this.resumed = true;
-    track('mcp_resumed');
-    this.set('pairing', 'resuming the pairing after a reload');
+    track('mcp_resumed', { how: keep ? 'reload_os' : 'remembered' });
+    this.set('pairing', keep ? 'resuming the pairing after a reload' : 'resuming the remembered pairing');
+    this.dial();
+    return true;
+  },
+  takeOver() {
+    if (!remoteToken) return false;
+    this.heldElsewhere = false;
+    if (mcpTabs) mcpTabs.postMessage({ takeover: true, token: remoteToken });
+    this.set('pairing', 'taking the pairing over from the other tab');
     this.dial();
     return true;
   },
@@ -1725,7 +1771,7 @@ const RemoteBridge = {
   },
 
   connected(name = '') {
-    if (name) { this.agentName = name; try { sessionStorage.setItem(MCP_AGENT_KEY, name); } catch {} }
+    if (name) { this.agentName = name; try { localStorage.setItem(MCP_AGENT_KEY, name); } catch {} }
     const label = this.agentName || 'an agent';
     if (this.state !== 'connected') track('mcp_paired');
     this.set('connected', label);
@@ -1797,28 +1843,11 @@ const RemoteBridge = {
     ws.addEventListener('error', () => console.error('RemoteBridge: the relay did not take the revoke; the token is forgotten here, and the package will read peer not connected until the relay function ends'));
   },
 
-  // The token dies with the tab, so the pairing must too: without this a
-  // closed or reloaded tab (reload_os included) left the agent side attached
-  // and the package answering "peer not connected" for good, with no way
-  // back but a new token pasted into its config.
-  unload() {
-    let keep = false;
-    try { keep = sessionStorage.getItem(MCP_KEEP_KEY) === '1'; } catch {}
-    if (!remoteToken) return;
-    // reload_os: the token and the flag stay in sessionStorage for the boot
-    // after this one (resume consumes the flag); the socket dies with the
-    // page and the relay tells the agent "peer not connected" until the tab
-    // is back.
-    if (keep) return;
-    const s = this.socket;
-    if (s && s.open) s.send(mcpRevokeFrame(remoteToken));
-    else this.deliverRevoke(remoteToken);
-    this.socket = null;
-    this.stopKeepalive();
-    setRemoteToken(null);
-    this.agentName = '';
-    this.set('off');
-  },
+  // pagehide: nothing to do any more. The pairing is remembered for seven
+  // days, so a closed tab keeps it (the agent reads "peer not connected"
+  // until a tab is back; vibeos-mcp rides that gap); reload_os keeps it by
+  // the same token; Forget this agent is the explicit end.
+  unload() {},
 };
 window.addEventListener('pagehide', () => RemoteBridge.unload());
 // Loud, never fatal: a bad stored token must not take the kernel down with it.

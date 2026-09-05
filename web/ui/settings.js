@@ -679,7 +679,8 @@ export function CapsApp(body, win) {
     <div class="row" style="gap:6px">
       <button class="btn p sm" id="mcpPair">Pair an agent</button>
       <button class="btn sm" id="mcpRetry" hidden>Retry</button>
-      <button class="btn sm" id="mcpRevoke" hidden>Revoke</button>
+      <button class="btn sm" id="mcpTakeOver" hidden>Take over here</button>
+      <button class="btn sm" id="mcpRevoke" hidden>Forget this agent</button>
     </div>`;
   mcpPane(body, win);
 }
@@ -715,11 +716,14 @@ function mcpPane(body, win) {
     pair.hidden = hasToken || !!refusal;
     pair.disabled = !!refusal || (probe !== null && !probe.ok);
     revoke.hidden = !hasToken;
+    takeOver.hidden = !RemoteBridge.heldElsewhere;
     retry.hidden = !(st === 'error' && hasToken && !RemoteBridge.socket);
   };
   pair.onclick = async () => { pair.disabled = true; await RemoteBridge.pair(); paint(); };
   retry.onclick = () => { RemoteBridge.retry(); paint(); };
   revoke.onclick = () => { RemoteBridge.revoke(); paint(); };
+  const takeOver = body.querySelector('#mcpTakeOver');
+  takeOver.onclick = () => { RemoteBridge.takeOver(); paint(); };
   copy.onclick = async () => {
     try { await navigator.clipboard.writeText(RemoteBridge.command()); copy.textContent = 'copied'; }
     catch (e) { copy.textContent = 'select the line and copy it (' + e.message + ')'; }
