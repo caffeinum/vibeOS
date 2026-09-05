@@ -1,0 +1,22 @@
+web/kernel/agent.js
+  h_e9fef506e0f829 353-358,364,405-414,436-441,636,1087,1140,1230-1238,1241-1242,1245-1257,1259,1779-1783,1793,1795-1798,2028-2031,2033-2038,2044-2101
+web/kernel/boot.js
+  h_e9fef506e0f829 404-406
+web/kernel/machine.js
+  h_e9fef506e0f829 53,81
+web/ui/settings.js
+  h_e9fef506e0f829 646,713
+web/ui/windows.js
+  h_e9fef506e0f829 343-345,370,375-378
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "92bfa1910b9e70166535a0aae35bb8bfd1564654",
+  "prompts": {},
+  "humans": {
+    "h_e9fef506e0f829": {
+      "author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
