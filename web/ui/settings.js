@@ -1009,28 +1009,15 @@ export function DesignApp(body) {
 
 function DesignAppRender(body, rerender) {
   const skills = VibeOSSkills.installed().skills;
-  const theme = VibeOSSkills.getTheme(Theme.id);
-  const swatches = Object.entries(Theme.tokens()).map(([name, hex]) =>
-    `<div class="row" style="gap:7px;align-items:center">
-       <span style="width:14px;height:14px;border-radius:var(--radius-sm);border:1px solid var(--line2);background:${hex};flex:0 0 auto"></span>
-       <code class="tiny">${name}</code><span class="tiny dimmer">${hex}</span>
-     </div>`).join('');
-
-  const themeButtons = Object.values(VibeOSSkills.THEMES).map(t =>
-    `<button class="btn sm${t.id === Theme.id ? ' p' : ''}" data-theme="${t.id}">${t.title}</button>`).join('');
 
   body.innerHTML = `
     <h3>Design</h3>
-    <div class="row" style="gap:6px;margin-bottom:10px">${themeButtons}
-      ${Theme.custom ? '<button class="btn sm" id="themeReset">Clear overrides</button>' : ''}</div>
+    <div class="row" style="gap:6px;margin-bottom:6px;flex-wrap:wrap" id="themes"></div>
+    <p class="tiny dimmer" style="margin-top:0" id="themeNote"></p>
     <p class="small muted" style="margin-top:0">
       What the agent is told about looks and behaviour, on top of the build rules.
-      Both are appended to every prompt, whichever model you are using.
+      Appended to every prompt, whichever model you are using.
     </p>
-
-    <h4 class="small" style="margin-bottom:4px">Theme &middot; ${theme.title}</h4>
-    <p class="tiny dimmer" style="margin-top:0">${theme.summary}</p>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 14px;margin-bottom:14px">${swatches}</div>
 
     ${skills.map(sk => `
       <h4 class="small" style="margin-bottom:4px">Skill &middot; ${sk.title}</h4>
@@ -1040,15 +1027,33 @@ function DesignAppRender(body, rerender) {
     <h4>Source</h4>
     <p class="tiny dimmer" style="margin-top:0" id="whoseCopy"></p>
     ${forkVersionHtml()}
-    <p class="note">The agent can change this itself &mdash; ask it for light mode. Apps mount inside this document, so the tokens above are inherited &mdash;
+    <p class="note">The agent can change this itself &mdash; ask it for a new theme. Apps mount inside this document, so the tokens are inherited &mdash;
     a generated app using <code>var(--text)</code> follows the desktop instead of drifting from it.</p>`;
 
-  body.querySelector('#whoseCopy').textContent = whoseCopyText();
-  body.querySelectorAll('[data-theme]').forEach(b => {
-    b.onclick = () => { Theme.set(b.dataset.theme); rerender(); };
+  // Titles and summaries come from os.css, which the agent (or anyone with
+  // the folder) writes: text, never markup. The buttons carry data-id, not
+  // data-theme — a data-theme attribute on the button would put that block's
+  // properties on the button itself.
+  const themesEl = body.querySelector('#themes'), note = body.querySelector('#themeNote');
+  Theme.list().then(themes => {
+    if (!themesEl.isConnected) return;
+    for (const t of themes) {
+      const b = document.createElement('button');
+      b.className = 'btn sm' + (t.id === Theme.id ? ' p' : '');
+      b.dataset.id = t.id; b.title = t.summary; b.textContent = t.title;
+      b.onclick = () => Theme.set(t.id).then(rerender, e => { note.textContent = e.message; });
+      themesEl.appendChild(b);
+    }
+    const on = themes.find(t => t.id === Theme.id);
+    note.textContent = (on ? on.title + ' — ' + on.summary + ' ' : '')
+      + (Theme.lost ? `The theme "${Theme.lost}" this browser had chosen is not in os.css any more, so this is the default. ` : '')
+      + 'Themes are the [data-theme] blocks in system/os.css — ask the agent for a new one.';
+  }, e => {
+    if (!themesEl.isConnected) return;
+    note.textContent = 'Themes could not be listed: ' + e.message + ' Themes are the [data-theme] blocks in system/os.css; fix the file or write it empty to go back to the served one.';
   });
-  const clear = body.querySelector('#themeReset');
-  if (clear) clear.onclick = () => { Theme.set(Theme.id, {}); rerender(); };
+
+  body.querySelector('#whoseCopy').textContent = whoseCopyText();
   const fv = body.querySelector('#forkVersion');
   if (fv) {
     fv.querySelector('.d').textContent = forkVersionText();

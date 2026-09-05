@@ -1,11 +1,21 @@
+  /* A theme is a block in this file. The default palette is :root; every
+     other theme is a [data-theme="<id>"] block on <html> with the same token
+     names, and the comment on the line before it — @theme <id>: <Title> —
+     <summary> — is what Settings > Design lists: the parser (Theme.list in
+     kernel/agent.js) refuses a header without a block and a block without a
+     header, naming the line. The default's header sits on :root itself.
+     Selecting a theme sets data-theme on <html> and stores the id in this
+     browser; the agent adds a theme by adding a block. */
+  /* @theme vibeos-dark: vibeOS dark — The desktop’s own palette, inherited as CSS custom properties. */
   :root {
+    color-scheme: dark;
     --bg: #0a0a0c; --panel: #101219; --panel2: #0c0e14; --line: #23262f;
     --line2: #2a3244; --text: #f2f3f5; --dim: #8e93a0; --dimmer: #6b7181;
     --accent: #9db4ff; --ok: #4ade80; --warn: #fbbf24; --no: #f87171;
     --desk1: #c9b7d8; --desk2: #e8b9a8; --desk3: #d99f8e;
     /* chrome tokens — these were hardcoded hexes until light mode needed them */
     --bar: #161a23; --barline: #262b38; --btn: #161922; --btntext: #c9d3e6;
-    --focus: #3a4560; --sel: #1d2536; --hover: #171b26;
+    --focus: #3a4560; --sel: #1d2536; --seltext: #ffffff; --hover: #171b26;
     --title1: #2b3146; --title2: #171b26; --titletext: #e8eaf0;
     --pbtn: #f2f3f5; --pbtntext: #0a0a0c;
     --winbg: rgba(16,18,25,.97); --scroll: rgba(255,255,255,.14);
@@ -17,6 +27,49 @@
     --border-w: 1px; --blur: 12px;
     --font-ui: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
     --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  /* @theme vibeos-light: vibeOS light — The same desktop, inverted. Same token names, so nothing needs rewriting. */
+  [data-theme="vibeos-light"] {
+    color-scheme: light;
+    --bg: #eef0f4;
+    --desk1: #c9b7d8; --desk2: #e8b9a8; --desk3: #d99f8e;
+    --panel: #ffffff; --panel2: #f5f6fa;
+    --line: #e2e5ec; --line2: #ccd2de;
+    --text: #12151c; --dim: #5b6273; --dimmer: #868d9d;
+    --accent: #3355dd; --ok: #15803d; --warn: #a16207; --no: #dc2626;
+    --bar: #ffffff; --barline: #e2e5ec;
+    --btn: #ffffff; --btntext: #12151c; --focus: #9aa6c4;
+    --sel: #e4e9f7; --seltext: #12151c; --hover: #f0f2f7;
+    --title1: #f7f8fb; --title2: #eef0f5; --titletext: #12151c;
+    --pbtn: #1f2937; --pbtntext: #ffffff;
+    --winbg: rgba(255,255,255,.97); --scroll: rgba(0,0,0,.20);
+    --warnline: #e7cfa1; --up1: #eef2ff; --up2: #ffffff; --upline: #c7d2fe;
+    --radius-win: 12px; --radius-ctl: 8px; --radius-sm: 5px; --radius-pill: 999px;
+    --shadow-win: 0 30px 70px -20px rgba(0,0,0,.75);
+    --border-w: 1px; --blur: 12px;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  /* Proof the shape tokens are enough for a look, not just a palette. */
+  /* @theme win95: Windows 95 — Square corners, bevelled grey, teal desktop. No shadows, no blur. */
+  [data-theme="win95"] {
+    --bg: #008080; --desk1: #008080; --desk2: #008080; --desk3: #008080;
+    --panel: #c0c0c0; --panel2: #ffffff;
+    --line: #808080; --line2: #404040;
+    --text: #000000; --dim: #404040; --dimmer: #808080;
+    --accent: #000080; --ok: #008000; --warn: #808000; --no: #800000;
+    --bar: #c0c0c0; --barline: #808080;
+    --btn: #c0c0c0; --btntext: #000000; --focus: #000080;
+    --sel: #000080; --seltext: #ffffff; --hover: #d4d0c8;
+    --title1: #000080; --title2: #1084d0; --titletext: #ffffff;
+    --pbtn: #c0c0c0; --pbtntext: #000000;
+    --winbg: #c0c0c0; --scroll: #808080;
+    --warnline: #808000; --up1: #c0c0c0; --up2: #c0c0c0; --upline: #808080;
+    --radius-win: 0px; --radius-ctl: 0px; --radius-sm: 0px; --radius-pill: 0px;
+    --shadow-win: 2px 2px 0 #000000;
+    --border-w: 2px; --blur: 0px;
+    --font-ui: "MS Sans Serif", "Pixelated MS Sans Serif", Tahoma, Arial, sans-serif;
+    --font-mono: "Fixedsys", "Lucida Console", monospace;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }

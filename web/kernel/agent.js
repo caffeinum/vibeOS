@@ -319,101 +319,174 @@ const Gen = {
 // The prompts describe the BusyBox shell; swap that line for whatever is booted.
 /* ---------- the desktop's own appearance ------------------------------
 
-   Every colour in the chrome is a custom property on :root, so a theme is a
-   set of values rather than a stylesheet. That is what lets the agent restyle
-   the OS it is running inside: it changes state, not source. State has a reset
-   button; source does not.
+   A theme is a rule in system/os.css, not a tool: the default palette is
+   :root and every other theme is a [data-theme="<id>"] block with a header
+   comment on the line before it. The kernel keeps one string — which id is
+   on — as data-theme on <html> and in localStorage. The agent has root on
+   os.css, so a new look is an edit to that file, and the pane lists whatever
+   the loaded stylesheet defines. Nothing here paints a value: a stored id
+   the css no longer defines is dropped and said, never fabricated.
    -------------------------------------------------------------------- */
+
+const THEME_ID = /^[a-z0-9-]{1,40}$/;
+const THEME_HEADER = /\/\*\s*@theme\s+([^\s:]+)\s*:\s*([^\n]*?)\s*\*\//g;
+const THEME_BLOCK = /(^|\n)[ \t]*\[data-theme="([^"\n]*)"\][ \t]*\{/g;
+
+// Every theme the css defines, from its text: [{ id, title, summary, root,
+// line, tokens }]. A header (/* @theme <id>: <Title> — <summary> */) must be
+// followed, after whitespace, by :root { or [data-theme="<id>"] {; a
+// [data-theme] block starting a line must be preceded by its header; the
+// default is the one on :root, and there is exactly one. Each violation is
+// an error naming the line — a theme the pane silently lacks is worse.
+function parseThemes(css) {
+  if (typeof css !== 'string') throw new Error('parseThemes needs the stylesheet text');
+  const lineOf = i => css.slice(0, i).split('\n').length;
+  const themes = [];
+  const blockAt = new Map();
+  for (const m of css.matchAll(THEME_HEADER)) {
+    const line = lineOf(m.index);
+    const id = m[1];
+    if (!THEME_ID.test(id)) throw new Error(`os.css line ${line}: @theme id "${id}" must be lowercase letters, digits and dashes`);
+    const dash = m[2].indexOf('—');
+    if (dash === -1) throw new Error(`os.css line ${line}: @theme ${id} needs "<Title> — <summary>" after the colon`);
+    const title = m[2].slice(0, dash).trim(), summary = m[2].slice(dash + 1).trim();
+    if (!title) throw new Error(`os.css line ${line}: @theme ${id} has no title`);
+    if (themes.some(t => t.id === id)) throw new Error(`os.css line ${line}: @theme ${id} is defined twice`);
+    const rest = css.slice(m.index + m[0].length);
+    const open = rest.match(/^\s*(:root|\[data-theme="([^"\n]*)"\])\s*\{/);
+    if (!open) throw new Error(`os.css line ${line}: @theme ${id} has no :root { or [data-theme="${id}"] { block right after it`);
+    const root = open[1] === ':root';
+    if (!root && open[2] !== id) throw new Error(`os.css line ${line}: @theme ${id} is followed by a [data-theme="${open[2]}"] block`);
+    const bodyStart = m.index + m[0].length + open[0].length;
+    const close = css.indexOf('}', bodyStart);
+    if (close === -1) throw new Error(`os.css line ${line}: the block of @theme ${id} never closes`);
+    const tokens = {};
+    for (const d of css.slice(bodyStart, close).matchAll(/(--[\w-]+)\s*:\s*([^;}]+)/g)) tokens[d[1]] = d[2].trim();
+    if (!root) blockAt.set(m.index + m[0].length + (open[0].length - open[0].trimStart().length), id);
+    themes.push({ id, title, summary, root, line, tokens });
+  }
+  for (const m of css.matchAll(THEME_BLOCK)) {
+    const at = m.index + m[0].indexOf('[');
+    const line = lineOf(at);
+    if (blockAt.get(at) !== m[2])
+      throw new Error(`os.css line ${line}: [data-theme="${m[2]}"] has no /* @theme ${m[2]}: <Title> — <summary> */ header on the line before it`);
+  }
+  const roots = themes.filter(t => t.root);
+  if (roots.length !== 1) throw new Error(roots.length ? `os.css: ${roots.map(t => '@theme ' + t.id).join(' and ')} both sit on :root; one theme is the default` : 'os.css: no @theme header on :root, so there is no default theme');
+  return themes;
+}
 
 const Theme = {
   KEY: 'vibeos-theme',
-  id: VibeOSSkills.DEFAULT_THEME,
-  custom: null,
+  id: 'vibeos-dark',
+  // What load() found: the stored id the loaded css does not define, or the
+  // parse error — surfaced in the chat and in Settings > Design, never a
+  // failed boot.
+  lost: null,
+  error: null,
+  parse: parseThemes,
 
-  tokens() {
-    return Object.assign({}, VibeOSSkills.getTheme(this.id).tokens, this.custom || {});
+  // The stylesheet this page runs: the stored fork when the loader booted
+  // one, else the served file — the loader's record, not document.styleSheets,
+  // so a fork's new block is listed on the boot that runs it.
+  async css() {
+    if (typeof this._css === 'string') return this._css;
+    const b = window.__vibeosBoot;
+    if (!b || !b.files) throw new Error('__vibeosBoot.files is missing: the kernel must boot from the vibeOS loader');
+    let text;
+    if (b.files['os.css'] === 'stored') {
+      text = b.stored && b.stored.files && b.stored.files['os.css'];
+      if (typeof text !== 'string') throw new Error('the loader says system/os.css is stored but handed over no text');
+    } else text = (await Workspace.fetchServed('os.css')).text;
+    this._css = text;
+    return text;
   },
 
-  // A token value is a colour, not CSS. Concatenating one into stylesheet text
-  // meant a value of "x; } * { display: none } :root { y" closed the rule and
-  // opened its own — a persistent white screen, reapplied at boot, hiding the
-  // very Settings pane that could undo it. setProperty cannot escape into a new
-  // rule, and the pattern keeps the value recognisable as a colour on the way in.
-  SAFE_VALUE: /^[^;{}<>]{1,160}$/,
-
-  safeValue(v) {
-    return typeof v === 'string' && this.SAFE_VALUE.test(v);
+  async list() {
+    return parseThemes(await this.css());
   },
 
-  paint() {
-    const root = document.documentElement;
-    for (const [k, v] of Object.entries(this.tokens())) {
-      if (this.safeValue(v)) root.style.setProperty(k, v);
-      else root.style.removeProperty(k);
-    }
-    root.style.colorScheme = this.id === 'vibeos-light' ? 'light' : 'dark';
-  },
-
+  // ?safe=1 (and a recovery boot) runs the stock look without touching what
+  // is stored, so a bad theme is always one URL away from being escapable.
+  // The attribute is set at once from storage so a light desktop does not
+  // flash dark; the id is checked against the css as soon as it is read.
   load(opts) {
-    // ?safe=1 boots the stock theme without touching what is stored, so a bad
-    // saved theme is always one URL away from being escapable. This is the
-    // recovery path, so it must not depend on any UI a theme could hide.
     let safeMode = (opts && opts.stock) || false;
     try { safeMode = safeMode || new URLSearchParams(location.search).has('safe'); } catch {}
-    if (safeMode) { this.paint(); return; }
-
-    try {
-      const saved = JSON.parse(localStorage.getItem(this.KEY) || 'null');
-      if (saved && VibeOSSkills.THEMES[saved.id]) {
-        this.id = saved.id;
-        // Drop anything stored that no longer passes validation rather than
-        // applying it — a value saved before this check must not brick a boot.
-        const custom = {};
-        for (const [k, v] of Object.entries(saved.custom || {})) {
-          if (this.safeValue(v)) custom[k] = v;
-        }
-        this.custom = Object.keys(custom).length ? custom : null;
-      }
-    } catch {}
-    this.paint();
-  },
-
-  set(id, custom) {
-    if (id) VibeOSSkills.getTheme(id);   // throws on an unknown id, loudly
-    if (id) this.id = id;
-    if (custom !== undefined) {
-      // A token the desktop does not define would silently do nothing, so
-      // reject it rather than let the agent think it worked.
-      const known = VibeOSSkills.getTheme(this.id).tokens;
-      for (const [key, value] of Object.entries(custom || {})) {
-        if (!(key in known)) {
-          // There is no wallpaper token, on purpose: an image is an edit to
-          // the #desktop rule, and the error says where rather than letting
-          // the model guess a fourth name for it.
-          const hint = /wallpaper|bg|background/i.test(key) ? ' Wallpaper is an edit to system/os.css (#desktop rule).' : '';
-          throw new Error('unknown theme token: ' + key + hint + ' Known tokens: ' + Object.keys(known).join(', ') + ' (list_themes has every theme\'s).');
-        }
-        if (!this.safeValue(value)) {
-          throw new Error('theme token ' + key + ' must be a plain colour value, got: ' + String(value).slice(0, 40));
-        }
-      }
-      this.custom = custom && Object.keys(custom).length ? custom : null;
+    if (safeMode) { this.ready = Promise.resolve(); return this.ready; }
+    let stored = null;
+    try { stored = localStorage.getItem(this.KEY); } catch {}
+    if (stored && stored[0] === '{') {
+      // The record an older desktop wrote: { id, custom }. The id is real;
+      // the overrides were tokens, and a theme is a css block now.
+      try { stored = JSON.parse(stored).id; } catch { stored = null; }
     }
-    this.paint();
-    try { localStorage.setItem(this.KEY, JSON.stringify({ id: this.id, custom: this.custom })); } catch {}
-    return { theme: this.id, custom: this.custom };
+    if (typeof stored === 'string' && THEME_ID.test(stored)) this.apply(stored);
+    this.ready = this.verify(stored);
+    return this.ready;
   },
 
-  reset() {
-    this.id = VibeOSSkills.DEFAULT_THEME;
-    this.custom = null;
-    try { localStorage.removeItem(this.KEY); } catch {}
-    this.paint();
+  async verify(stored) {
+    let themes;
+    try { themes = await this.list(); }
+    catch (e) {
+      this.error = e.message;
+      console.error('themes:', e);
+      Chat.line('Settings > Design cannot list the themes: ' + e.message + ' — fix system/os.css (or write it empty to go back to the served one).', true);
+      return;
+    }
+    const dflt = themes.find(t => t.root).id;
+    if (stored === null || stored === undefined) { this.apply(dflt, themes); return; }
+    if (themes.some(t => t.id === stored)) { this.apply(stored, themes); this.store(stored, themes); return; }
+    this.lost = stored;
+    this.apply(dflt, themes);
+    this.store(dflt, themes);
+    Chat.line(`The theme "${String(stored).slice(0, 40)}" this browser had chosen is not in system/os.css any more (it defines ${themes.map(t => t.id).join(', ')}), so the desktop is on ${dflt}. Pick one in Settings > Design or ask for it back.`, true);
+  },
+
+  // The attribute: absent for the default (the :root palette), the id
+  // otherwise. With the list in hand the default is known; before the css is
+  // read (the flash-free path at boot) any id goes on and verify() settles it.
+  apply(id, themes) {
+    this.id = id;
+    const root = document.documentElement;
+    const theme = themes && themes.find(t => t.id === id);
+    if (theme && theme.root) delete root.dataset.theme;
+    else root.dataset.theme = id;
+  },
+
+  // What is stored is the id string, and nothing for the default: a stored
+  // default id went on <html> as data-theme until verify() took it off, and
+  // a later fork that renamed the :root header reported it "lost" to someone
+  // who only ever picked the default. An older { id, custom } record is
+  // rewritten here on the boot that reads it.
+  store(id, themes) {
+    const theme = themes.find(t => t.id === id);
+    if (!theme) throw new Error('Theme.store: ' + id + ' is not in the list');
+    try { if (theme.root) localStorage.removeItem(this.KEY); else localStorage.setItem(this.KEY, id); } catch {}
+  },
+
+  async set(id) {
+    if (typeof id !== 'string' || !THEME_ID.test(id)) throw new Error('a theme is its id: ' + String(id).slice(0, 40));
+    const themes = await this.list();
+    if (!themes.some(t => t.id === id)) throw new Error(`unknown theme: ${id}. system/os.css defines ${themes.map(t => t.id).join(', ')}; a new one is a [data-theme="${id}"] block with its @theme header.`);
+    this.apply(id, themes);
+    this.lost = null;
+    this.store(id, themes);
+    return { theme: id };
+  },
+
+  async reset() {
+    const themes = await this.list();
+    const dflt = themes.find(t => t.root).id;
+    this.apply(dflt, themes);
+    this.lost = null;
+    this.store(dflt, themes);
   },
 };
 
 function withSkills(prompt) {
-  return VibeOSSkills.composePrompt(prompt, { theme: Theme.id });
+  return VibeOSSkills.composePrompt(prompt);
 }
 
 function forImage(prompt) {
@@ -452,7 +525,6 @@ const CREATE_APP_DESCRIPTION = CREATE_APP_LEAD + '\n' + APP_CONTRACT;
 const SEARCH_FILE_DESCRIPTION = 'Find lines matching a regex. path is one file, a directory (system/, system/ui/) or a glob (system/**/*.js, apps/*.js): a directory or glob searches every text file under it and each hit carries file and line; 60 hits at most, binaries and files over 1 MB skipped and named; system/chat.json and the snapshots are never searched or listed. Use before edit_file on a system/ file. A path that matches nothing is refused naming what exists there.';
 const LIST_FILES_DESCRIPTION = 'List the workspace. path is \'\' for the top (apps/, data/, system/) or a directory: apps/, data/, system/, system/kernel, system/ui. Entries carry kind (file|dir), size and modified; under system/ every file the OS loads is listed whether or not a copy is stored, with source (stored: your fork boots next; served: stock) and booted (which one this page runs — stored but booted served means reload_os is pending). A path that does not exist is refused naming what its parent holds.';
 const READ_DESKTOP_DESCRIPTION = 'What the desktop looks like, as text: every open window (app id, title, minimized, z-order — first is on top — geometry, whether it is the built-in chat/Browser/Settings or a generated app and its file), the dock entries, the machine pill (VM.state, image, net, tty) and the theme. Pass { window: <title or app id> } for that window\'s body as trimmed text, one line per block (scripts and styles dropped, 8 KB cap); add { dom: true } for its sanitised outerHTML instead (no script, style, link or on* attributes, no javascript: urls, media and form urls replaced by data:, 16 KB cap); either way the value of a password or hidden input is withheld. { screen: \'png\' } is the machine\'s VGA screen as image {mimeType, data} (a jpeg no wider than 1024, under the relay\'s 128 KB frame) with the text console\'s rows as text when it is in text mode. A bitmap of the desktop itself is not available (no html2canvas is vendored): the text and DOM views are the substitute. Everything here is read; nothing runs.';
-const LIST_THEMES_DESCRIPTION = 'The themes set_theme can wear: id, title, summary and the token names each defines (--accent, --panel, --radius-win…), plus the current theme id, its custom overrides and the effective value of every token. Use before set_theme with tokens: an unknown token is refused naming the known ones.';
 
 const PASTE_KEY_SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
 
@@ -680,10 +752,11 @@ const WebTools = {
 /* ---------- letting the guest drive the desktop -----------------------
 
    The agent runs in the page, not in the VM, and that is the right way round:
-   five of its six tools are host-only — create_app ends in import(blobURL),
-   set_theme mutates the host document, the web tools go out through the page's
-   proxy. Moving the loop into the guest would turn five of six calls into
-   round-trips back out, to gain speed on the one that is already cheapest.
+   all but one of its tools are host-only — create_app ends in import(blobURL),
+   edit_file writes the workspace and reload_ui repaints the host document, the
+   web tools go out through the page's proxy. Moving the loop into the guest
+   would turn every call but vm_exec into a round-trip back out, to gain speed
+   on the one that is already cheapest.
 
    So the loop stays, and the guest gets a door instead. A process inside Linux
    writes a request file; the write hook the desktop already installs fires;
@@ -696,7 +769,7 @@ const WebTools = {
    archive) can create an app or restyle the desktop without a click.
    -------------------------------------------------------------------- */
 
-const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'list_files', 'read_desktop', 'list_themes', 'set_theme', 'read_file', 'search_file', 'edit_file', 'write_file', 'reload_ui', 'reload_os', 'web_fetch', 'web_search']);
+const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'list_files', 'read_desktop', 'read_file', 'search_file', 'edit_file', 'write_file', 'reload_ui', 'reload_os', 'web_fetch', 'web_search']);
 
 // What the agent is told about the shell's own apps. They are functions in
 // os.js, so "change the Browser" is an edit to system/os.js — not a request.
@@ -752,7 +825,7 @@ const GuestBridge = {
     return [
       '#!/bin/sh',
       '# vibeOS guest CLI — call the desktop from inside the VM.',
-      '# usage: vibeos <tool> [json]   e.g. vibeos set_theme \'{"theme":"vibeos-light"}\'',
+      '# usage: vibeos <tool> [json]   e.g. vibeos read_desktop \'{}\'',
       'if [ -z "$1" ]; then echo "usage: vibeos <tool> [json]" >&2; exit 2; fi',
       'ID=$$$(date +%s 2>/dev/null || echo 0)',
       'REQ=/mnt/' + this.PREFIX + '$ID.json',
@@ -1230,11 +1303,6 @@ const TOOL_SCHEMAS = [
     parameters: { type: 'object', properties: { window: { type: 'string', description: 'A window\'s title or app id: its body as text, one line per block' }, dom: { type: 'boolean', description: 'With window: the sanitised outerHTML instead of text' }, screen: { type: 'string', enum: ['image', 'png'], description: 'The machine\'s VGA screen as an image, with the text console\'s rows' } }, required: [] } },
   { name: 'list_files', description: LIST_FILES_DESCRIPTION,
     parameters: { type: 'object', properties: { path: { type: 'string', description: "'' for the top, or a directory: apps/, data/, system/, system/kernel, system/ui" } }, required: [] } },
-  { name: 'list_themes', description: LIST_THEMES_DESCRIPTION,
-    parameters: { type: 'object', properties: {}, required: [] } },
-  { name: 'set_theme', description: 'Restyle the desktop itself: a theme id, or individual colour tokens (list_themes names them).',
-    parameters: { type: 'object', properties: { theme: { type: 'string', enum: ['vibeos-dark', 'vibeos-light', 'win95'] },
-                  tokens: { type: 'object', additionalProperties: { type: 'string' } } }, required: [] } },
   { name: 'read_file', description: 'Read a file from the workspace. The operating system is system/kernel/*.js (the machine, workspace, agent loop; reload_os) and system/ui/*.js (windows, dock, chat, Browser, Settings; reload_ui), styled by system/os.css. Optional line range for big files.',
     parameters: { type: 'object', properties: { path: { type: 'string' }, from: { type: 'integer' }, to: { type: 'integer' } }, required: ['path'] } },
   { name: 'search_file', description: SEARCH_FILE_DESCRIPTION,
@@ -1905,9 +1973,9 @@ const Agent = {
 
   // The composed prompt, from the server, so the browser holds no fourth copy.
   async systemPrompt() {
-    const key = (VM.bootedImage || VM.image) + '|' + Theme.id;
+    const key = VM.bootedImage || VM.image;
     if (this._promptKey === key && this._prompt) return this._prompt;
-    const r = await fetch(`/api/agent/prompt?image=${encodeURIComponent(VM.bootedImage || VM.image)}&theme=${encodeURIComponent(Theme.id)}`);
+    const r = await fetch(`/api/agent/prompt?image=${encodeURIComponent(key)}`);
     const j = await r.json();
     if (!r.ok || !j.prompt) throw new Error(j.error || 'could not load the agent prompt');
     this._prompt = j.prompt; this._promptKey = key;
@@ -2090,16 +2158,6 @@ const Agent = {
           ? '. For an install or a build pass timeout_s (up to 600), or background it: cmd > /mnt/job.log 2>&1 & then tail the log.' : '') };
       }
     }
-    if (toolName === 'set_theme') {
-      onStatus?.('restyling the desktop…');
-      try {
-        const applied = Theme.set(input.theme, input.tokens);
-        track('set_theme', { to: applied.theme });
-        return { ok: true, ...applied, note: 'The desktop is restyled. Open apps using var(--token) followed automatically.' };
-      } catch (e) {
-        return { ok: false, error: e.message, available: Object.keys(VibeOSSkills.THEMES) };
-      }
-    }
     if (toolName === 'web_fetch') {
       const url = String(input.url || '');
       onStatus?.('reading ' + WebTools.hostOf(url) + '…');
@@ -2110,11 +2168,6 @@ const Agent = {
       onStatus?.('searching the web…');
       track('web_search');
       return WebTools.search(String(input.query || ''));
-    }
-    if (toolName === 'list_themes') {
-      const themes = Object.values(VibeOSSkills.THEMES).map(t => ({ id: t.id, title: t.title, summary: t.summary, tokens: Object.keys(t.tokens) }));
-      return { ok: true, themes, current: { theme: Theme.id, custom: Theme.custom, effective: Theme.tokens() },
-               note: 'set_theme takes a theme id, tokens (any name listed, a plain colour or length value), or both' };
     }
     if (toolName === 'read_desktop') {
       onStatus?.('reading the desktop…');
@@ -2243,7 +2296,7 @@ const Agent = {
     let lastText = '';
 
     for (let step = 0; step < this.MAX_STEPS; step++) {
-      const body = Object.assign({ image: VM.bootedImage || VM.image, theme: Theme.id, messages },
+      const body = Object.assign({ image: VM.bootedImage || VM.image, messages },
         Gen.codexModel ? { model: Gen.codexModel } : {});
       const j = await this.callServer(body);
       lastText = j.text || '';
@@ -2413,6 +2466,12 @@ const Chat = {
     catch (e) { this.loadError = 'could not restore ' + ChatLog.PATH + ': ' + e.message; }
     const note = this.reloadNote();
     if (restored) this.turns = restored;
+    // A line that landed before the log was read (Theme.verify's lost id or
+    // parse error runs beside this read) was recorded at 0 and painted
+    // between the intro and the first restored turn — the top of a long log,
+    // out of sight. No turn can run before ready, so every note here is
+    // early: it lands after the restored turns, where the person looks.
+    for (const n of this.notes) n.at = this.turns.length;
     if (restored && restored.length) {
       const last = restored[restored.length - 1];
       if (note && last && last.role === 'assistant' && !last.text) {
