@@ -1,0 +1,14 @@
+web/kernel/agent.js
+  h_e9fef506e0f829 1209-1221,1956,1958
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "c77310dea9ea6a4109a906fe321cda46a70ef21f",
+  "prompts": {},
+  "humans": {
+    "h_e9fef506e0f829": {
+      "author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
