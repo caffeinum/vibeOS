@@ -817,8 +817,26 @@ async function bridgeCall(call, event) {
   }
   if (!GUEST_TOOLS.has(call.tool)) return { ok: false, error: 'unknown tool: ' + call.tool, available: [...GUEST_TOOLS, 'js'] };
   track(event, { tool: call.tool });
-  try { return await Agent.executeTool({ toolName: call.tool, input: call.input || {} }); }
-  catch (e) { return { ok: false, error: e.message }; }
+  let result;
+  try { result = await Agent.executeTool({ toolName: call.tool, input: call.input || {} }); }
+  catch (e) { result = { ok: false, error: e.message }; }
+  if (event === 'guest_rpc') guestSystemNote(call, result);
+  return result;
+}
+
+// A process in the machine keeps root on the OS (aleks: root, no confirm),
+// so a write under system/ or a reload that came from the guest — an apk
+// post-install as easily as the person's own script — is said in the chat,
+// naming the tool and the file, whether it was applied or refused.
+const GUEST_SYSTEM_TOOLS = new Set(['edit_file', 'write_file', 'reload_ui', 'reload_os']);
+function guestSystemNote(call, result) {
+  if (!GUEST_SYSTEM_TOOLS.has(call.tool)) return;
+  const path = call.input && typeof call.input.path === 'string' ? call.input.path : '';
+  if (/^(edit|write)_file$/.test(call.tool) && !/^\/?system\//.test(path)) return;
+  const what = call.tool + (path ? ' ' + path : '');
+  const outcome = result && result.ok ? 'applied' : 'refused: ' + String(result && result.error || 'no reply').slice(0, 200);
+  track('guest_system_write', { tool: call.tool, ok: !!(result && result.ok) });
+  Chat.line('From inside the machine (the vibeos command): ' + what + ' — ' + outcome, !(result && result.ok));
 }
 
 const GuestBridge = {
