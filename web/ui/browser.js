@@ -116,34 +116,12 @@ export function BrowserApp(body) {
     if (/(^|\.)duckduckgo\.com$/.test(h)) return u.searchParams.get('q');
     return null;
   };
-  // Bing's RSS is the one mainstream engine that answers a datacenter address
-  // with real results and no script wall: 10 items with title, link and a
-  // snippet (measured through this proxy on 2026-09-04). Marginalia's page is
-  // the fallback when it does not.
-  const BING_RSS = 'https://www.bing.com/search?format=rss&q=';
-  const resultsPage = (query, items, engine) => {
-    const doc = document.implementation.createHTMLDocument('search');
-    const style = doc.createElement('style');
-    style.textContent = 'body{font:15px/1.45 system-ui,sans-serif;max-width:720px;margin:24px auto;padding:0 16px;color:#111}h1{font-size:17px;margin:0 0 4px}.e{color:#666;font-size:12px;margin:0 0 18px}.r{margin:0 0 16px}.r a{font-size:16px;color:#1a0dab;text-decoration:none}.r a:hover{text-decoration:underline}.h{color:#006621;font-size:13px}.s{margin:2px 0 0;color:#333}';
-    doc.head.appendChild(style);
-    const h1 = doc.createElement('h1'); h1.textContent = query; doc.body.appendChild(h1);
-    const e = doc.createElement('p'); e.className = 'e'; e.textContent = `${items.length} results · ${engine} · scripts off`; doc.body.appendChild(e);
-    for (const it of items) {
-      const r = doc.createElement('div'); r.className = 'r';
-      const a = doc.createElement('a'); a.href = it.link; a.textContent = it.title || it.link;
-      const hst = doc.createElement('div'); hst.className = 'h'; try { hst.textContent = new URL(it.link).host; } catch { hst.textContent = ''; }
-      const sn = doc.createElement('p'); sn.className = 's'; sn.textContent = it.snippet || '';
-      r.append(a, hst, sn); doc.body.appendChild(r);
-    }
-    return doc.documentElement.outerHTML;
-  };
-  const parseRss = (xml) => {
-    const x = new DOMParser().parseFromString(xml, 'text/xml');
-    if (x.querySelector('parsererror')) throw new Error('the search feed was not xml');
-    const text = (el, tag) => (el.querySelector(tag)?.textContent || '').trim();
-    return [...x.querySelectorAll('item')].map(el => ({ title: text(el, 'title'), link: text(el, 'link'), snippet: text(el, 'description').replace(/<[^>]*>/g, '') }))
-      .filter(it => /^https?:\/\//.test(it.link) && !/(^|\.)bing\.com$/.test((() => { try { return new URL(it.link).hostname; } catch { return 'bing.com'; } })()));
-  };
+  // Measured 2026-09-04 through this proxy: bing (rss and html alike, with
+  // or without mkt/cc) answers a datacenter address with results for the
+  // FIRST WORD of a multi-word query — "best pizza in lisbon" gave Best Buy
+  // and three dictionaries; yahoo 500s, qwant lite renders results with
+  // scripts, yandex is a captcha. marginalia's results are real, so every
+  // search shape lands on its page, and the status says so.
   const asUrl = (raw) => {
     const text = raw.trim();
     if (!text) return '';
@@ -204,6 +182,7 @@ export function BrowserApp(body) {
     return { ok: r.ok, status: r.status, type, text, finalUrl, via: 'proxy' };
   };
 
+  let searchedFor = '';
   async function open(target, push = true) {
     const url = asUrl(target);
     if (!url) return;
@@ -219,25 +198,15 @@ export function BrowserApp(body) {
     const t0 = Date.now();
     try {
       track('browser_open', { kind, host: kind === 'search' ? 'search' : host, guest, how: push ? 'nav' : 'history' });
-      if (query) {
-        // The Browser answers a search itself: Bing's RSS, Marginalia's page
-        // when that fails. The address bar keeps what was typed, the results
-        // page is ours (no <base>, links are absolute), and the click handler
-        // below takes people to the result.
+      if (query !== null && !url.startsWith(SEARCH)) {
+        // A google, bing or duckduckgo search (or google's "turn on
+        // JavaScript" page) is answered by the engine that answers: the
+        // address bar shows where the results came from.
         try { sessionStorage.setItem('vibeos-last-search', query); } catch {}
-        let items = null, engine = 'bing';
-        try { const rs = await proxyFetch(BING_RSS + encodeURIComponent(query)); if (!rs.ok) throw new Error('bing rss ' + rs.status); items = parseRss(rs.text); if (!items.length) throw new Error('bing rss: no results'); }
-        catch (e) { console.warn('search via bing rss failed:', e.message); items = null; }
-        if (items) {
-          track('browser_result', { kind, ok: true, status: 200, seconds: Math.round((Date.now() - t0) / 1000) });
-          if (push) { stack.push(url); back.style.opacity = stack.length < 2 ? '.6' : '1'; }
-          frame.srcdoc = `<!doctype html><meta charset="utf-8">${resultsPage(query, items, engine)}`;
-          status.innerHTML = '<span class="dimmer"></span>';
-          status.querySelector('.dimmer').textContent = `search · ${items.length} results from bing · scripts off`;
-          return;
-        }
-        engine = 'marginalia';
-        if (!url.startsWith(SEARCH)) { const fb = SEARCH + encodeURIComponent(query); input.value = fb; return open(fb, push); }
+        const via = SEARCH + encodeURIComponent(query);
+        input.value = via;
+        searchedFor = host;
+        return open(via, push);
       }
       const r = await (guest ? guestFetch(url) : proxyFetch(url));
       track('browser_result', { kind, ok: r.ok, status: r.status, seconds: Math.round((Date.now() - t0) / 1000) });
@@ -273,7 +242,9 @@ export function BrowserApp(body) {
       frame.srcdoc = `<!doctype html><meta charset="utf-8">${guest ? GUEST_CSP : `<base href="${finalUrl}">`}${doc}`;
       status.innerHTML = '<span class="dimmer"></span>';
       status.querySelector('.dimmer').textContent = `${type.split(';')[0] || 'ok'} · ${(text.length / 1024).toFixed(0)} KB · `
-        + (guest ? `served from inside the machine (${r.via}) · scripts off · assets not loaded` : 'scripts disabled');
+        + (guest ? `served from inside the machine (${r.via}) · scripts off · assets not loaded` : 'scripts disabled')
+        + (searchedFor && kind === 'search' ? ` · ${searchedFor} needs JavaScript, so this search ran on marginalia` : '');
+      searchedFor = '';
     } catch (e) {
       track('browser_result', { kind, ok: false, status: 0, seconds: Math.round((Date.now() - t0) / 1000) });
       // Not a blank frame: the guest case is the one where a person is
