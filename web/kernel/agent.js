@@ -1206,6 +1206,19 @@ const Files = {
   },
 };
 
+// What the model gets back from a tool. 4000 characters, cut silently, was a
+// cap from the one-shot era that survived the tool loop: a read_file of 60 KB
+// came back as its first 4000 with no sign it was cut, a search's hits
+// vanished mid-list, and the model reasoned about a file it had not seen.
+// The review named it as the mechanism behind app_generated/opens ≈ 5%. The
+// cap is read_file's own (60 KB) and the cut says so, in the text.
+const TOOL_RESULT_MAX = 60000;
+function toolResultText(output) {
+  const text = JSON.stringify(output);
+  if (text.length <= TOOL_RESULT_MAX) return text;
+  return text.slice(0, TOOL_RESULT_MAX) + `\n…[truncated: ${text.length - TOOL_RESULT_MAX} more characters; narrow the request (from/to, a pattern, a path)]`;
+}
+
 const TOOL_SCHEMAS = [
   { name: 'create_app', description: CREATE_APP_DESCRIPTION,
     parameters: { type: 'object', properties: { title: { type: 'string' }, source: { type: 'string' } }, required: ['title', 'source'] } },
@@ -1940,9 +1953,9 @@ const Agent = {
       }
       msgs = anthropic
         ? [...msgs, { role: 'assistant', content: res.raw },
-           { role: 'user', content: results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: JSON.stringify(r.output).slice(0, 4000) })) }]
+           { role: 'user', content: results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: toolResultText(r.output) })) }]
         : [...msgs, ...res.raw,
-           ...results.map(r => ({ type: 'function_call_output', call_id: r.id, output: JSON.stringify(r.output).slice(0, 4000) }))];
+           ...results.map(r => ({ type: 'function_call_output', call_id: r.id, output: toolResultText(r.output) }))];
     }
     return { text: lastText, created, steps: this.MAX_STEPS };
   },
