@@ -1,7 +1,7 @@
 /* vibeOS kernel — the machine. This file never hot-reloads.
  *
  * The OS is files under public/app, and the loader in index.html boots them
- * in order: os.css, then kernel/machine.js, kernel/workspace.js,
+ * in order: os.css, then kernel/machine.js, kernel/net.js, kernel/workspace.js,
  * kernel/agent.js, kernel/boot.js as classic scripts, then the ui/*.js ES
  * modules through the registry in kernel/boot.js. Each file is the served
  * copy unless system/<same path> exists in the workspace, in which case yours
@@ -49,7 +49,7 @@ const BrowserProvider = {
     get shell() { return VM.state === 'ready'; },   // the VM's shell, not yours
     get tty() { return VM.ttyState === 'ready'; },  // a byte stream on the VM's second serial line
     process:  false,     // host processes; workers are a different thing
-    net:      false,
+    get net() { return Net.available; },  // raw TCP through the relay (kernel/net.js): on whenever the relay is on, off with it
     usb:      'usb' in navigator,
     serial:   'serial' in navigator,
     hid:      'hid' in navigator,
@@ -78,7 +78,16 @@ const NativeProvider = {
   supports: { files:true, disk:true, write:true, shell:true, process:true, net:true, usb:true,
               serial:true, hid:true, midi:true, camera:true, clipboard:true, codegen:true, tty:false },
   base: 'http://127.0.0.1:4571',
+  // Only when something says a helper is there: the helper's own page sets
+  // localStorage vibeos-native, or the url carries ?native=1. A plain visit
+  // used to dial 127.0.0.1:4571 on every load, and the browser logs that
+  // ERR_CONNECTION_REFUSED itself — no try/catch reaches the console line.
+  wanted() {
+    try { if (localStorage.getItem('vibeos-native')) return true; } catch {}
+    try { return new URLSearchParams(location.search).get('native') === '1'; } catch { return false; }
+  },
   async probe() {
+    if (!this.wanted()) return false;
     const c = new AbortController(); const t = setTimeout(() => c.abort(), 400);
     try { return (await fetch(this.base + '/health', { signal: c.signal })).ok; }
     catch { return false; } finally { clearTimeout(t); }

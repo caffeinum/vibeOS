@@ -32,6 +32,9 @@
     ['oauth.js', 'skills.js'].forEach(function (f) {
       document.write('<script src="' + base + f + '"><\/script>');
     });
+    // The ui modules run from blob URLs, whose base is opaque: the only way
+    // one can import the vendored Lit is a bare name an import map resolves.
+    document.write('<script type="importmap">' + JSON.stringify({ imports: { lit: base + 'vendor/lit.js' } }) + '<\/script>');
   })();
 </script>
 <script>
@@ -141,7 +144,7 @@ window.addEventListener('unhandledrejection', e => {
    now and is reported below when a workspace still holds one.
    -------------------------------------------------------------------- */
 
-const KERNEL_FILES = ['kernel/machine.js', 'kernel/workspace.js', 'kernel/agent.js', 'kernel/boot.js'];
+const KERNEL_FILES = ['kernel/machine.js', 'kernel/net.js', 'kernel/workspace.js', 'kernel/agent.js', 'kernel/boot.js'];
 const UI_FILES = ['ui/windows.js', 'ui/dock.js', 'ui/chat.js', 'ui/browser.js', 'ui/settings.js'];
 const OS_FILES = ['os.css', ...KERNEL_FILES, ...UI_FILES];
 

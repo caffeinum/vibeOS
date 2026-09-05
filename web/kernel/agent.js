@@ -247,15 +247,24 @@ const Gen = {
     return this._askModal;
   },
 
+  // A local demo server holding a key answers /api/health; vibeos.sh and the
+  // static mirror have no such route, and the browser logs a 404 for a fetch
+  // whatever the code catches. So the probe runs only when something says a
+  // server is there — localStorage vibeos-server, or ?server=1 — else BYO key.
+  serverWanted() {
+    try { if (localStorage.getItem('vibeos-server')) return true; } catch {}
+    try { return new URLSearchParams(location.search).get('server') === '1'; } catch { return false; }
+  },
   async probe() {
-    // A local server holding a key takes precedence; otherwise BYO key.
-    try {
-      const r = await fetch('/api/health', { headers: { 'ngrok-skip-browser-warning': '1' } });
-      if (r.ok) {
-        const j = await r.json();
-        if (j.keyed) { this.viaServer = true; this.model = j.model; this.available = true; return true; }
-      }
-    } catch {}
+    if (this.serverWanted()) {
+      try {
+        const r = await fetch('/api/health', { headers: { 'ngrok-skip-browser-warning': '1' } });
+        if (r.ok) {
+          const j = await r.json();
+          if (j.keyed) { this.viaServer = true; this.model = j.model; this.available = true; return true; }
+        }
+      } catch {}
+    }
     this.loadKey();
     return this.available;
   },
@@ -417,11 +426,12 @@ TARGET 1, a desktop window (default). Header exactly:
 // @title <Short Name>
 // @target browser
 // @requires <space-separated caps, or none>
-Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs). Use none unless needed.
+Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs), net (raw TCP through the relay). Use none unless needed.
 Then: export default function (mount, api) { ... }
 mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size.
 api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): one-shot commands. Waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app that uses it and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted — those want api.tty(). List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
 api.tty() -> { write(bytesOrString), onData(fn) -> off, resize(cols, rows), close() } (needs tty): a terminal is api.tty(): bytes both ways, ctrl-c, top, nano, passwords work; api.shell is for one-shot commands. It is its own shell on the machine's second serial line, not the one api.shell and the agent share, so a cd there stays there. The line echoes what you write: paint what onData delivers (\\r, \\n, \\b and ANSI escapes; answer \\x1b[6n with \\x1b[row;colR or vi and ash wait on it) instead of echoing keys yourself; send Enter as \\r, Ctrl-C as \\x03, arrows as \\x1b[A..D, and resize(cols, rows) when the pane changes. One tty per machine: while the built-in Terminal or another app holds it, api.tty() throws naming the holder — show that message; closing that window releases it.
+api.net.connect(host, port) -> { write(bytesOrString), onData(fn) -> off, onClose(fn) -> off, close(), state, reason } (needs net): opens raw TCP through the relay for a TCP client — a redis, irc or smtp toy; http stays on the proxy and the Browser, not this. Plain TCP only (no tls option; https means fetch or curl in the machine). localhost, private and loopback addresses and ports outside the relay's list (80, 443, 21, 22, 70, 1965, 3000, 8080, 8443) throw naming the rule; the relay closes a stream it refuses and onClose says why. The relay is a serverless function that ends about every 13 minutes: every open stream then closes with "network error: the relay reconnected and the connection was lost", so a long-lived client (irc, redis) must reconnect from onClose. A write after close throws. Closing the window closes the connection.
 
 Layout rules (required): root width/height 100%, box-sizing:border-box, display:flex, flex-direction:column, overflow:hidden on mount. No document scroll, no min-height exceeding the window. Modest type and padding; empty states must fit. Scroll inner panes only (overflow:auto, scrollbar-width:thin), never mount.
 
@@ -670,7 +680,7 @@ const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'set_theme', 
 // os.js, so "change the Browser" is an edit to system/os.js — not a request.
 // One sentence, said wherever the agent or the person looks at /mnt, so a
 // directory made in the guest is not discovered missing from the folder later.
-const MOUNT_MAPPING = '/mnt is the workspace, flat: /mnt/<name> is data/<name> and /mnt/<name>.js is apps/<name>.js; system/ is not in /mnt and subdirectories under /mnt are not mirrored, nor are symlinks or special files — only regular files at the root of /mnt (the rest is listed under unmirrored).';
+const MOUNT_MAPPING = '/mnt is the workspace, flat: /mnt/<name> is data/<name> and /mnt/<name>.js is apps/<name>.js; system/ is not in /mnt except as /mnt/system, a read-only copy of the OS source the loader ran (kernel/, ui/, os.css, index.html — never chat.json or snapshots) for cat, grep and diff and subdirectories under /mnt are not mirrored, nor are symlinks or special files — only regular files at the root of /mnt (the rest is listed under unmirrored).';
 const BUILTIN_APPS = () => Object.entries(UI.stable().SHELL).map(([id, s]) => ({
   id, title: s.title, builtin: true,
   source: 'system/' + s.file, hint: `search_file system/${s.file} for "function ${s.render}"; reload_ui applies the edit live`,

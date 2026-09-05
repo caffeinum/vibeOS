@@ -1,10 +1,80 @@
 /* ui/windows.js — window chrome, the sandbox generated apps run in, the
  * shell's own apps and the dock's icons. A ui module: an ES module the
  * kernel imports from its text (served, or system/ui/windows.js) and can
- * import again on reload_ui. It imports nothing; every kernel symbol it uses
- * (VM, Workspace, CAP, UI, …) is a global of a classic script, which is what
- * lets the same text run served or from a blob URL with no build step.
+ * import again on reload_ui. The one thing it imports is Lit, by the bare
+ * name the loader's import map resolves to vendor/lit.js (a blob-URL module
+ * cannot name a path: its base URL is opaque). Every kernel symbol it uses
+ * (VM, Workspace, CAP, UI, …) is a global of a classic script, which is
+ * what lets the same text run served or from a blob URL with no build step.
  */
+import { LitElement, html, nothing } from 'lit';
+
+/* ---------- the chrome: <vibeos-window> ---------------------------------
+
+   A window's frame is a Lit element rendered in light DOM — os.css styles
+   `.win .titlebar` and the suites find `.win .title`, so no shadow root —
+   from the kernel's record: `el.rec` in, DOM events out (close, minimise,
+   zoom, drag, resize call the kernel or move the host's own style). The
+   element owns no state: the record is the kernel's, subscriptions go
+   through Windows.onDispose on this element, the body is a plain div the
+   renderer paints into and lit never touches again (nothing binds inside
+   it, so a re-render diffs around it).
+
+   The tag is registered once per page — customElements.define refuses a
+   second class under the same name — and every ui import after the first
+   (a reload_ui) hands its OWN template function to the element (`el.view`),
+   so an edit to `chrome()` below is live on the next reload_ui while the
+   class itself is two lines that never need to change. The chrome renders
+   synchronously in build() through performUpdate(): the record's body must
+   exist before the renderer runs, and a reload_ui trial paints into
+   detached elements that Lit would otherwise not update until connected.
+   -------------------------------------------------------------------- */
+class VibeosWindow extends LitElement {
+  createRenderRoot() { return this; }
+  render() { return this.view(this); }
+}
+if (!customElements.get('vibeos-window')) customElements.define('vibeos-window', VibeosWindow);
+
+// The template, from the record. Interpolations are text: a title from a
+// generated app's header or the model reaches the title bar as characters.
+function chrome(el) {
+  const { title, badge } = el.rec.spec;
+  return html`
+    <div class="titlebar" @mousedown=${e => dragStart(e, el)}>
+      <button class="tl r" title="Close" @click=${() => Windows.close(el)}></button>
+      <button class="tl y" title="Minimise" @click=${() => el.classList.add('min')}></button>
+      <button class="tl g" title="Zoom" @click=${() => zoom(el)}></button>
+      <span class="title">${title}</span>
+      ${badge ? html`<span class="badge">${badge}</span>` : nothing}
+    </div>
+    <div class="body"></div>
+    <div class="resize" @mousedown=${e => resizeStart(e, el)}></div>`;
+}
+
+function zoom(el) {
+  if (el.dataset.full === '1') { Object.assign(el.style, JSON.parse(el.dataset.prev)); el.dataset.full = '0'; return; }
+  el.dataset.prev = JSON.stringify({ left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height });
+  Object.assign(el.style, { left: '8px', top: '38px', width: 'calc(100% - 16px)', height: 'calc(100% - 110px)' });
+  el.dataset.full = '1';
+}
+
+function dragStart(e, el) {
+  drag(e, { l: parseFloat(el.style.left), t: parseFloat(el.style.top) },
+    (dx, dy, s) => { el.style.left = Math.max(0, s.l + dx) + 'px'; el.style.top = Math.max(30, s.t + dy) + 'px'; });
+}
+
+function resizeStart(e, el) {
+  drag(e, { w: el.offsetWidth, h: el.offsetHeight },
+    (dx, dy, s) => { el.style.width = Math.max(300, s.w + dx) + 'px'; el.style.height = Math.max(180, s.h + dy) + 'px'; });
+}
+
+function drag(e, s, move) {
+  e.preventDefault();
+  const x0 = e.clientX, y0 = e.clientY;
+  const mv = ev => move(ev.clientX - x0, ev.clientY - y0, s);
+  const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); };
+  document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+}
 
 // A SHELL entry names its renderer by export (render: 'ChatApp'), resolved
 // through the live ui at open time; the loader's diff window passes a
@@ -35,8 +105,15 @@ export function openWindow(spec) {
 // the renderer has — a renderer that throws, or returns a promise that
 // rejects, fails the trial rather than the page.
 export function build(rec, geom) {
-  const { id, title, badge, w, h } = rec.spec;
-  const el = document.createElement('div');
+  const { id, w, h, title, badge } = rec.spec;
+  // A title or badge that is not a string comes from the model (create_app
+  // passes input.title through) and would reach Lit as a child value: an
+  // array renders its items joined, an object is Lit's own error. Refuse
+  // it here, naming the window, before anything is built.
+  for (const [k, v] of [['title', title], ['badge', badge]]) {
+    if (typeof v !== 'string') throw new Error('build: a window ' + k + ' must be a string, got ' + (Array.isArray(v) ? 'an array' : v === null ? 'null' : 'a ' + typeof v) + (k === 'badge' ? ' for "' + String(title) + '"' : ''));
+  }
+  const el = document.createElement('vibeos-window');
   el.className = 'win';
   if (id) el.dataset.app = id;
   Windows.stamp(rec, el);
@@ -48,17 +125,11 @@ export function build(rec, geom) {
     if (geom.full) el.dataset.full = geom.full;
     if (geom.prev) el.dataset.prev = geom.prev;
   }
-  el.innerHTML = `
-    <div class="titlebar">
-      <button class="tl r" title="Close"></button>
-      <button class="tl y" title="Minimise"></button>
-      <button class="tl g" title="Zoom"></button>
-      <span class="title"></span>
-      ${badge ? `<span class="badge">${badge}</span>` : ''}
-    </div>
-    <div class="body"></div><div class="resize"></div>`;
-  el.querySelector('.title').textContent = title;
-  wire(el);
+  el.rec = rec;
+  el.view = chrome;
+  el.performUpdate();
+  if (!el.querySelector('.body')) throw new Error('build: the chrome rendered no body for "' + rec.spec.title + '"');
+  el.addEventListener('mousedown', () => Windows.raise(el), true);
   return { el, done: paint(rec, el) };
 }
 
@@ -91,26 +162,6 @@ export function geometry(el) {
            min: el.classList.contains('min'), full: el.dataset.full || '', prev: el.dataset.prev || '' };
 }
 
-function wire(el) {
-  el.addEventListener('mousedown', () => Windows.raise(el), true);
-  el.querySelector('.tl.r').onclick = () => Windows.close(el);
-  el.querySelector('.tl.y').onclick = () => el.classList.add('min');
-  el.querySelector('.tl.g').onclick = () => {
-    if (el.dataset.full === '1') { Object.assign(el.style, JSON.parse(el.dataset.prev)); el.dataset.full = '0'; }
-    else {
-      el.dataset.prev = JSON.stringify({ left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height });
-      Object.assign(el.style, { left: '8px', top: '38px', width: 'calc(100% - 16px)', height: 'calc(100% - 110px)' });
-      el.dataset.full = '1';
-    }
-  };
-  drag(el.querySelector('.titlebar'),
-    (dx, dy, s) => { el.style.left = Math.max(0, s.l + dx) + 'px'; el.style.top = Math.max(30, s.t + dy) + 'px'; },
-    () => ({ l: parseFloat(el.style.left), t: parseFloat(el.style.top) }));
-  drag(el.querySelector('.resize'),
-    (dx, dy, s) => { el.style.width = Math.max(300, s.w + dx) + 'px'; el.style.height = Math.max(180, s.h + dy) + 'px'; },
-    () => ({ w: el.offsetWidth, h: el.offsetHeight }));
-}
-
 export function focusOrOpen(spec) {
   const open = document.querySelector(`.win[data-app="${spec.id}"]`);
   if (!open) return openWindow(spec);
@@ -120,16 +171,6 @@ export function focusOrOpen(spec) {
 }
 
 export function raise(el) { Windows.raise(el); }
-
-function drag(handle, move, start) {
-  handle.addEventListener('mousedown', e => {
-    e.preventDefault();
-    const s = start(), x0 = e.clientX, y0 = e.clientY;
-    const mv = ev => move(ev.clientX - x0, ev.clientY - y0, s);
-    const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); };
-    document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
-  });
-}
 
 /* ---------- running agent-written code, with no build step ------------
 
@@ -156,6 +197,8 @@ function createAppApi(provider, mount, title) {
   });
   ro.observe(mount);
   Windows.onDispose(mount.closest('.win'), () => ro.disconnect());
+  const streams = new Set();
+  Windows.onDispose(mount.closest('.win'), () => { for (const s of streams) s.close(); });
   return {
     async list(...args) { return provider.list(...args); },
     async shell(...args) { return provider.shell(...args); },
@@ -166,6 +209,18 @@ function createAppApi(provider, mount, title) {
       const handle = provider.tty(title);
       Windows.onDispose(mount.closest('.win'), () => handle.close());
       return handle;
+    },
+    // Raw TCP through the relay (kernel/net.js), not the machine's stack:
+    // a connection is the window's and closes with it. One disposer for
+    // the window, not one per connect: an app that connects in a loop
+    // would otherwise grow the window's list for its whole life.
+    net: {
+      connect(host, port, opts) {
+        const stream = Net.connect(host, port, opts);
+        streams.add(stream);
+        stream.onClose(() => streams.delete(stream));
+        return stream;
+      },
     },
     onResize(fn) {
       resizeCb = fn;
@@ -213,7 +268,10 @@ export function AppWindow(body, win, { app }) {
   // subscription is the window's: closed or repainted, it lets go. The tty
   // comes up after 'ready' (its own state, on every emit), so the check is
   // "nothing missing any more", not the state name.
-  if (missing.every(c => VM_CAPS.includes(c)) && VM.state !== 'failed' && VM.state !== 'unavailable') {
+  // `some`, not `every`: an app on shell AND net while the relay is off is
+  // still waiting on the machine, and stayed on "still booting" forever when
+  // 'net' in the list switched the watcher off.
+  if (missing.some(c => VM_CAPS.includes(c)) && VM.state !== 'failed' && VM.state !== 'unavailable') {
     const off = VM.on(() => {
       const still = missingCaps(app.requires);
       if (!still.length) { off(); start(); return; }
@@ -233,7 +291,21 @@ function renderUpsell(mount, missing) {
   // still booting sent people (and the agent) away from kernel-backed apps —
   // the exact apps this OS exists to run. Say what is actually true.
   const vmCaps = missing.filter(c => VM_CAPS.includes(c));
-  const nativeOnly = missing.filter(c => !VM_CAPS.includes(c));
+  const net = missing.includes('net');
+  const nativeOnly = missing.filter(c => !VM_CAPS.includes(c) && c !== 'net');
+  // net is neither the machine's nor the native build's: it is the relay,
+  // and the relay is a setting. Say that instead of sending people to a
+  // binary for a switch in Settings — alone, or under the machine's line
+  // and the native build's, so it never drops out of the text when paired.
+  const netLine = net ? '<p class="small muted" style="margin:0 0 10px">It also opens TCP connections through the relay, and the relay is turned off: Settings &rsaquo; Network turns it on; the app runs on the next launch.</p>' : '';
+  if (net && !vmCaps.length && !nativeOnly.length) {
+    mount.innerHTML = `
+      <div class="upsell">
+        <h3 style="margin:0 0 6px">Networking is off</h3>
+        <p class="small muted" style="margin:0 0 10px">This app opens TCP connections through the relay, and the relay is turned off. Settings &rsaquo; Network turns it on; the app runs on the next launch.</p>
+      </div>`;
+    return;
+  }
   if (vmCaps.length && !nativeOnly.length) {
     const ttyDown = vmCaps.includes('tty') && VM.state === 'ready' && VM.ttyState === 'failed';
     const why = ttyDown ? `the machine is ready but its terminal line failed: ${VM.ttyError}`
@@ -244,6 +316,7 @@ function renderUpsell(mount, missing) {
       <div class="upsell">
         <h3 style="margin:0 0 6px">Waiting for Linux</h3>
         <p class="small muted" style="margin:0 0 10px">This app uses the <b></b>, which the VM provides. Right now <span class="why"></span>.</p>
+        ${netLine}
         ${VM.state === 'failed' || VM.state === 'unavailable' || ttyDown
           ? '<button class="btn sm" id="upsellRestart">Restart the machine</button>'
           : '<p class="tiny dimmer" style="margin:0">Settings &rsaquo; Machine shows the boot console.</p>'}
@@ -261,6 +334,7 @@ function renderUpsell(mount, missing) {
       <p class="small muted" style="margin:0 0 10px">
         This app requires <b></b>, which a browser tab cannot provide.
       </p>
+      ${netLine}
       <p class="small muted" style="margin:0">
         ${Workspace.open && !Workspace.private
           ? `Your apps are already files in <code>${Workspace.label}/apps</code> — download the

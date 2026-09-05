@@ -266,6 +266,7 @@ const Workspace = {
     if (forking) await this.recordFork(file);
     const fh = await dir.getFileHandle(name, { create: true });
     const w = await fh.createWritable(); await w.write(text); await w.close();
+    if (file) await SystemMirror.refresh(file);
   },
   // First write of a loaded file: pin the version it came from in
   // system/os.version.json, one entry per file since they fork on different
@@ -448,6 +449,129 @@ function parseFile(src) {
   return m ? m[1].trim() : null;
 }
 
+/* ---------- /mnt/system: the OS source, read-only, inside the machine ----
+
+   The workspace's system/ is never synced and never mounted: it holds the
+   chat log, the version record, the snapshots. What the guest gets instead
+   is a copy of the files the loader runs — the same text, stored fork or
+   served — so `cat /mnt/system/ui/dock.js`, grep and diff work from the
+   Terminal and from the agent's vm_exec. Written host-side through 9p at
+   every 'ready' (a cold boot and a restore alike: the snapshot's copy may be
+   older than the fork that boots) and again on every Workspace.writePath of
+   a loaded file, so after edit_file the mirror shows the fork before
+   reload_ui/reload_os runs it. Read-only for the guest by a bind mount
+   remounted ro: root ignores 0444, but the kernel answers EROFS on a ro
+   mount (measured on busybox: "can't create … Read-only file system", rm
+   and touch the same). The host's writes bypass the guest kernel and land
+   regardless. Trust by convention like the app gate: root can umount it.
+   -------------------------------------------------------------------- */
+const SystemMirror = {
+  DIR: 'system',
+  // The loader and its two libraries are served, never forked (index.html
+  // is the trusted loader; the page cannot write it).
+  SERVED_ONLY: ['index.html', 'oauth.js', 'skills.js'],
+  // One exec on the boot's queue, not four: the setup is a script the host
+  // drops at a root-level dotfile (hidden from Sync and Files like .vfetch-N)
+  // because the serial line editor wraps a command over 80 columns into its
+  // own output. The ro check makes a restore idempotent: the bind survives in
+  // the snapshot, and a second one would stack a mount per restore.
+  SCRIPT: [
+    'mkdir -p /mnt/system/kernel /mnt/system/ui || exit 1',
+    "grep -q ' /mnt/system 9p ro' /proc/mounts && { echo ok; exit 0; }",
+    'mount -o bind /mnt/system /mnt/system || exit 1',
+    'mount -o remount,ro,bind /mnt/system || exit 1',
+    'echo ok',
+  ].join('\n') + '\n',
+  SETUP: 'sh /mnt/.sysmirror.sh; rm -f /mnt/.sysmirror.sh',
+  // Alpine mounts /mnt with cache=loose (scripts/alpine/Dockerfile): a host
+  // rewrite of an inode the guest has already read is served from the page
+  // cache — after edit_file, grep still found 0 in the guest; a restored
+  // snapshot's cache holds every file it booted with. Measured: rc=0 and the
+  // next cat shows the new text. BusyBox mounts cache=none and does not need
+  // it; one exec on every image is cheaper than knowing which is which.
+  DROP: 'echo 3 > /proc/sys/vm/drop_caches; echo rc=$?',
+  state: '',        // '' | writing | ready | failed
+  error: '',
+  written: 0,
+  ready: null,      // the populate in flight or done, for a refresh to queue behind
+  pending: new Set(),   // system files written before the machine was ready
+
+  status() { return { state: this.state, error: this.error, written: this.written }; },
+
+  get names() {
+    if (typeof OS_FILES === 'undefined') throw new Error('OS_FILES is missing: the kernel must boot from the vibeOS loader');
+    return [...OS_FILES, ...this.SERVED_ONLY];
+  },
+
+  // The text the loader ran this boot: __vibeosBoot.files says where each
+  // loaded file came from and .stored holds the stored texts it handed the
+  // kernel and the ui registry. Not readPath: on a recovery or ?safe=1 boot
+  // the served file runs over a stored fork, and the mirror must say so.
+  async bootText(name) {
+    const b = window.__vibeosBoot;
+    if (!b || !b.files) throw new Error('__vibeosBoot.files is missing: the kernel must boot from the vibeOS loader');
+    // UI.source is the truth for ui files: a stored ui that failed to paint
+    // is put aside for the served one after the loader has said 'stored'.
+    const source = (name in UI.source) ? UI.source[name] : b.files[name];
+    if (source === 'stored') {
+      const text = b.stored && b.stored.files && b.stored.files[name];
+      if (typeof text !== 'string') throw new Error(`the loader says system/${name} is stored but handed over no text`);
+      return text;
+    }
+    return (await Workspace.fetchServed(name)).text;
+  },
+
+  async put(name, text) {
+    await VM.writeQuietly(this.DIR + '/' + name, new TextEncoder().encode(text));
+  },
+  async dropCaches() {
+    const out = await VM.exec(this.DROP);
+    if (out !== 'rc=0') throw new Error('drop_caches after writing /mnt/system: ' + JSON.stringify(out));
+  },
+
+  // The directories and the read-only mount, then every file: the host's
+  // writes bypass the guest kernel, so the mount's order does not matter and
+  // mkdir -p under a restored machine's ro mount is rc=0 (measured).
+  populate() {
+    this.ready = this._populate().catch(e => {
+      this.state = 'failed'; this.error = e.message;
+      console.warn('/mnt/system was not mirrored:', e.message);
+    });
+    return this.ready;
+  },
+  async _populate() {
+    this.state = 'writing'; this.error = ''; this.written = 0;
+    await VM.writeQuietly('.sysmirror.sh', new TextEncoder().encode(this.SCRIPT));
+    const out = await VM.exec(this.SETUP);
+    if (out !== 'ok') throw new Error('/mnt/system setup: ' + JSON.stringify(out));
+    for (const name of this.names) { await this.put(name, await this.bootText(name)); this.written++; }
+    // A file written before the machine was ready shows what its write left
+    // on disk, like one written after — not the text that booted.
+    for (const name of this.pending) await this.put(name, await Workspace.readPath('system/' + name));
+    this.pending.clear();
+    await this.dropCaches();
+    this.state = 'ready';
+  },
+
+  // After a write of system/<name>: the fork, or the served text when the
+  // write retired it (readPath's rule — the text the next boot runs). The
+  // mirror is a view of a write that is already on disk and will boot, so
+  // its failure is recorded here, never thrown into edit_file's result.
+  async refresh(name) {
+    if (!VM.ready()) { this.pending.add(name); return; }
+    try {
+      if (this.ready) await this.ready;
+      await this.put(name, await Workspace.readPath('system/' + name));
+      await this.dropCaches();
+      this.state = 'ready'; this.error = '';
+    } catch (e) {
+      this.state = 'failed'; this.error = `system/${name}: ${e.message}`;
+      console.warn('/mnt/system was not refreshed:', this.error);
+    }
+  },
+};
+VM.on((s, transition) => { if (s === 'ready' && transition) SystemMirror.populate(); });
+
 const Sync = {
   timer: null,
   every: 60,          // seconds; 0 = off
@@ -494,7 +618,7 @@ const Sync = {
   // list_apps can say "sub/ stays in the machine" instead of listing nothing.
   unmirrored() {
     const all = VM.listFiles();
-    return all ? all.filter(e => e.parentid === 0 && e.type !== 'file')
+    return all ? all.filter(e => e.parentid === 0 && e.type !== 'file' && e.name !== SystemMirror.DIR)
                     .map(e => ({ name: e.name, type: e.type }))
                     .sort((a, b) => a.name.localeCompare(b.name)) : [];
   },
@@ -528,7 +652,7 @@ const Sync = {
       }
       rows.push({ name, inWs, inVm, state });
     }
-    return { rows, unmirrored: this.unmirrored() };
+    return { rows, unmirrored: this.unmirrored(), system: SystemMirror.status() };
   },
 
 // Called by the VM's write hook, debounced. Only moves VM -> folder, and
