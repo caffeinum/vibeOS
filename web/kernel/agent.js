@@ -106,7 +106,6 @@ const Gen = {
                 <p class="tiny dimmer" style="margin:0">Claude Code, Cursor or Codex drives this desktop through MCP. Paste this into your terminal, then talk to your agent in its own window:</p>
                 <code class="mono" id="keyConnectCmd" style="display:block;white-space:pre-wrap;word-break:break-all;padding:8px;border:1px solid var(--line);border-radius:var(--radius-sm)"></code>
                 <div class="row" style="gap:6px"><button type="button" class="btn sm" id="keyConnectCopy">Copy</button><span class="tiny dimmer" id="keyConnectState"></span></div>
-                <p class="tiny" style="margin:0;color:var(--no)">An agent with this line has root on this desktop: it can edit the OS and run commands in the machine.</p>
               </div>
               <p class="note" id="keyConnectError" hidden style="margin:0;color:var(--no)"></p>
               <button type="button" class="btn" id="keyLoginBtn">Login with Codex</button>
@@ -1162,11 +1161,29 @@ const RemoteBridge = {
     this.set('connected', label);
   },
 
+  // What the connected agent did, newest last, capped; the chat paints it as
+  // the activity view when no model of its own is connected. Input is
+  // summarised to one short line (a title, a command, a path) — never the
+  // whole source — and every field is text on the way to the DOM.
+  activity: [],
+  ACTIVITY_MAX: 200,
+  activityListeners: new Set(),
+  onActivity(fn) { this.activityListeners.add(fn); return () => this.activityListeners.delete(fn); },
+  summarise(tool, input) {
+    const i = input || {};
+    const pick = i.title || i.command || i.path || i.query || i.url || i.theme || (typeof i.code === 'string' ? i.code : '') || i.note || '';
+    return String(pick).replace(/\s+/g, ' ').slice(0, 120);
+  },
   async call(msg) {
     this.calls++;
     this.connected();
     this.emit();
+    const t0 = Date.now();
+    const entry = { at: t0, tool: String(msg.tool), what: this.summarise(msg.tool, msg.input), ok: null, ms: 0, error: '' };
+    this.activity.push(entry); if (this.activity.length > this.ACTIVITY_MAX) this.activity.splice(0, this.activity.length - this.ACTIVITY_MAX);
     const result = await bridgeCall({ tool: msg.tool, input: msg.input }, 'mcp_call');
+    entry.ok = !(result && result.ok === false); entry.ms = Date.now() - t0; entry.error = entry.ok ? '' : String(result.error || '').slice(0, 200);
+    this.activityListeners.forEach(fn => { try { fn(entry); } catch (e) { console.error('RemoteBridge activity listener failed:', e); } });
     // The socket may have been cut or revoked while the tool ran: a held frame
     // goes out on the redial (the package answers or has already failed the
     // call by id); after a revoke there is nowhere to send and nothing owed.

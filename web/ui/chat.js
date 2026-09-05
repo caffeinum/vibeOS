@@ -100,7 +100,30 @@ export function ChatApp(body, win) {
   };
   // The intro follows the bridge: the onboarding modal closes itself when an
   // agent connects, and the chat behind it must not keep saying "no model".
-  Windows.onDispose(win, RemoteBridge.on(() => { if (introEl) paintIntro(); }));
+  Windows.onDispose(win, RemoteBridge.on(() => { if (introEl) paintIntro(); agentMode(); }));
+
+  // With an agent connected and no model here, this window is the activity
+  // view: every tool call the agent makes lands as a card, and the input says
+  // where to talk. MCP is agent→tools; nothing typed here can reach the agent.
+  const paintActivity = (e) => {
+    const d = document.createElement('div');
+    d.className = 'agent-act';
+    d.style.cssText = 'align-self:flex-start;max-width:92%;padding:6px 10px;font-size:12px;border-left:2px solid var(--line2);opacity:.9';
+    const tool = document.createElement('b'); tool.textContent = e.tool;
+    const what = document.createElement('span'); what.textContent = e.what ? ' ' + e.what : '';
+    const st = document.createElement('span'); st.className = 'tiny ' + (e.ok === false ? 'no' : 'dimmer');
+    st.textContent = e.ok === false ? ' — refused: ' + e.error : ` — ${e.ms} ms`;
+    d.append(tool, what, st); log.appendChild(d); body.scrollTop = body.scrollHeight;
+  };
+  let agentOnly = false;
+  const agentMode = () => {
+    const on = RemoteBridge.state === 'connected' && !Gen.available;
+    if (on === agentOnly) return;
+    agentOnly = on;
+    if (on) { input.disabled = true; input.placeholder = `${RemoteBridge.detail || 'your agent'} drives this desktop — talk to it in its own window`; }
+    else if (Chat.ready) { input.disabled = false; input.placeholder = placeholder; }
+  };
+  Windows.onDispose(win, RemoteBridge.onActivity(e => { if (RemoteBridge.state === 'connected') paintActivity(e); }));
 
   const paintReload = ({ note, files, source }) => {
     const b = bubble('vibeos', `<b>reloaded</b> <span class="tiny dimmer">${source === 'stored' ? 'running your copy' : 'running the stock desktop'}</span><span class="tiny dimmer" id="files"></span><div id="note"></div>`);
@@ -194,6 +217,9 @@ export function ChatApp(body, win) {
       if (i < Chat.turns.length) paintTurn(Chat.turns[i]);
     }
     if (!Chat.restored && Chat.note) paintReload(Chat.note);
+    // The agent's activity is kernel state like the turns: a repaint (the
+    // intro following the bridge, a restore) draws it again, newest last.
+    if (RemoteBridge.state === 'connected') for (const e of RemoteBridge.activity) paintActivity(e);
     body.scrollTop = body.scrollHeight;
   };
   const paintChips = () => {
@@ -234,7 +260,8 @@ export function ChatApp(body, win) {
   input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
 
   const placeholder = input.placeholder;
-  const enable = () => { input.disabled = false; input.placeholder = placeholder; };
+  const enable = () => { if (agentOnly) return; input.disabled = false; input.placeholder = placeholder; };
+  agentMode();
   if (!Chat.ready) { input.disabled = true; input.placeholder = 'loading chat…'; }
   const off = Chat.on((type, data) => {
     if (type === 'chips') return paintChips();
