@@ -430,6 +430,7 @@ const APP_CONTRACT = `// @title <Short Name>
 // @target browser
 // @requires <space-separated caps, or none>
 Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs), net (raw TCP through the relay). Use none unless needed.
+Optional fourth header, where and how big the window opens: // @geometry <top-left|top-right|bottom-left|bottom-right> [<w>x<h>] or // @geometry <x>,<y>,<w>,<h> or // @geometry <w>x<h> alone (px; without it the window cascades at 430x320; a window is at least 300x180, is kept on screen under the menubar and clear of the dock, and is no bigger than the desktop). A helper, mascot or widget "in the corner of the screen" is a small window with a corner geometry, e.g. // @geometry bottom-right 300x220 — never position:fixed or a transform to escape the window.
 Then: export default function (mount, api) { ... }
 mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size. api.mountSize() -> {width,height}.
 api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): one-shot commands. Waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app that uses it and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted — those want api.tty(). List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
@@ -1205,19 +1206,6 @@ const Files = {
   },
 };
 
-// What the model gets back from a tool. 4000 characters, cut silently, was a
-// cap from the one-shot era that survived the tool loop: a read_file of 60 KB
-// came back as its first 4000 with no sign it was cut, a search's hits
-// vanished mid-list, and the model reasoned about a file it had not seen.
-// The review named it as the mechanism behind app_generated/opens ≈ 5%. The
-// cap is read_file's own (60 KB) and the cut says so, in the text.
-const TOOL_RESULT_MAX = 60000;
-function toolResultText(output) {
-  const text = JSON.stringify(output);
-  if (text.length <= TOOL_RESULT_MAX) return text;
-  return text.slice(0, TOOL_RESULT_MAX) + `\n…[truncated: ${text.length - TOOL_RESULT_MAX} more characters; narrow the request (from/to, a pattern, a path)]`;
-}
-
 const TOOL_SCHEMAS = [
   { name: 'create_app', description: CREATE_APP_DESCRIPTION,
     parameters: { type: 'object', properties: { title: { type: 'string' }, source: { type: 'string' } }, required: ['title', 'source'] } },
@@ -1882,6 +1870,7 @@ const Agent = {
     if (!images || !images.length) return text;
     const textPart = text ? [{ type: 'text', text }] : [];
     if (shape === 'openai')    return [...textPart, ...images.map(i => ({ type: 'image_url', image_url: { url: i.dataUrl } }))];
+    if (shape === 'responses') return [...(text ? [{ type: 'input_text', text }] : []), ...images.map(i => ({ type: 'input_image', image_url: i.dataUrl }))];
     if (shape === 'anthropic') return [...images.map(i => ({ type: 'image', source: { type: 'base64', media_type: i.mediaType, data: i.data } })), ...textPart];
     if (shape === 'sdk')       return [...textPart, ...images.map(i => ({ type: 'image', image: i.dataUrl }))];
     throw new Error('unknown message shape: ' + shape);
@@ -1934,7 +1923,7 @@ const Agent = {
     const created = [];
     let msgs = [
       ...historyWindow(history).map(h => ({ role: h.role, content: h.content })),
-      { role: 'user', content: this.userContent(anthropic ? 'anthropic' : 'openai', prompt, images) },
+      { role: 'user', content: this.userContent(anthropic ? 'anthropic' : 'responses', prompt, images) },
     ];
     let lastText = '';
 
@@ -1951,47 +1940,50 @@ const Agent = {
       }
       msgs = anthropic
         ? [...msgs, { role: 'assistant', content: res.raw },
-           { role: 'user', content: results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: toolResultText(r.output) })) }]
-        : [...msgs, res.raw,
-           ...results.map(r => ({ role: 'tool', tool_call_id: r.id, content: toolResultText(r.output) }))];
+           { role: 'user', content: results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: JSON.stringify(r.output).slice(0, 4000) })) }]
+        : [...msgs, ...res.raw,
+           ...results.map(r => ({ type: 'function_call_output', call_id: r.id, output: JSON.stringify(r.output).slice(0, 4000) }))];
     }
     return { text: lastText, created, steps: this.MAX_STEPS };
   },
 
+  // /v1/responses, not /v1/chat/completions: on chat completions gpt-5.6
+  // takes function tools only with reasoning_effort 'none', and gpt-6-astra
+  // refuses 'none' outright and refuses tools with any other value — so the
+  // "switch this agent to gpt-6-astra" edit left a chat that answered only
+  // the provider's 400. Responses answers function calls for both (curl,
+  // 2026-09-05). store:false keeps the turn off the provider's disk; the
+  // reasoning items come back encrypted and go back verbatim with the tool
+  // outputs so a multi-step turn keeps its thread.
   async stepOpenAI(system, msgs) {
-    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    const r = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + Gen.key },
       body: JSON.stringify({
-        model: Gen.model, max_completion_tokens: 16000,
-        messages: [{ role: 'system', content: system }, ...msgs],
-        tools: TOOL_SCHEMAS.map(t => ({ type: 'function', function: t })),
-        // Required, not optional: gpt-5.6 refuses function tools on
-        // /v1/chat/completions unless reasoning is off — "use /v1/responses or
-        // set reasoning_effort to 'none'". The Codex path goes through the
-        // Responses API and keeps its reasoning; this one trades it for tools,
-        // which is the better half of that trade for an agent that mostly acts.
-        reasoning_effort: 'none',
+        model: Gen.model, max_output_tokens: 16000, store: false,
+        include: ['reasoning.encrypted_content'],
+        instructions: system,
+        input: msgs,
+        tools: TOOL_SCHEMAS.map(t => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters })),
       }),
     });
     const j = await jsonOf(r, 'openai');
     if (!r.ok) throw new Error(j.error?.message || ('openai returned ' + r.status));
-    const choice = j.choices?.[0] || {};
-    const m = choice.message || {};
     // A reply cut at the token limit used to arrive here as a tool call whose
     // arguments were half a JSON object; the parse failed silently to {} and
     // create_app then wrote an empty module that failed at import with
     // "Unexpected end of input" — a window with an error in it and nothing
     // to say why. The cause has a name; say it.
-    if (choice.finish_reason === 'length') throw new Error(CUT_OFF);
+    if (j.status === 'incomplete' && j.incomplete_details?.reason === 'max_output_tokens') throw new Error(CUT_OFF);
+    if (!Array.isArray(j.output)) throw new Error('openai answered with no output items (status ' + j.status + ')');
     return {
-      text: m.content || '',
-      raw: m,
-      calls: (m.tool_calls || []).map(c => {
+      text: j.output.filter(o => o.type === 'message').flatMap(o => o.content || []).filter(c => c.type === 'output_text').map(c => c.text).join('').trim(),
+      raw: j.output,
+      calls: j.output.filter(o => o.type === 'function_call').map(c => {
         let input;
-        try { input = JSON.parse(c.function.arguments || '{}'); }
-        catch (e) { throw new Error(`the model's ${c.function.name} call carried arguments that are not JSON (${e.message})`); }
-        return { id: c.id, toolName: c.function.name, input };
+        try { input = JSON.parse(c.arguments || '{}'); }
+        catch (e) { throw new Error(`the model's ${c.name} call carried arguments that are not JSON (${e.message})`); }
+        return { id: c.call_id, toolName: c.name, input };
       }),
     };
   },
@@ -2033,6 +2025,8 @@ const Agent = {
         return { ok: true, kind: 'vm', title, file: '/mnt/' + file, installed, source };
       }
       const requires = parseRequires(source);
+      try { parseGeometry(source); }
+      catch (e) { track('lint_reject', { rule: 'geometry' }); return { ok: false, kind: 'window', title, error: e.message }; }
       const lint = lintApp(`${title} ${parseTitle(source) || ''}`, requires, source);
       if (lint) {
         track('lint_reject', { rule: lint.rule });
@@ -2343,6 +2337,18 @@ function pickCanned(p) {
    it when the loop returns. The log on disk (ChatLog) is unchanged: a card's
    `source` and a user turn's `shots` are in-memory only (`src`, `shots`), dropped on save.
    -------------------------------------------------------------------- */
+
+// What the desktop can do, offered as chips under the chat intro while the
+// log is empty (ui/chat.js paints them, and drops them after the first turn).
+// Data in the kernel, not the ui: a forked chat.js offers the same four and
+// scripts/e2e/example-prompts.mjs sends each through the chat and asserts the
+// outcome on the desktop.
+const EXAMPLE_PROMPTS = [
+  'Create an app to track my calories from webcam photos',
+  'Update all UI to match Windows Vista',
+  'Create app that is a Clippy in the corner of the screen',
+  'Switch to use gpt-6-astra inside this agent by default',
+];
 
 const Chat = {
   turns: [],        // the log, as system/chat.json holds it, plus in-memory extras

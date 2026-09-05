@@ -95,6 +95,9 @@ export function openWindow(spec) {
   done.catch(() => {});   // awaited by whoever opened it; not an unhandled rejection here
   Windows.attach(rec, el);
   document.getElementById('desktop').appendChild(el);
+  // Placed once it is in the document: os.css has a minimum window size, so
+  // the box a corner is measured from is the rendered one, not the header's.
+  if (rec.spec.at) Object.assign(el.style, placeAt(rec.spec.at, el));
   return el;
 }
 
@@ -245,12 +248,36 @@ async function runModule(source, mount, provider, title) {
 // A generated app's window. The app ({ title, source, requires }) rides in
 // the spec's opts, so a reload_ui reruns the module from its source in the
 // new ui's sandbox rather than through a closure of the old one.
+// A `// @geometry` header (parseGeometry, kernel/workspace.js) places the
+// window, and never off the desktop: a corner sits 8 px inside it, under the
+// menubar for the top ones; x,y is as written but kept on screen; a window
+// that would sit across the dock's columns is lifted above the dock (the
+// dock is z 400, so a window under it was hidden by it — measured:
+// bottom-right 300x220 at 700x600 sat under the dock). w and h are the
+// rendered box (os.css's min-width/min-height win over a smaller header)
+// capped to the desktop: `9999x9999` opened 9999 px wide. Draggable after.
+function placeAt(at, el) {
+  const margin = 8, menubar = (document.getElementById('menubar') || { offsetHeight: 30 }).offsetHeight;
+  const dock = document.getElementById('dock');
+  const d = dock ? dock.getBoundingClientRect() : { left: Infinity, right: -Infinity, top: innerHeight };
+  const width = Math.min(el.offsetWidth, innerWidth - 2 * margin);
+  let left = at.corner !== undefined ? (at.corner.endsWith('left') ? margin : innerWidth - width - margin) : at.x !== undefined ? at.x : el.offsetLeft;
+  left = Math.max(margin, Math.min(left, innerWidth - width - margin));
+  const spansDock = left < d.right + margin && left + width > d.left - margin;
+  const floor = (spansDock ? d.top : innerHeight) - margin;
+  const height = Math.min(el.offsetHeight, floor - menubar - margin);
+  let top = at.corner !== undefined ? (at.corner.startsWith('top') ? menubar + margin : floor - height) : at.y !== undefined ? at.y : el.offsetTop;
+  top = Math.max(menubar + margin, Math.min(top, floor - height));
+  return { left: left + 'px', top: top + 'px', width: width + 'px', height: height + 'px' };
+}
+
 export function launchApp(app) {
   if (!app || typeof app.source !== 'string') throw new Error('launchApp: an app needs a source');
   const missing = missingCaps(app.requires);
+  const at = parseGeometry(app.source);
   return openWindow({
-    title: app.title, badge: missing.length ? 'blocked' : 'app', w: 430, h: 320,
-    render: 'AppWindow', opts: { app },
+    title: app.title, badge: missing.length ? 'blocked' : 'app', w: at ? at.w : 430, h: at ? at.h : 320,
+    render: 'AppWindow', opts: { app }, at,
   });
 }
 

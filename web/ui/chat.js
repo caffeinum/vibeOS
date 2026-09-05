@@ -80,7 +80,7 @@ export function ChatApp(body, win) {
   // and does not exist on vibeos.sh — it read as an error on the hosted build.
   // Offer the two things that actually work, as a button rather than a chore.
   const readyLine = () =>
-    `Ask for anything. I build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM — whichever fits.<br><span class="tiny dimmer">${Gen.model}</span>`;
+    `Ask for anything. I build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM — whichever fits.<br><span class="tiny dimmer" id="model"></span>`;
   // Three shapes: a model is connected; no model but an agent drives the
   // desktop through vibeos-mcp (then this box is optional, not missing); or
   // nothing yet. The agent's name is the MCP client's own string: textContent.
@@ -94,6 +94,9 @@ export function ChatApp(body, win) {
          <span class="row" style="margin-top:8px"><button class="btn p sm" id="chatConnect">Connect a model</button></span>`;
     if (introEl && introEl.isConnected) { introEl.innerHTML = html; }
     else introEl = bubble('vibeos', html);
+    // The id is whatever the pane stored: text, like every model string.
+    const model = introEl.querySelector('#model');
+    if (model) model.textContent = Gen.model;
     if (agent && !Gen.available) introEl.querySelector('b').textContent = RemoteBridge.detail || 'your agent';
     const connectBtn = introEl.querySelector('#chatConnect');
     if (connectBtn) connectBtn.onclick = async () => { await Gen.askForKey(); paintIntro(); };
@@ -201,11 +204,33 @@ export function ChatApp(body, win) {
     else if (!t.text) line('the page was closed before this turn finished');
   };
 
+  // EXAMPLE_PROMPTS (kernel/agent.js) as chips, only while there is nothing
+  // in the log — a fresh desktop, or a restored log that is empty — and not
+  // while an agent drives the desktop from its own window. A click sends the
+  // prompt the way typing it would, and the first turn takes the chips away.
+  const paintExamples = () => {
+    if (Chat.turns.length || Chat.running || agentOnly) return;
+    const row = document.createElement('div');
+    row.id = 'examples';
+    row.className = 'row';
+    row.style.cssText = 'flex-wrap:wrap;gap:6px;align-self:flex-start;max-width:92%';
+    for (const text of EXAMPLE_PROMPTS) {
+      const chip = document.createElement('button');
+      chip.className = 'btn sm example';
+      chip.type = 'button';
+      chip.textContent = text;
+      chip.onclick = () => { input.value = text; send(); };
+      row.appendChild(chip);
+    }
+    log.appendChild(row);
+  };
+
   // The whole log from the kernel's state, in order: the intro, then each
   // turn with the restore line and the notes that landed after it.
   const paint = () => {
     log.textContent = '';
     paintIntro();
+    paintExamples();
     if (Chat.loadError) line(Chat.loadError, true);
     const notesAt = i => Chat.notes.filter(n => n.at === i).forEach(n => line(n.text, n.error));
     for (let i = 0; i <= Chat.turns.length; i++) {

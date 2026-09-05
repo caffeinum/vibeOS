@@ -371,6 +371,28 @@ function parseTitle(src) {
   return m ? m[1].trim() : null;
 }
 
+// Where a window opens: `// @geometry <corner> [WxH]`, `// @geometry
+// x,y,w,h` or `// @geometry WxH` (a size, cascaded like any window — the
+// shape the model wrote first, twice in two runs), in px. null without the
+// header; a header that is none of those throws naming them — create_app
+// refuses the source rather than open the window somewhere else and say it
+// did what was asked.
+const GEOMETRY_CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+function parseGeometry(src) {
+  const m = /^\s*\/\/\s*@geometry\s+(.+)$/m.exec(src);
+  if (!m) return null;
+  const line = m[1].trim();
+  const nums = line.match(/^(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)$/);
+  if (nums) return { x: +nums[1], y: +nums[2], w: +nums[3], h: +nums[4] };
+  const size = line.match(/^(\d+)\s*[x×]\s*(\d+)$/i);
+  if (size) return { w: +size[1], h: +size[2] };
+  const corner = line.match(/^([a-z]+-[a-z]+)(?:\s+(\d+)\s*[x×]\s*(\d+))?$/i);
+  if (corner && GEOMETRY_CORNERS.includes(corner[1].toLowerCase())) {
+    return { corner: corner[1].toLowerCase(), w: corner[2] ? +corner[2] : 430, h: corner[3] ? +corner[3] : 320 };
+  }
+  throw new Error('// @geometry must be one of ' + GEOMETRY_CORNERS.join(', ') + ' with an optional <w>x<h>, or <x>,<y>,<w>,<h>, or <w>x<h> alone, in px — got: ' + line.slice(0, 60));
+}
+
 // A .js file is a dock app only if it carries the header the agent always
 // writes. Before this gate, any .js that reached /mnt or apps/ by any route —
 // curl, apt, an unpacked archive — was listed in the dock under its filename
@@ -397,6 +419,10 @@ function classifyApp(name, { source, error }) {
   const title = parseTitle(source);
   if (!title) return { name, reason: NOT_AN_APP.header };
   if (parseTarget(source) === 'vm') return { name, reason: NOT_AN_APP.vm };
+  // A header create_app would refuse, in a file that reached the folder or
+  // /mnt some other way: unlisted with that reason, or the dock listed it and
+  // a click on it threw in launchApp with nothing on screen.
+  try { parseGeometry(source); } catch (e) { return { name, reason: e.message }; }
   return { name, source, title, requires: parseRequires(source) };
 }
 
