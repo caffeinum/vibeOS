@@ -124,7 +124,9 @@ const V86_ASSETS = BASE + 'v86/';
 // services. BusyBox is bundled (7 MB ISO, 5-7 s, no package manager). Debian is
 // the same streaming trick on a 1 GB disk with apt, and takes minutes. Built
 // by scripts/alpine/build.sh and scripts/debian/build.sh.
-const DEBIAN_BASE = 'https://d3je35hqch090t.cloudfront.net/debian-3/';
+// A build in progress boots from public/debian-dev/ (build.sh copies its
+// output there) by pointing this at new URL('../debian-dev/', location.href).href.
+const DEBIAN_BASE = 'https://d3je35hqch090t.cloudfront.net/debian-4/';
 // A build in progress boots from public/alpine-dev/ (git-ignored; build.sh
 // copies its output there) by pointing this at new URL('../alpine-dev/', location.href).href.
 const ALPINE_BASE = 'https://d3je35hqch090t.cloudfront.net/alpine-2/';
@@ -188,9 +190,10 @@ const IMAGES = {
     shellLine: 'Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.',
   },
   debian: {
-    id: 'debian', label: 'Debian', blurb: 'full: streamed 1 GB disk, apt works, slow — 80 to 120 s to a shell',
+    id: 'debian', label: 'Debian', blurb: 'full: streamed 1 GB disk, apt works, slow — 70 to 90 s to a shell, longer on a busy machine',
     memoryMB: 256, bootTimeoutMs: 360000,
     preflight: DEBIAN_BASE + 'bzImage',
+    warm: DEBIAN_BASE + 'boot.txt',
     config: () => ({
       bzimage: { url: DEBIAN_BASE + 'bzImage' },
       initrd:  { url: DEBIAN_BASE + 'initrd' },
@@ -207,8 +210,11 @@ const IMAGES = {
     dhcp: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); dhclient -1 $IF 2>&1 | tail -1',
     ip: "ip -4 -o addr show $(ls /sys/class/net | grep -v ^lo$ | head -1) | grep -o 'inet [0-9.]*' | cut -d' ' -f2",
     netReset: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); ip link set $IF down; ip link set $IF up',
-    tty: "setsid bash -c 'TERM=xterm exec bash </dev/ttyS1 >/dev/ttyS1 2>&1' & wait $!",
-    shellLine: 'Then a bash script for Debian 12. apt-get works (run apt-get update first; the network is on). Common tools are installed: bash coreutils grep sed awk find curl wget git nano. python3 is NOT installed by default. The workspace is at /mnt. Print results to stdout.',
+    // debian-4 bakes a serial-getty on ttyS1 (scripts/debian/Dockerfile:
+    // autologin root, TERM=xterm), so the line is owned from boot and a
+    // boot-time shell from ttyS0 would be a second reader on it.
+    tty: null,
+    shellLine: 'Then a bash script for Debian 12. apt-get works (run apt-get update first; the network is on). Common tools are installed: bash coreutils grep sed awk find curl wget git nano vi. python3 is NOT installed by default. The workspace is at /mnt. Print results to stdout.',
   },
 };
 
@@ -1295,8 +1301,13 @@ const VM = {
   // leaves `\e[24;1H\e[K\e[?1049l~% `, a prompt at the start of a line the
   // terminal drew, not the bytes — and anything unprintable goes (the first
   // prompt after a cold boot arrives as `\xff~% ` on busybox).
+  // A CSI may carry a private prefix (`<=>?`) and a two-byte escape is a
+  // break too: vim on debian leaves `\e[?1l\e>\e[?1049l…\e[>4;m` right
+  // before bash prints `root@vibeos:~# ` on the same line, and with the
+  // `[0-9;?]` class alone `[>4;m` survived glued to the prompt, so the first
+  // resize after vi queued until the next prompt (measured, tty.mjs).
   _ttyAtPrompt(port) {
-    const flat = this._tty[port].tail.replace(/\x1b\[[0-9;?]*[nm]/g, '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '\n').replace(/[^\x20-\x7e\r\n]/g, '');
+    const flat = this._tty[port].tail.replace(/\x1b\[[0-9;?<=>]*[nm]/g, '').replace(/\x1b\[[0-9;?<=>]*[a-zA-Z]/g, '\n').replace(/\x1b[()][A-Za-z0-9]|\x1b[^\[]/g, '\n').replace(/[^\x20-\x7e\r\n]/g, '');
     return TTY_PROMPT_TAIL.test(flat.slice(-80));
   },
   // A write that is only escape sequences is the terminal answering a query
