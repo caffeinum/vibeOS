@@ -643,7 +643,7 @@ export function CapsApp(body, win) {
     ['Run YOUR shell',        'shell',    'Never. The Terminal runs a real Linux, but on a virtual disk.'],
     ['Your processes',        'process',  'Workers give real concurrency; host processes are out of reach.'],
     ['Arbitrary REST APIs',   'net',      'Blocked without CORS headers. WebSockets are not CORS-bound.'],
-    ['A model for apps',      'ai',       'api.ai.generate: a pasted key or a ChatGPT login. Settings › Model.'],
+    ['A model for apps',      'ai',       'api.ai.generate: a pasted key, a ChatGPT login, or a paired agent whose client samples. Settings › Model.'],
     ['USB devices',           'usb',      'WebUSB, user gesture, Chromium only.'],
     ['Serial devices',        'serial',   'WebSerial, Chromium only.'],
     ['HID devices',           'hid',      'WebHID, Chromium only.'],
@@ -710,6 +710,7 @@ function mcpPane(body, win) {
       : st === 'pairing' ? 'Pairing — ' + d + '…'
       : st === 'waiting' ? 'Waiting for an agent: paste the command into your MCP client. Talk to your agent in its own window; it drives this desktop, and the built-in chat keeps working alongside it.' + inst()
       : st === 'connected' ? d + ' is connected and driving this desktop (' + RemoteBridge.calls + ' call' + (RemoteBridge.calls === 1 ? '' : 's') + '). Talk to it in its own window.' + inst()
+        + (RemoteBridge.sampling ? ' ' + d + ' can power apps (sampling).' : ' ' + d + ' cannot power apps: its client does not support sampling.')
       : 'Not connected — ' + d;
     const hasToken = !!RemoteBridge.token;
     cmd.hidden = !hasToken;

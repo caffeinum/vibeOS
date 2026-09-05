@@ -340,7 +340,9 @@ export function AppWindow(body, win, { app }) {
   };
   const watch = off => { offs.push(off); Windows.onDispose(win, off); };
   if (missing.some(c => VM_CAPS.includes(c)) && VM.state !== 'failed' && VM.state !== 'unavailable') watch(VM.on(recheck));
-  if (missing.includes('ai')) watch(Gen.on(recheck));
+  // A model is the tab's own (Gen) or the connected agent's (RemoteBridge,
+  // when its client samples): either arriving starts the window.
+  if (missing.includes('ai')) { watch(Gen.on(recheck)); watch(RemoteBridge.on(recheck)); }
 }
 
 // The capabilities the VM provides once it is up, as against the native build's.
@@ -365,10 +367,15 @@ function renderUpsell(mount, missing) {
       <div class="upsell">
         <h3 style="margin:0 0 6px">Connect a model</h3>
         <p class="small muted" style="margin:0 0 10px">This app asks a model (api.ai), and none is connected yet: paste an API key or sign in, and it runs right here. <span class="others"></span></p>
+        <p class="small no" id="upsellWhy" hidden style="margin:0 0 10px"></p>
         <button class="btn p sm" id="upsellConnect">Connect a model</button>
       </div>`;
     // The other caps are header words from a file the guest can write: text.
     mount.querySelector('.others').textContent = others.length ? `It also needs ${others.join(' and ')}.` : '';
+    // An agent is driving the desktop but its MCP client cannot sample: say
+    // so in the package's own words (the agent's name is the client's).
+    const why = mount.querySelector('#upsellWhy');
+    if (RemoteBridge.state === 'connected' && !RemoteBridge.sampling) { why.textContent = Gen.samplingRefusal(RemoteBridge.agentName); why.hidden = false; }
     mount.querySelector('#upsellConnect').onclick = () => Gen.askForKey();
     return;
   }

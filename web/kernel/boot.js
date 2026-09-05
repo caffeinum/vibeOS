@@ -401,6 +401,9 @@ window.addEventListener('beforeunload', (e) => {
   // can do: the dock greys or ungreys it, the way the machine's 'ready' does
   // for shell.
   Gen.on(() => { Promise.resolve().then(paintDock).catch(e => console.warn('dock repaint after a model change failed:', e)); });
+  // The same for an agent through vibeos-mcp: one whose client samples is a
+  // model for apps the moment it pairs, and none when it leaves.
+  RemoteBridge.on(() => { Promise.resolve().then(paintDock).catch(e => console.warn('dock repaint after an agent change failed:', e)); });
   // Ask once, while the machine boots behind it. Declining is fine — the
   // desktop still works, prompts just fall back to stock modules.
   if (!Gen.available) {

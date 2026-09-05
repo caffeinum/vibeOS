@@ -50,7 +50,7 @@ const BrowserProvider = {
     get tty() { return VM.ttyState === 'ready'; },  // a byte stream on the VM's second serial line
     process:  false,     // host processes; workers are a different thing
     get net() { return Net.available; },  // raw TCP through the relay (kernel/net.js): on whenever the relay is on, off with it
-    get ai() { return Gen.forApps; },     // a model an app can call (kernel/agent.js Gen.ask): a pasted key or a ChatGPT login
+    get ai() { return Gen.forApps || Gen.viaAgent; },   // a model an app can call (kernel/agent.js Gen.ask): a pasted key, a ChatGPT login, or the connected agent's (MCP sampling)
     usb:      'usb' in navigator,
     serial:   'serial' in navigator,
     hid:      'hid' in navigator,
@@ -78,7 +78,7 @@ const NativeProvider = {
   name: 'native', label: 'Native binary',
   supports: { files:true, disk:true, write:true, shell:true, process:true, net:true, usb:true,
               serial:true, hid:true, midi:true, camera:true, clipboard:true, codegen:true, tty:false,
-              get ai() { return Gen.forApps; } },
+              get ai() { return Gen.forApps || Gen.viaAgent; } },
   base: 'http://127.0.0.1:4571',
   // Only when something says a helper is there: the helper's own page sets
   // localStorage vibeos-native, or the url carries ?native=1. A plain visit

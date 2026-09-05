@@ -350,13 +350,18 @@ const Gen = {
     const maxTokens = Math.min(opts.maxTokens || this.ASK_MAX_TOKENS, this.ASK_TOKENS_CAP);
     const images = (opts.images || []).map(askImage);
     const system = (opts.system !== undefined ? opts.system : this.ASK_SYSTEM) + (json ? '\nReply with exactly one JSON object and nothing else: no prose, no code fence.' : '');
-    if (!this.forApps) throw new Error('no model connected');
-    const provider = this.provider;
+    // The tab's own model wins; with none, the connected agent's model
+    // through vibeos-mcp (MCP sampling) when its client declared it. An
+    // agent whose client cannot sample is named in the refusal, so the app
+    // and the upsell say why instead of "no model connected".
+    if (!this.forApps && !this.viaAgent) throw new Error(RemoteBridge.state === 'connected' ? samplingRefusal(RemoteBridge.agentName) : 'no model connected');
+    const provider = this.forApps ? this.provider : 'mcp-sampling';
     let text;
     try {
       text = provider === 'anthropic' ? await this.askAnthropic(system, prompt, images, maxTokens)
            : provider === 'openai' ? await this.askOpenAI(system, prompt, images, maxTokens)
            : provider === 'openai-codex' ? await this.askCodex(system, prompt, images, maxTokens)
+           : provider === 'mcp-sampling' ? await this.askAgent(system, prompt, images, maxTokens, json)
            : (() => { throw new Error('no model connected'); })();
     } catch (e) {
       track('app_ai_call', { provider, images: images.length, ok: false });
@@ -397,6 +402,16 @@ const Gen = {
     if (!Array.isArray(j.output)) throw new Error('openai answered with no output items (status ' + j.status + ')');
     return j.output.filter(o => o.type === 'message').flatMap(o => o.content || []).filter(c => c.type === 'output_text').map(c => c.text).join('');
   },
+  // The connected agent's model, through vibeos-mcp: the package answers an
+  // {ask} frame with sampling/createMessage on its client. json rides along
+  // (the package appends its own "JSON only" line); the parse is the tab's.
+  async askAgent(system, prompt, images, maxTokens, json) {
+    return RemoteBridge.ask({ prompt, images: images.map(i => ({ mime: i.mediaType, base64: i.data })), json, system, maxTokens });
+  },
+  // A model an app can call through the connected agent: paired, and its
+  // MCP client declared the sampling capability (the want frame says).
+  get viaAgent() { return RemoteBridge.state === 'connected' && RemoteBridge.sampling; },
+  samplingRefusal(agent) { return samplingRefusal(agent); },
   // The codex proxy (app/api/openai/generate) with { ask }: the route runs
   // the same generateText with no tools and this system, and answers { text }.
   async askCodex(system, prompt, images, maxTokens) {
@@ -416,6 +431,12 @@ function askImage(img) {
   const m = typeof dataUrl === 'string' && dataUrl.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
   if (!m) throw new Error('ask: each image must be a base64 data url of a jpeg, png, webp or gif (canvas.toDataURL), got ' + (typeof dataUrl === 'string' ? dataUrl.slice(0, 40) : typeof dataUrl));
   return { dataUrl, mediaType: m[1], data: m[2] };
+}
+
+// The package's own words when its client cannot sample (vibeos-mcp
+// answerAsk), so the tab says the same thing before any frame goes out.
+function samplingRefusal(agent) {
+  return 'the connected MCP client (' + (agent || 'unknown') + ') does not support sampling, so it cannot power apps; connect a model in Settings';
 }
 
 // Paste-key path only — talks to the provider directly with one-shot codegen.
@@ -612,7 +633,7 @@ mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (
 api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): one-shot commands. Waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app that uses it and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted — those want api.tty(). List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
 api.tty() -> { write(bytesOrString), onData(fn) -> off, resize(cols, rows), close() } (needs tty): a terminal is api.tty(): bytes both ways, ctrl-c, top, nano, passwords work; api.shell is for one-shot commands. It is its own shell on the machine's second serial line, not the one api.shell and the agent share, so a cd there stays there. The line echoes what you write: paint what onData delivers (\\r, \\n, \\b and ANSI escapes; answer \\x1b[6n with \\x1b[row;colR or vi and ash wait on it) instead of echoing keys yourself; send Enter as \\r, Ctrl-C as \\x03, arrows as \\x1b[A..D, and resize(cols, rows) when the pane changes. One tty per machine: while the built-in Terminal or another app holds it, api.tty() throws naming the holder — show that message; closing that window releases it.
 api.net.connect(host, port) -> { write(bytesOrString), onData(fn) -> off, onClose(fn) -> off, close(), state, reason } (needs net): opens raw TCP through the relay for a TCP client — a redis, irc or smtp toy; http stays on the proxy and the Browser, not this. Plain TCP only (no tls option; https means fetch or curl in the machine). localhost, private and loopback addresses and ports outside the relay's list (80, 443, 21, 22, 70, 1965, 3000, 8080, 8443) throw naming the rule; the relay closes a stream it refuses and onClose says why. The relay is a serverless function that ends about every 13 minutes: every open stream then closes with "network error: the relay reconnected and the connection was lost", so a long-lived client (irc, redis) must reconnect from onClose. A write after close throws. Closing the window closes the connection.
-api.ai.generate({ prompt, images?, json?, system?, maxTokens? }) -> Promise<string | object> (needs ai): the model connected to this desktop, one plain completion with no tools. Anything that needs judgment — identify what is in a picture, estimate, summarise, classify, write — is a call to it, never a keyword table, a lookup of your own, or a "cannot do this in the browser" note. images is an array of data urls (canvas.toDataURL('image/jpeg') of a video frame, a file read as a data url); json: true asks for one JSON object and returns it parsed (name the keys in prompt); system replaces the one-line default. The reply is text the app shows with textContent; it rejects with the provider's own error — show that too. A window that needs it declares // @requires ai and shows a connect prompt while no model is present, then runs when one is.
+api.ai.generate({ prompt, images?, json?, system?, maxTokens? }) -> Promise<string | object> (needs ai): the model connected to this desktop — the tab's own, or the connected agent's (MCP sampling), in which case a call may take up to two minutes while a person approves it, so show your own "asking…" state — one plain completion with no tools. Anything that needs judgment — identify what is in a picture, estimate, summarise, classify, write — is a call to it, never a keyword table, a lookup of your own, or a "cannot do this in the browser" note. images is an array of data urls (canvas.toDataURL('image/jpeg') of a video frame, a file read as a data url); json: true asks for one JSON object and returns it parsed (name the keys in prompt); system replaces the one-line default. The reply is text the app shows with textContent; it rejects with the provider's own error — show that too. A window that needs it declares // @requires ai and shows a connect prompt while no model is present, then runs when one is.
 
 Layout rules (required):
 - Root element: width:100%; height:100%; box-sizing:border-box; display:flex; flex-direction:column; overflow:hidden. No document scroll, no min-height larger than the window, no fat browser scrollbars on mount.
@@ -1063,7 +1084,7 @@ const Desktop = {
   TEXT_MAX: 8 * 1024, DOM_MAX: 16 * 1024,
   // The relay carries 128 KB a frame and the reply is JSON around the
   // image, so the picture itself stays under 110 KB of base64.
-  IMAGE_WIDE: 1024, IMAGE_B64_MAX: 110 * 1024,
+  IMAGE_WIDE: 1024, IMAGE_SIDES: [1024, 768, 512], IMAGE_QUALITIES: [0.85, 0.7, 0.55, 0.4, 0.3, 0.2], IMAGE_B64_MAX: 110 * 1024,
   BLOCK: /^(DIV|P|LI|TR|H[1-6]|PRE|SECTION|ARTICLE|HEADER|FOOTER|UL|OL|TABLE|TEXTAREA|BUTTON|LABEL|FORM|DETAILS|SUMMARY|BLOCKQUOTE|DT|DD|OPTION|NAV|ASIDE|MAIN|HR|BR)$/,
   DROP: /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|IFRAME|FRAME|FRAMESET|OBJECT|EMBED|APPLET|LINK|BASE|META)$/,
   // Anything that loads bytes or names a document: its url is dropped in dom().
@@ -1116,7 +1137,7 @@ const Desktop = {
   async overview() {
     const windows = this.windows();
     return { ok: true, windows, dock: await this.dock(), vm: this.vm(), theme: Theme.id, workspace: Workspace.label,
-             remote: { state: RemoteBridge.state, agent: RemoteBridge.agentName || null },
+             remote: { state: RemoteBridge.state, agent: RemoteBridge.agentName || null, sampling: RemoteBridge.sampling },
              note: windows.length ? 'windows are top first; pass { window: <title or app id> } for one window\'s text' : 'no window is open' };
   },
 
@@ -1206,23 +1227,36 @@ const Desktop = {
              note: graphical ? 'the machine is in graphics mode; the image is the frame' : 'text mode: the rows are the screen, the image is the same rows drawn' };
   },
 
-  async jpeg(src) {
+  // A jpeg under `max` characters of base64: the longest side at IMAGE_WIDE
+  // first, the quality stepping down, then the side stepping down
+  // (IMAGE_SIDES) and the qualities again — a ui screenshot with text on
+  // a flat colour missed a 43 KB share at every quality at 1024 (measured:
+  // 84 KB at 0.85, 40 KB only under a 43 KB cap, refused under 30 KB), so
+  // an ask with three or more pictures refused with no picture scaled.
+  // The screen and an ask's pictures (RemoteBridge.ask) both go through
+  // here; a refusal names the smallest it got to.
+  async jpeg(src, max = this.IMAGE_B64_MAX) {
     const img = new Image();
     img.src = src;
-    await img.decode();
-    const scale = Math.min(1, this.IMAGE_WIDE / (img.naturalWidth || 1));
+    try { await img.decode(); } catch (e) { throw new Error('the image could not be decoded as a picture (' + (e && e.message ? e.message : String(e)) + ')'); }
+    const longest = Math.max(img.naturalWidth, img.naturalHeight) || 1;
     const c = document.createElement('canvas');
-    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
-    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
     const ctx = c.getContext('2d');
-    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
-    ctx.drawImage(img, 0, 0, c.width, c.height);
-    for (const quality of [0.85, 0.7, 0.55, 0.4, 0.3, 0.2]) {
-      const url = c.toDataURL('image/jpeg', quality);
-      const data = url.slice(url.indexOf(',') + 1);
-      if (data.length <= this.IMAGE_B64_MAX) return { mimeType: 'image/jpeg', data, width: c.width, height: c.height, quality };
+    let smallest = Infinity, last = null;
+    for (const side of [...new Set(this.IMAGE_SIDES.map(w => Math.min(w, longest)))]) {
+      const scale = side / longest;
+      c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      for (const quality of this.IMAGE_QUALITIES) {
+        const url = c.toDataURL('image/jpeg', quality);
+        const data = url.slice(url.indexOf(',') + 1);
+        if (data.length <= max) return { mimeType: 'image/jpeg', data, width: c.width, height: c.height, quality };
+        if (data.length < smallest) { smallest = data.length; last = c.width + 'x' + c.height; }
+      }
     }
-    throw new Error('the screen image is over ' + Math.round(this.IMAGE_B64_MAX / 1024) + ' KB of base64 at every quality; the relay carries 128 KB a frame');
+    throw new Error('the image is over ' + Math.round(max / 1024) + ' KB of base64 at every quality down to ' + last + ' (smallest ' + Math.round(smallest / 1024) + ' KB); the relay carries ' + (MCP_FRAME_MAX / 1024) + ' KB a frame');
   },
 
   async read(input) {
@@ -1742,6 +1776,11 @@ const RemoteBridge = {
   detail: '',
   socket: null,
   agentName: '',
+  // Whether the agent's MCP client declared the sampling capability, from
+  // its want frame: with it, its model powers api.ai for a tab that has
+  // none of its own (Gen.viaAgent, CAP.supports.ai). false whenever no
+  // agent is connected.
+  sampling: false,
   calls: 0,
   relayErrors: 0,
   keepalive: null,
@@ -1751,7 +1790,12 @@ const RemoteBridge = {
   emit() { this.listeners.forEach(fn => { try { fn(this.state, this.detail); } catch (e) { console.error('RemoteBridge listener failed:', e); } }); },
   set(state, detail = '') {
     if (state === this.state && detail === this.detail) return;
+    const left = this.state === 'connected' && state !== 'connected';
     this.state = state; this.detail = detail;
+    // Leaving 'connected' — the agent gone (4002), displaced (4001), revoked,
+    // a gap — ends what the agent owed: an ask in flight cannot be answered
+    // (its reply would meet a relay with no tab), and sampling is nobody's.
+    if (left) { this.sampling = false; this.failAsks('the agent is no longer connected (' + state + (detail ? ': ' + detail : '') + ')'); }
     this.emit();
   },
 
@@ -1981,12 +2025,80 @@ const RemoteBridge = {
     }
     if ('paired' in msg) { if (msg.paired) this.connected(); else this.set('waiting'); return; }
     if (msg.want === 'tools') {
+      let sampling = msg.sampling;
+      if (typeof sampling !== 'boolean') { console.error('RemoteBridge: the want frame\'s sampling is not a boolean (' + JSON.stringify(sampling) + '); reading it as false — vibeos-mcp 0.1.16+ sends one'); sampling = false; }
+      const changed = sampling !== this.sampling;
+      this.sampling = sampling;
       this.connected(typeof msg.agent === 'string' ? msg.agent.slice(0, 80) : '');
+      // `set` dedups an unchanged state: the panes and the cap watchers
+      // must still hear that sampling flipped. A flip to false with an ask
+      // in flight: the client that would answer it is gone (a new client
+      // behind the same package), so the ask fails now, not in 125 s.
+      if (changed && !sampling) this.failAsks('the agent\'s client no longer samples');
+      if (changed) this.emit();
       this.socket.send(JSON.stringify(this.toolsFrame()));
       return;
     }
     if (msg.error && msg.code === 4002) { this.set('waiting'); return; }
     if (msg.id != null && typeof msg.tool === 'string') { this.call(msg); return; }
+    if (msg.ask != null && !('ai' in msg)) { this.answered(msg); return; }
+  },
+
+  // An app's api.ai call through the connected agent's model (Gen.askAgent):
+  // {ask: N, ai} out, {ask: N, result} | {ask: N, error} back. Refused, not
+  // queued, without a connected agent; every picture is re-encoded as a
+  // jpeg (Desktop.jpeg: quality stepping down, then the longest side
+  // 1024 → 768 → 512) with an equal share of the frame — a refusal names
+  // the picture and the share — and the whole frame is measured against the
+  // relay's 128 KB before it goes. The package waits 120 s on its client
+  // (a person may approve each); the tab waits a little longer and names
+  // the ask, so a lost answer is a message and never a hung app.
+  ASK_MS: 125000,
+  askSeq: 0,
+  asks: new Map(),
+  askFrame(n, ai) { return JSON.stringify({ ask: n, ai }); },
+  async ask(ai) {
+    if (this.state !== 'connected' || !this.socket || !this.socket.open) throw new Error('no agent connected');
+    if (!this.sampling) throw new Error(samplingRefusal(this.agentName));
+    const images = Array.isArray(ai.images) ? ai.images : [];
+    const n = ++this.askSeq;
+    const text = new TextEncoder().encode(this.askFrame(n, Object.assign({}, ai, { images: [] }))).length;
+    // The pictures share what the text leaves, each under the screen's cap;
+    // a base64 picture is `data` plus the ~40 bytes of its own object.
+    const share = images.length ? Math.floor((MCP_FRAME_MAX - text - 64 * images.length) / images.length) : 0;
+    if (images.length && share < 1024) throw new Error('the ask is ' + Math.round(text / 1024) + ' KB of text with ' + images.length + ' pictures; the relay carries ' + (MCP_FRAME_MAX / 1024) + ' KB a frame');
+    const pictures = [];
+    const cap = Math.min(share, Desktop.IMAGE_B64_MAX);
+    for (const [i, img] of images.entries()) {
+      if (!img || typeof img.mime !== 'string' || typeof img.base64 !== 'string') throw new Error('ask: image ' + (i + 1) + ' of ' + images.length + ' must be { mime, base64 }');
+      let j;
+      try { j = await Desktop.jpeg('data:' + img.mime + ';base64,' + img.base64, cap); }
+      catch (e) { throw new Error('picture ' + (i + 1) + ' of ' + images.length + ' in the ask: ' + e.message + (images.length > 1 ? ' — ' + images.length + ' pictures share the frame, ' + Math.round(cap / 1024) + ' KB each' : '')); }
+      pictures.push({ mime: j.mimeType, base64: j.data });
+    }
+    const wire = this.askFrame(n, Object.assign({}, ai, { images: pictures }));
+    const bytes = new TextEncoder().encode(wire).length;
+    if (bytes > MCP_FRAME_MAX) throw new Error('the ask is ' + Math.round(bytes / 1024) + ' KB; the relay carries ' + (MCP_FRAME_MAX / 1024) + ' KB a frame');
+    if (this.state !== 'connected' || !this.socket || !this.socket.open) throw new Error('no agent connected');
+    const answer = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.asks.delete(n); reject(new Error('ask ' + n + ' to ' + (this.agentName || 'the agent') + ' was not answered in ' + Math.round(this.ASK_MS / 1000) + ' s')); }, this.ASK_MS);
+      this.asks.set(n, { resolve, reject, timer });
+    });
+    this.socket.send(wire);
+    try { const r = await answer; track('mcp_ask', { ok: true }); return r; }
+    catch (e) { track('mcp_ask', { ok: false }); throw e; }
+  },
+  answered(msg) {
+    const pending = this.asks.get(msg.ask);
+    if (!pending) { console.warn('RemoteBridge: an answer to ask ' + JSON.stringify(msg.ask) + ' nobody is waiting for (late, never asked, or not the number the tab sent — a string "7" is not ask 7)'); return; }
+    this.asks.delete(msg.ask); clearTimeout(pending.timer);
+    if (typeof msg.error === 'string') pending.reject(new Error(msg.error.slice(0, 2000)));
+    else if (typeof msg.result === 'string') pending.resolve(msg.result);
+    else pending.reject(new Error('the agent answered ask ' + msg.ask + ' with neither a result string nor an error'));
+  },
+  failAsks(why) {
+    for (const [n, pending] of this.asks) { clearTimeout(pending.timer); pending.reject(new Error('ask ' + n + ' failed: ' + why)); }
+    this.asks.clear();
   },
 
   connected(name = '') {
