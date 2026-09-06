@@ -94,18 +94,29 @@
     background-size: cover;
     background-position: center;
   }
+  /* Four pills and a clock do not fit a phone: the row is never allowed to
+     overflow (a menubar that scrolls sideways pushes the clock off the edge
+     and cannot be reached), so every pill shrinks and its text ellipsises,
+     and the clock and the brand keep their width. Add to Home Screen made
+     the phone the device this lands on. */
   #menubar {
     position: relative; z-index: 500; display: flex; align-items: center; gap: 14px;
     padding: 5px 12px; font-size: 12.5px; font-weight: 600; color: #2b2733;
     background: rgba(255,255,255,.34); backdrop-filter: blur(var(--blur));
+    overflow: hidden;
   }
-  #menubar .sp { flex: 1; }
+  #menubar .sp { flex: 1 1 0; min-width: 0; }
+  #menubar > strong, #menubar > #clock, #menubar > img { flex: 0 0 auto; }
   .pill {
     display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px;
     border-radius: var(--radius-pill); background: rgba(0,0,0,.16); font-size: 11px;
+    flex: 0 1 auto; min-width: 0; overflow: hidden;
   }
-  #wsPill { cursor: pointer; border: 0; color: inherit; font-weight: 600; }
-  #wsPill:hover { background: rgba(0,0,0,.28); }
+  .pill > span:not(.dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 700px) { #menubar { gap: 8px; } }
+  @media (max-width: 480px) { #menubar > strong { display: none; } }
+  #wsPill, #loginPill { cursor: pointer; border: 0; color: inherit; font-weight: 600; }
+  #wsPill:hover, #loginPill:hover { background: rgba(0,0,0,.28); }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
   .dot.warn { background: var(--warn); } .dot.off { background: var(--no); }
 

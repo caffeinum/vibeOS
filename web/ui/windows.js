@@ -165,9 +165,25 @@ export function geometry(el) {
            min: el.classList.contains('min'), full: el.dataset.full || '', prev: el.dataset.prev || '' };
 }
 
+// The window open under an app id — a shell id, or apps/<file> for a
+// generated app — compared as strings: a filename from the guest can carry
+// a quote, so it is not put inside a selector.
+export function openWindowFor(id) {
+  return [...document.querySelectorAll('.win[data-app]')].find(w => w.dataset.app === id) || null;
+}
+// Raise a window that is open (restored if minimised) or open it. Every dock
+// entry goes through this: a click used to open a second copy of an app —
+// two Notes on one localStorage key, two chats on one log.
 export function focusOrOpen(spec) {
-  const open = document.querySelector(`.win[data-app="${spec.id}"]`);
+  const open = openWindowFor(spec.id);
   if (!open) return openWindow(spec);
+  open.classList.remove('min');
+  Windows.raise(open);
+  return open;
+}
+export function focusOrLaunch(app) {
+  const open = app && app.name ? openWindowFor('apps/' + app.name) : null;
+  if (!open) return launchApp(app);
   open.classList.remove('min');
   Windows.raise(open);
   return open;
@@ -288,11 +304,16 @@ function placeAt(at, el) {
   return { left: left + 'px', top: top + 'px', width: width + 'px', height: height + 'px' };
 }
 
+// A launched app's chrome carries its file as data-app (apps/<name>), the
+// id read_desktop reports, so the dock can find the window that is open
+// for it. An app with no file (a card's source, a stock module that could
+// not be saved) has no id and is not found — each launch is a window.
 export function launchApp(app) {
   if (!app || typeof app.source !== 'string') throw new Error('launchApp: an app needs a source');
   const missing = missingCaps(app.requires);
   const at = parseGeometry(app.source);
   return openWindow({
+    id: app.name ? 'apps/' + app.name : '',
     title: app.title, badge: missing.length ? 'blocked' : 'app', w: at ? at.w : 430, h: at ? at.h : 320,
     render: 'AppWindow', opts: { app }, at,
   });

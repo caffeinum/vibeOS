@@ -839,6 +839,12 @@ const VM = {
   AUTO_SNAPSHOT_MS: 10000,
   _written: new Set(),  // /mnt names the guest, or an app save, wrote this boot
 
+  // The guest keyboard follows the Console screen's focus (see construct).
+  syncKeyboard() {
+    if (!this.emu || !this.emu.keyboard_adapter) return;
+    this.emu.keyboard_set_status(!!this.screen && this.screen === document.activeElement);
+  },
+
   construct(image, autostart) {
     this.emu = new V86({
       wasm_path: V86_ASSETS + 'v86.wasm',
@@ -855,6 +861,18 @@ const VM = {
       disable_speaker: true,
     });
     window.__v86 = this.emu;
+    // v86's keyboard adapter listens on window and preventDefaults every
+    // keydown whose target is not an input or textarea, sending it to the
+    // guest — measured with the machine up: Cmd+C over a selection in the
+    // chat log (focus on body) copied nothing and the keydown came back
+    // defaultPrevented; with libv86 aborted the same copy worked. The guest
+    // keyboard is the Console screen's: on while that screen has focus
+    // (a click focuses it), off everywhere else.
+    // v86 creates the adapter in its async continue_init (after the wasm
+    // loads), so a keyboard_set_status right here finds no adapter and is
+    // a no-op — measured: emu_enabled true after ready. It is applied on
+    // the events that follow that init, and on every focus change.
+    for (const ev of ['emulator-ready', 'emulator-loaded']) this.emu.add_listener(ev, () => this.syncKeyboard());
     this.emu.add_listener('serial0-output-byte', b => {
       this.serial += String.fromCharCode(b);
       // Not while an exec is reading: its `from` is an index into this
@@ -956,6 +974,8 @@ const VM = {
       this.screen.style.cssText = 'background:#000;height:100%;overflow:auto;outline:none';
       this.screen.innerHTML = `<div style="white-space:pre;font:14px/1.15 'JetBrains Mono',monospace;color:var(--titletext);padding:6px"></div><canvas style="display:none"></canvas>`;
       this.screen.addEventListener('click', () => this.screen.focus());
+      this.screen.addEventListener('focus', () => this.syncKeyboard());
+      this.screen.addEventListener('blur', () => this.syncKeyboard());
 
       const image = IMAGES[id];
       this.bootedRelay = this.relay;

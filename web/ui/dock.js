@@ -39,6 +39,29 @@ export function paintWorkspace() {
   else { dot.className = 'dot off'; txt.textContent = 'no workspace'; }
 }
 
+// How the agent is signed in, in a few words: Codex, an API key, an agent
+// through vibeos-mcp, the local server, or nothing. Never the key, never
+// an account: a model id, a provider name, the MCP client's own name — all
+// textContent. The tooltip says where the credential lives.
+export function loginLine() {
+  const agent = RemoteBridge.state === 'connected' ? (RemoteBridge.agentName || RemoteBridge.detail || 'an agent') : '';
+  const via = agent ? ' + mcp' : '';
+  if (Gen.viaServer) return { text: 'Server · ' + (Gen.model || 'local') + via, on: true, title: 'A local vibeOS server holds the model.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  if (Gen.provider === 'openai-codex') return { text: 'Codex · ' + Gen.model + via, on: true, title: 'Signed in with ChatGPT; the model is ' + Gen.model + (Gen.codexModel ? ' (set in Settings › Model)' : ' (the default)') + '. Tokens stay in this browser.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  if (Gen.key && Gen.provider) return { text: 'API key · ' + Gen.provider + ' ' + Gen.model + via, on: true, title: 'A pasted ' + Gen.provider + ' key, kept in this browser; the model is ' + Gen.model + '.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  if (agent) return { text: 'Agent · ' + agent + ' (mcp)', on: true, title: agent + ' drives this desktop through vibeos-mcp with its own model; no model is connected here.' };
+  return { text: 'no model', on: false, title: 'No model connected. Click to connect one.' };
+}
+
+export function paintLogin() {
+  const txt = document.getElementById('loginText'), dot = document.getElementById('loginDot'), pill = document.getElementById('loginPill');
+  if (!txt) return;
+  const { text, on, title } = loginLine();
+  txt.textContent = text;
+  dot.className = 'dot' + (on ? '' : ' off');
+  pill.title = title;
+}
+
 export function paintMode() {
   const native = CAP === NativeProvider;
   document.getElementById('modeText').textContent = CAP.label;
@@ -61,8 +84,21 @@ export async function paintDock(dock = document.getElementById('dock')) {
     return b;
   };
 
+  // Every entry raises the window that is open for it, restored if it was
+  // minimised, and opens one only when none is — the shell's three and
+  // every generated app alike (focusOrLaunch, by apps/<file>).
+  // focusOrLaunch is new here; a desktop whose agent forked ui/windows.js
+  // before it has no such export, and a dock click on a generated app then
+  // did nothing but a console error. Fall back to the fork's own launchApp,
+  // loudly: focusing is the feature, launching is the old behaviour.
+  const ui = UI.live();
+  const focusOrOpen = ui.focusOrOpen;
+  const focusOrLaunch = ui.focusOrLaunch || (app => {
+    console.warn('your system/ui/windows.js has no focusOrLaunch — launching a second window; Settings › Design › Take the update');
+    return ui.launchApp(app);
+  });
   add(ICONS.vibeos, 'vibeOS — ask for an app', () => focusOrOpen(SHELL.chat));
-  add('🌐', 'Browser', () => openWindow(SHELL.browser));
+  add('🌐', 'Browser', () => focusOrOpen(SHELL.browser));
 
   const live = dock.isConnected;
   let apps = [];
@@ -76,7 +112,7 @@ export async function paintDock(dock = document.getElementById('dock')) {
   apps.slice(0, 8).forEach(a => {
     const missing = missingCaps(a.requires);
     // The title is a header line in a file the guest can write: text, not html.
-    const b = add('', a.title + (missing.length ? ' (needs ' + missing.join(', ') + ')' : ''), () => launchApp(a));
+    const b = add('', a.title + (missing.length ? ' (needs ' + missing.join(', ') + ')' : ''), () => focusOrLaunch(a));
     b.textContent = a.title.slice(0, 2).toUpperCase();
     b.style.fontSize = '13px';
     b.style.fontWeight = '700';
@@ -95,8 +131,12 @@ export function start() {
   if (brand) brand.src = BASE + 'icon.png';
   const offVM = VM.on(paintVM);
   const offWs = Workspace.on(paintWorkspace);
-  paintVM(); paintWorkspace(); paintMode();
+  const offGen = Gen.on(paintLogin);
+  const offBridge = RemoteBridge.on(paintLogin);
+  paintVM(); paintWorkspace(); paintMode(); paintLogin();
   document.getElementById('wsPill').onclick = () => openSettings('workspace');
+  const login = document.getElementById('loginPill');
+  if (login) login.onclick = () => { if (Gen.available) openSettings('model'); else Gen.askForKey(); };
   document.getElementById('lxPill').onclick = () => {
     if (VM.state === 'off' || VM.state === 'failed') VM.boot();
     openSettings('console');
@@ -105,5 +145,5 @@ export function start() {
     new Date().toLocaleTimeString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
   tick();
   const clock = setInterval(tick, 1000);
-  return () => { offVM(); offWs(); clearInterval(clock); };
+  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); };
 }

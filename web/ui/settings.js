@@ -402,20 +402,30 @@ export function TerminalApp(body, win) {
 
   const say = (text, cls) => { note.textContent = text; note.className = 'tty-note small' + (cls ? ' ' + cls : ''); note.hidden = !text; };
   const focus = () => input.focus();
-  screen.addEventListener('mousedown', e => { if (!window.getSelection().toString()) { e.preventDefault(); focus(); } });
+  // Selecting text. The browser starts a selection on mousedown, and the
+  // first cut called preventDefault there (to keep the hidden textarea
+  // focused), so no drag over the screen ever selected anything and Cmd+C
+  // had nothing to copy — measured: mid-drag selection "" on every row.
+  // Now mousedown is the browser's: the screen takes focus (tabIndex 0)
+  // and the drag selects; keys and paste on the screen reach the guest
+  // exactly as on the textarea, so typing after a selection still works,
+  // and a Cmd-combination is null from keyBytes — the browser copies the
+  // selection and the guest sees nothing. The textarea is focused on a
+  // click that selected nothing: paste and mobile keyboards want it.
   screen.addEventListener('mouseup', () => { if (!window.getSelection().toString()) focus(); });
-  input.addEventListener('keydown', e => {
+  const onKey = e => {
     if (!tty) return;
     const bytes = keyBytes(e);
     if (bytes === null) return;
     e.preventDefault();
     tty.write(bytes);
-  });
-  input.addEventListener('paste', e => {
+  };
+  const onPaste = e => {
     e.preventDefault();
     const text = e.clipboardData.getData('text');
     if (tty && text) tty.write(text.replace(/\r?\n/g, '\r'));
-  });
+  };
+  for (const el of [input, screen]) { el.addEventListener('keydown', onKey); el.addEventListener('paste', onPaste); }
   input.addEventListener('input', () => { input.value = ''; });
 
   // Cells from a probe glyph, so cols/rows are what fits, not a guess.

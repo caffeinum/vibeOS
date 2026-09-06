@@ -2655,15 +2655,31 @@ function pickCanned(p) {
 
 // What the desktop can do, offered as chips under the chat intro while the
 // log is empty (ui/chat.js paints them, and drops them after the first turn).
-// Data in the kernel, not the ui: a forked chat.js offers the same four and
+// Data in the kernel, not the ui: a forked chat.js offers the same three and
 // scripts/e2e/example-prompts.mjs sends each through the chat and asserts the
-// outcome on the desktop.
+// outcome on the desktop. A fourth, "Switch to use gpt-6-astra inside this
+// agent by default", was dropped: the id is not one a Codex login can reach,
+// so the chip left a ChatGPT desktop answering only the provider's 400.
 const EXAMPLE_PROMPTS = [
   'Create an app to track my calories from webcam photos',
   'Update all UI to match Windows Vista',
   'Create app that is a Clippy in the corner of the screen',
-  'Switch to use gpt-6-astra inside this agent by default',
 ];
+
+// Vercel's analytics API exposes event counts but not event properties, so
+// the error on gen_failed is unreadable from outside the dashboard. A coarse
+// bucket as its own event name is countable: 9 failures in a day could be
+// one expired key or a broken deploy, and those need different fixes.
+function trackFailure(failure) {
+  track('gen_failed', { error: String(failure).slice(0, 80) });
+  const msg = String(failure).toLowerCase();
+  const bucket = /api key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
+    : /timed out|timeout|failed to fetch|network|econn/.test(msg) ? 'network'
+    : /not supported|model|400|bad request/.test(msg) ? 'model'
+    : /429|rate limit|quota|insufficient/.test(msg) ? 'quota'
+    : 'other';
+  track('gen_failed_' + bucket);
+}
 
 const Chat = {
   turns: [],        // the log, as system/chat.json holds it, plus in-memory extras
@@ -2862,9 +2878,7 @@ const Chat = {
       } catch (e) {
         failure = e.message;
         giveBack();
-        const source = CANNED[pickCanned(text)];
-        remember(false, source);
-        await this.openFromSource(source, text, false, failure);
+        this.failed(failure, remember);
         finish();
       }
       return;
@@ -2877,6 +2891,11 @@ const Chat = {
     } catch (e) {
       failure = e.message;
       giveBack();
+      // A model that answered with an error is an error on screen and
+      // nothing on the desktop (this.failed). No model at all is the one
+      // case a stock module stands in, on purpose: the demo a desktop with
+      // no key gives, with the "Add a key" offer under it.
+      if (failure !== 'no model configured') { this.failed(failure, remember); finish(); return; }
       source = CANNED[pickCanned(text)];
     }
     remember(live, source);
@@ -2888,6 +2907,37 @@ const Chat = {
     // the two groups barely overlapped.
     if (!live && failure === 'no model configured') this.offer = { text, reply };
     finish();
+  },
+
+  // A model reply that failed. It used to open a stock module — a Clock
+  // for "build me a dashboard" — and say "fell back" under it, so a bad
+  // model id or a dead key looked like a desktop that half-worked. Now the
+  // turn is the provider's words as an error line, history remembers the
+  // turn failed, nothing is created, and the chat offers the reset below.
+  failed(failure, remember) {
+    remember(false, 'the request failed: ' + failure);
+    trackFailure(failure);
+  },
+
+  // The model the next request goes out as when the override is cleared:
+  // the Codex default for a ChatGPT login, the kernel's own line for a
+  // pasted key (Gen.codexModel never applied there). Empty with no model.
+  defaultModel() {
+    if (!Gen.available) return '';
+    return Gen.provider === 'openai-codex' ? VibeOSOAuth.CODEX_MODEL : Gen.model;
+  },
+  // The button on a failed turn: clear Settings › Model (vibeos-codex-model)
+  // through the setter, so Gen.model is the default, and send the same
+  // prompt again — the pictures went back to the chip row when it failed.
+  async resetModelAndRetry(text) {
+    if (typeof text !== 'string') throw new Error('resetModelAndRetry: the prompt to resend must be a string');
+    const to = this.defaultModel();
+    if (!to) throw new Error('no model to reset to: none is connected');
+    track('model_reset', { to });
+    Gen.saveCodexModel('');
+    if (Gen.model !== to) throw new Error('the model override was cleared but Gen.model is ' + Gen.model + ', not ' + to);
+    this.line('model reset to ' + to);
+    await this.send(text);
   },
 
   // Retry the same request, now for real. The pictures are already back in
@@ -2909,20 +2959,7 @@ const Chat = {
     const title = parseTitle(source) || text.slice(0, 30);
     if (live) track('app_generated', { target });
     else if (failure === 'no model configured') track('app_stock', { target });
-    else {
-      track('gen_failed', { target, error: String(failure).slice(0, 80) });
-      // Vercel's analytics API exposes event counts but not event properties,
-      // so the error above is unreadable from outside the dashboard. A coarse
-      // bucket as its own event name is countable: 9 failures in a day could
-      // be one expired key or a broken deploy, and those need different fixes.
-      const msg = String(failure).toLowerCase();
-      const bucket = /api key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
-        : /timed out|timeout|failed to fetch|network|econn/.test(msg) ? 'network'
-        : /not supported|model|400|bad request/.test(msg) ? 'model'
-        : /429|rate limit|quota|insufficient/.test(msg) ? 'quota'
-        : 'other';
-      track('gen_failed_' + bucket, { target });
-    }
+    else throw new Error('openFromSource with a failed model reply: ' + failure + ' (Chat.failed is the path for that)');
 
     if (target === 'vm') {
       const file = parseFile(source) || 'script.sh';
