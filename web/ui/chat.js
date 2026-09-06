@@ -144,7 +144,7 @@ export function ChatApp(body, win) {
     if (on === agentOnly) return;
     agentOnly = on;
     if (on) { input.disabled = true; input.placeholder = `${RemoteBridge.detail || 'your agent'} drives this desktop — talk to it in its own window`; }
-    else if (Chat.ready) { input.disabled = false; input.placeholder = placeholder; }
+    else if (Chat.ready) { input.disabled = false; hint(); }
   };
   Windows.onDispose(win, RemoteBridge.onActivity(e => { if (RemoteBridge.state === 'connected') paintActivity(e); }));
 
@@ -248,6 +248,18 @@ export function ChatApp(body, win) {
     else if (!t.text) line('the page was closed before this turn finished');
   };
 
+  // A message typed while a turn runs: sent as far as the person is
+  // concerned, waiting for the agent's next step. Its own class, its text
+  // and its pictures through textContent like any user turn.
+  const paintQueued = (e) => {
+    const b = bubble('you', '<span id="t"></span><span class="tiny" id="q"></span>');
+    b.className = 'queued';
+    b.style.opacity = '.72';
+    b.querySelector('#t').textContent = e.text;
+    b.querySelector('#q').textContent = ' · waiting for the agent';
+    for (const img of e.images || []) { const el = document.createElement('img'); el.className = 'shot'; el.alt = ''; el.src = img.dataUrl; b.appendChild(el); }
+  };
+
   // EXAMPLE_PROMPTS (kernel/agent.js) as chips, only while there is nothing
   // in the log — a fresh desktop, or a restored log that is empty — and not
   // while an agent drives the desktop from its own window. A click sends the
@@ -304,6 +316,7 @@ export function ChatApp(body, win) {
       if (i < Chat.turns.length) paintTurn(Chat.turns[i], i);
     }
     if (!Chat.restored && Chat.note) paintReload(Chat.note);
+    Chat.queue.forEach(paintQueued);
     // The agent's activity is kernel state like the turns: a repaint (the
     // intro following the bridge, a restore) draws it again, newest last.
     if (RemoteBridge.state === 'connected') for (const e of RemoteBridge.activity) paintActivity(e);
@@ -337,11 +350,15 @@ export function ChatApp(body, win) {
   body.addEventListener('dragover', e => e.preventDefault());
   body.addEventListener('drop', e => { e.preventDefault(); Chat.attach(Attachments.filesOf(e)); });
 
+  // The box is emptied only once the kernel has taken the text. Chat.send
+  // answers with { started } (this text is the turn), { queued } (a turn was
+  // running and it waits for its next step) or null — refused, the line above
+  // says why, and the typed message stays exactly where it was.
   const send = () => {
     const text = input.value;
     if (!text.trim() && !Chat.pending.length) return;
-    input.value = '';
-    Chat.send(text);
+    if (Chat.send(text)) input.value = '';
+    else input.focus();   // refused: the text is still there, put the cursor back in it
   };
   body.querySelector('#send').onclick = send;
   input.addEventListener('keydown', e => {
@@ -351,13 +368,20 @@ export function ChatApp(body, win) {
   });
 
   const placeholder = input.placeholder;
-  const enable = () => { if (agentOnly) return; input.disabled = false; input.placeholder = placeholder; };
+  // While a turn runs the box still takes a message — it reaches the model at
+  // the turn's next step — and says so. Send stays enabled: nothing about the
+  // composer changes but this line.
+  const STEERING = 'the agent is working — send anyway and it takes this at its next step';
+  const hint = () => { if (agentOnly || !Chat.ready) return; input.placeholder = (Chat.running || Chat.starting) ? STEERING : placeholder; };
+  const enable = () => { if (agentOnly) return; input.disabled = false; hint(); };
   agentMode();
   if (!Chat.ready) { input.disabled = true; input.placeholder = 'loading chat…'; }
+  else hint();   // a reload_ui mid-turn opens this window with the turn already running
   const off = Chat.on((type, data) => {
     if (type === 'chips') return paintChips();
     if (type === 'status') return status(data.text);
     if (type === 'loaded') enable();
+    hint();
     paint();
     // A stock module opens in its own window, on top of this chat — so the
     // key offer can end up buried under the very thing it is offering to

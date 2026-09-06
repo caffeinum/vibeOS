@@ -287,7 +287,10 @@ const Gen = {
     return this.available;
   },
 
-  async generate(prompt, history, onStatus, images) {
+  // steer: the tool loop's drain (Chat.drain), passed through untouched — a
+  // one-shot completion has no steps to hand a queued message to, so only the
+  // agent loop below reads it.
+  async generate(prompt, history, onStatus, images, steer) {
     if (this.viaServer) {
       // The local demo server takes a prompt string and nothing else; dropping
       // the image here would send text that talks about a screenshot it lost.
@@ -327,7 +330,7 @@ const Gen = {
       if (src.startsWith('```')) src = src.split('\n').slice(1).join('\n').replace(/```\s*$/, '').trim();
       return src;
     }
-    if (this.oauth) return Agent.run(prompt, history, onStatus, images);
+    if (this.oauth) return Agent.run(prompt, history, onStatus, images, steer);
     throw new Error('no model configured');
   },
 
@@ -2236,7 +2239,28 @@ const Agent = {
      write a window, but could not look at the workspace, run anything in the
      VM, or restyle the desktop — which made "bring your own key" a visibly
      lesser product than signing in, for no reason anyone chose. */
-  async runWithKey(prompt, history, onStatus, images) {
+  /* Whatever was typed while this turn ran, as messages for the next step.
+     `steer` is Chat.drain: it empties the queue, turns each entry into a real
+     user turn in the log, and hands the entries back here — so "no, use the
+     other file" reaches the model between two tool calls instead of waiting
+     for the turn to end. The entries go in after the tool results, in the
+     order they were typed, with their pictures in this transport's shape. */
+  steerMessages(shape, taken) {
+    return taken.map(s => ({ role: 'user', content: this.userContent(shape, s.text, s.images) }));
+  },
+
+  /* Anthropic's shape, folded into the tool_result message rather than sent
+     behind it: /v1/messages documents one user turn per assistant turn, and
+     two user messages in a row is a shape the API is free to refuse. The
+     blocks go after the tool results, in the order they were typed. */
+  steerBlocks(taken) {
+    return taken.flatMap(s => {
+      const content = this.userContent('anthropic', s.text, s.images);
+      return typeof content === 'string' ? [{ type: 'text', text: content }] : content;
+    });
+  },
+
+  async runWithKey(prompt, history, onStatus, images, steer) {
     let system;
     try { system = await this.systemPrompt(); }
     catch (e) {
@@ -2268,11 +2292,14 @@ const Agent = {
         if (call.toolName === 'create_app') created.push(output);
         results.push({ id: call.id, output });
       }
+      const taken = steer ? steer() : [];
       msgs = anthropic
         ? [...msgs, { role: 'assistant', content: res.raw },
-           { role: 'user', content: results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: toolResultText(r.output) })) }]
+           { role: 'user', content: [...results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: toolResultText(r.output) })),
+                                     ...this.steerBlocks(taken)] }]
         : [...msgs, ...res.raw,
-           ...results.map(r => ({ type: 'function_call_output', call_id: r.id, output: toolResultText(r.output) }))];
+           ...results.map(r => ({ type: 'function_call_output', call_id: r.id, output: toolResultText(r.output) })),
+           ...this.steerMessages('responses', taken)];
     }
     return { text: lastText, created, steps: this.MAX_STEPS };
   },
@@ -2521,6 +2548,10 @@ const Agent = {
       try { localStorage.setItem(RELOAD_NOTE, JSON.stringify({ note, files: forked, at: Date.now() })); } catch {}
       onStatus?.('reloading the desktop…');
       window.__vibeosIntentionalUnload = true;   // our own reload must not trip the leave-page guard
+      // The page is going away and the queue is memory only: say what was
+      // dropped, so the person retypes it instead of waiting for an answer
+      // to a message no boot will ever carry.
+      Chat.dropQueue('the desktop is reloading ' + forked.join(' and '));
       const pairing = RemoteBridge.keepAcrossReload();
       setTimeout(() => location.reload(), 400);
       return { ok: true, note: 'reloading ' + forked.join(' and ') + ' — this turn ends here; the chat shows your note after boot' + (pairing ? '; the vibeos-mcp pairing resumes after boot, so call again once the page is back' : ''), reloading: forked, pairing: pairing ? 'kept' : 'none' };
@@ -2528,7 +2559,7 @@ const Agent = {
     throw new Error('unknown tool: ' + toolName);
   },
 
-  async run(prompt, history, onStatus, images) {
+  async run(prompt, history, onStatus, images, steer) {
     // Sent as messages from the first step, not {prompt, history}: the server
     // builds the same array from those two, but only a string prompt fits
     // through them, and an image needs the SDK's content-part shape.
@@ -2570,7 +2601,8 @@ const Agent = {
         return { text: lastText, created, steps: step + 1 };
       }
 
-      messages = [...messages, ...(j.responseMessages || []), { role: 'tool', content: toolResults }];
+      messages = [...messages, ...(j.responseMessages || []), { role: 'tool', content: toolResults },
+                  ...this.steerMessages('sdk', steer ? steer() : [])];
     }
 
     return { text: lastText, created, steps: this.MAX_STEPS };
@@ -2686,6 +2718,7 @@ const Chat = {
   history: [],      // what the model is sent: the text of each turn
   pending: [],      // pictures attached and not yet sent
   running: null,    // { me, reply, status } while a turn is in flight
+  starting: false,  // a turn was accepted and is reading the log; not running yet
   restored: 0,      // how many turns the load restored; the chat says so after them
   loadError: '',    // why the log could not be read
   note: null,       // a reload note with no turn to land in
@@ -2785,16 +2818,139 @@ const Chat = {
   },
   detach(i) { this.pending.splice(i, 1); this.emit('chips'); },
 
-  async send(text) {
+  /* ---- steering: what the person types while a turn is running ---------
+
+     send used to answer a send during a turn with a line and a bare return,
+     and the composer had already emptied the box — the typed text was gone.
+     It never refuses silently now, and never eats the text: it says at once
+     what happened to it, and the composer clears only when it was taken.
+
+       { started: <promise of the turn> }  this text is the turn now running
+       { queued: entry }                   a turn was running; it waits here
+       null                                refused — the line says why and the
+                                           text stays the caller's
+
+     The queue is drained by the tool loop between steps (drain, handed in as
+     `steer`), so a correction reaches the model mid-work. It is memory only,
+     never system/chat.json: a queued message without the turn it was meant to
+     steer arrives with no context, and the turn itself does not survive a
+     reload. A drained entry is an ordinary user turn in the log from that
+     moment, saved like every other.  */
+  QUEUE_MAX: 5,
+  queue: [],
+  // Every picture that will ride in the SAME request body: the running turn's
+  // own, plus each one drained into it. The per-turn cap is a cap on one body
+  // (Attachments.MAX_COUNT / MAX_BYTES), and a drain appends every queued
+  // entry to one request — three steers of two images each sailed past four
+  // images and 3 MB with no refusal, straight into a provider 413. Kept here
+  // so a steer is measured against what the turn already carries.
+  turnImages: [],
+
+  send(text) {
     text = String(text || '').trim();
-    if (!text && !this.pending.length) return;
+    if (!text && !this.pending.length) return null;
     // Pictures put back after a failure can stack past the cap; refuse here
-    // rather than let the body grow past what the server will take.
+    // rather than let the body grow past what the server will take — at queue
+    // time too, so a steer carrying too many is refused as it is typed.
     try { Attachments.check(this.pending); }
-    catch (e) { this.line(e.message, true); return; }
-    if (this.running) { this.line('a turn is still running; wait for its reply before sending another', true); return; }
+    catch (e) { this.line(e.message, true); return null; }
+    // `starting` is the window between a send and the turn it starts: the log
+    // is read first (await), and a second send in that gap used to start a
+    // second turn beside the first. It is a turn in flight as far as the
+    // composer is concerned, so the text is steered into it.
+    if (this.running || this.starting) return this.steer(text);
     const images = this.pending.splice(0);
     this.emit('chips');
+    this.starting = true;
+    this.turnImages = images.slice();
+    return { started: this.turnGuarded(text, images) };
+  },
+
+  // Nobody awaits a turn — the composer wants its answer now, not in a
+  // minute — so a throw that escapes one is said in the log rather than left
+  // as an unhandled rejection on the console.
+  turnGuarded(text, images) {
+    return this.runTurn(text, images).catch(e => {
+      this.running = null; this.starting = false;
+      this.turnImages = [];
+      this.line('the turn ended badly: ' + e.message, true);
+      this.emit('done', { reply: null, failure: e.message });
+      // A turn can throw outside finish() — runTurn awaits the log and opens
+      // the chat window before any try — and a message queued against that
+      // turn was stranded: painted as waiting, with nothing running, delivered
+      // only on the next unrelated send and out of order. It is the next turn
+      // now, the way a steer that lands after the last step is.
+      this.flushQueue();
+    });
+  },
+
+  // A message typed while a turn runs: painted at once as a pending user
+  // line, handed to the model at the turn's next step.
+  steer(text) {
+    if (this.queue.length >= this.QUEUE_MAX) {
+      this.line(`${this.QUEUE_MAX} messages are already waiting for the agent — it takes them at its next step`, true);
+      return null;
+    }
+    // The cap is per request body, and this entry's pictures will be appended
+    // to the running turn's request, not sent on their own.
+    try { Attachments.check([...this.turnImages, ...this.queue.flatMap(e => e.images), ...this.pending]); }
+    catch (e) { this.line(e.message + ' — the pictures already in this turn count', true); return null; }
+    const entry = { text, images: this.pending.splice(0) };
+    this.queue.push(entry);
+    this.emit('chips');
+    this.emit('queued', { entry });
+    return { queued: entry };
+  },
+
+  /* The loop's drain, between two steps. Every queued entry becomes a real
+     user turn in the log — inserted before the reply still in flight, so the
+     log reads in the order it happened and still ends on the assistant — and
+     is handed back for this request's messages. */
+  drain() {
+    if (!this.queue.length) return [];
+    const taken = this.queue.splice(0);
+    const reply = this.running && this.running.reply;
+    const at = reply ? this.turns.indexOf(reply) : -1;
+    const start = at < 0 ? this.turns.length : at;
+    let i = start;
+    for (const e of taken) {
+      e.me = { role: 'user', text: e.text, images: e.images.length, shots: e.images.map(im => im.dataUrl) };
+      this.turns.splice(i++, 0, e.me);
+    }
+    // A note is an index into turns, and these splices move every turn from
+    // `start` on — a line recorded during this turn (it points at the reply)
+    // otherwise painted above the steered bubble instead of above the reply.
+    for (const n of this.notes) if (n.at >= start) n.at += taken.length;
+    // Those pictures are in this turn's request from here on.
+    this.turnImages.push(...taken.flatMap(e => e.images));
+    this.persist();
+    this.emit('queued', { drained: taken.length });
+    return taken;
+  },
+
+  // A queue no turn can take any more (reload_os ends the page). Loud: the
+  // person is waiting for an answer that will never come.
+  dropQueue(why) {
+    const n = this.queue.splice(0).length;
+    if (!n) return 0;
+    this.line(`${n} queued message${n === 1 ? '' : 's'} dropped — ${why}; type ${n === 1 ? 'it' : 'them'} again`, true);
+    this.emit('queued', { dropped: n });
+    return n;
+  },
+
+  // A steer that landed after the model's last step has no step left to join,
+  // so it becomes the next turn by itself, with no click. Anything queued
+  // behind it steers that turn the way any message does.
+  flushQueue() {
+    if (this.running || this.starting || !this.queue.length) return;
+    const next = this.queue.shift();
+    this.emit('queued', { flushed: 1 });
+    this.starting = true;
+    this.turnImages = next.images.slice();
+    this.turnGuarded(next.text, next.images);
+  },
+
+  async runTurn(text, images) {
     // A send before the log is read used to write this pair over the whole
     // history, then paint the history under it. The read is awaited before
     // anything is painted or written; a log that could not be read was
@@ -2818,6 +2974,7 @@ const Chat = {
     const reply = { role: 'assistant', text: '', cards: [] };
     this.turns.push(me, reply);
     this.running = { me, reply, status: 'thinking…' };
+    this.starting = false;
     this.offer = null;
     this.persist();
     this.emit('turn', { me, reply });
@@ -2826,22 +2983,30 @@ const Chat = {
       this.running.status = String(status);
       this.emit('status', { text: this.running.status });
     };
+    // What the loop took from the queue mid-turn, in the order it took it:
+    // the entries are already user turns in the log, and history has to end
+    // up reading first message, each correction, then the one reply.
+    const steered = [];
+    const steer = () => { const taken = this.drain(); steered.push(...taken); return taken; };
     const remember = (sent, said) => {
       me.images = sent ? images.length : 0;
       reply.text = said.slice(0, 1200);
       if (failure) reply.failure = failure;
       this.persist();
       // An image-only turn has no text to lead with; do not remember a bare newline.
-      const turn = ChatLog.content(me);
-      if (!turn) return;
-      this.history.push({ role: 'user', content: turn }, { role: 'assistant', content: reply.text });
+      const users = [ChatLog.content(me), ...steered.map(s => ChatLog.content(s.me))].filter(Boolean);
+      if (!users.length) return;
+      for (const content of users) this.history.push({ role: 'user', content });
+      this.history.push({ role: 'assistant', content: reply.text });
     };
     // A picture that did not go through returns to the chip row, so the next
     // try — "Add a key", or just pressing Send again — carries it. Before this
     // the chips were cleared before the request, and the retry sent text that
     // talked about a screenshot it no longer had.
     const giveBack = () => { this.pending.unshift(...images); this.emit('chips'); };
-    const finish = () => { this.running = null; this.emit('done', { reply, failure }); };
+    // A steer that arrived too late for this turn's last step goes out as the
+    // next one, at once and with no click.
+    const finish = () => { this.running = null; this.turnImages = []; this.emit('done', { reply, failure }); this.flushQueue(); };
 
     // Both paths are the agent now. Signing in with ChatGPT proxies through
     // vibeos.sh; a pasted key talks to the provider from this page. Same
@@ -2849,8 +3014,8 @@ const Chat = {
     if (Gen.available && (Gen.oauth || Gen.key)) {
       try {
         const result = Gen.oauth
-          ? await Gen.generate(text, prior, onStatus, images)
-          : await Agent.runWithKey(text, prior, onStatus, images);
+          ? await Gen.generate(text, prior, onStatus, images, steer)
+          : await Agent.runWithKey(text, prior, onStatus, images, steer);
         live = true;
         // What history remembers of the turn: the reply, else what was
         // built. A refused create_app built nothing, so a turn that only
@@ -2937,7 +3102,11 @@ const Chat = {
     Gen.saveCodexModel('');
     if (Gen.model !== to) throw new Error('the model override was cleared but Gen.model is ' + Gen.model + ', not ' + to);
     this.line('model reset to ' + to);
-    await this.send(text);
+    // send answers with what became of the text, not with the turn: wait for
+    // the turn itself when there is one, so a caller that awaits this still
+    // returns once the retry is done.
+    const out = this.send(text);
+    if (out && out.started) await out.started;
   },
 
   // Retry the same request, now for real. The pictures are already back in
@@ -2951,7 +3120,8 @@ const Chat = {
     track('key_offer_added');
     this.offer = null;
     this.emit('offer');
-    await this.send(offer.text);
+    const out = this.send(offer.text);
+    if (out && out.started) await out.started;
   },
 
   async openFromSource(source, text, live, failure) {
