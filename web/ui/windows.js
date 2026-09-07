@@ -95,6 +95,9 @@ export function openWindow(spec) {
   done.catch(() => {});   // awaited by whoever opened it; not an unhandled rejection here
   Windows.attach(rec, el);
   document.getElementById('desktop').appendChild(el);
+  // Placed once it is in the document: os.css has a minimum window size, so
+  // the box a corner is measured from is the rendered one, not the header's.
+  if (rec.spec.at) Object.assign(el.style, placeAt(rec.spec.at, el));
   return el;
 }
 
@@ -162,9 +165,46 @@ export function geometry(el) {
            min: el.classList.contains('min'), full: el.dataset.full || '', prev: el.dataset.prev || '' };
 }
 
+// The window open under an app id — a shell id, or apps/<file> for a
+// generated app — compared as strings: a filename from the guest can carry
+// a quote, so it is not put inside a selector.
+export function openWindowFor(id) {
+  return [...document.querySelectorAll('.win[data-app]')].find(w => w.dataset.app === id) || null;
+}
+// Raise a window that is open (restored if minimised) or open it. Every dock
+// entry goes through this: a click used to open a second copy of an app —
+// two Notes on one localStorage key, two chats on one log.
 export function focusOrOpen(spec) {
-  const open = document.querySelector(`.win[data-app="${spec.id}"]`);
+  const open = openWindowFor(spec.id);
   if (!open) return openWindow(spec);
+  open.classList.remove('min');
+  Windows.raise(open);
+  return open;
+}
+// The chat card's Open and Settings › Workspace. A window is usually already
+// open for the app the card is about, and a second copy is two apps on one
+// file — aleks, 2026-09-07, with two Clippys on screen, one from the dock and
+// one from the card. Raising the open one and stopping there would be wrong
+// the other way: the agent may have rewritten the app since that window
+// started, and a raised stale window hides the very change it was asked for
+// (that is why Open launched fresh in the first place). So the open window is
+// reused AND rerun from the source as it is now: same window, current code.
+export function openOrRerun(app) {
+  const open = app && app.name ? openWindowFor('apps/' + app.name) : null;
+  if (!open) return launchApp(app);
+  // paint() reads rec.SPEC.opts — a record carries both and only the spec's
+  // reaches the renderer, so setting rec.opts here reran the old source with
+  // no error at all (measured: the window stayed on v1 while the file was v2).
+  if (!open.rec || !open.rec.spec) throw new Error('the window for ' + app.name + ' has no record to rerun');
+  open.rec.spec.opts = { ...(open.rec.spec.opts || {}), app };
+  open.classList.remove('min');
+  Windows.raise(open);
+  return Promise.resolve(repaint(open.rec)).then(() => open);
+}
+
+export function focusOrLaunch(app) {
+  const open = app && app.name ? openWindowFor('apps/' + app.name) : null;
+  if (!open) return launchApp(app);
   open.classList.remove('min');
   Windows.raise(open);
   return open;
@@ -187,7 +227,7 @@ function createAppMount(body) {
   return mount;
 }
 
-function createAppApi(provider, mount, title) {
+function createAppApi(provider, mount, title, requires = []) {
   let resizeCb = null;
   const ro = new ResizeObserver(entries => {
     const { width, height } = entries[0].contentRect;
@@ -198,7 +238,8 @@ function createAppApi(provider, mount, title) {
   ro.observe(mount);
   Windows.onDispose(mount.closest('.win'), () => ro.disconnect());
   const streams = new Set();
-  Windows.onDispose(mount.closest('.win'), () => { for (const s of streams) s.close(); });
+  let closed = false;
+  Windows.onDispose(mount.closest('.win'), () => { closed = true; for (const s of streams) s.close(); });
   return {
     async list(...args) { return provider.list(...args); },
     async shell(...args) { return provider.shell(...args); },
@@ -222,6 +263,22 @@ function createAppApi(provider, mount, title) {
         return stream;
       },
     },
+    // The connected model, one plain completion (Gen.ask, kernel/agent.js):
+    // no tools, the app's own system line. Gated on the header the way the
+    // dock and the upsell gate the window, so an app that did not declare
+    // ai is told which line to add rather than reaching the person's key
+    // through a capability it never claimed. Refused once the window is
+    // closed, like api.net's streams end with it.
+    ai: {
+      generate(opts) {
+        if (!requires.includes('ai')) return Promise.reject(new Error('this app did not declare // @requires ai — add ai to its // @requires header to call api.ai.generate'));
+        // A window that is gone has nothing to paint into: a timer or a
+        // stream callback that outlived it still posted to the provider and
+        // spent the person's tokens on a reply nobody saw.
+        if (closed) return Promise.reject(new Error('api.ai.generate: the window "' + title + '" is closed'));
+        return Gen.ask(opts);
+      },
+    },
     onResize(fn) {
       resizeCb = fn;
       fn(mount.clientWidth, mount.clientHeight);
@@ -232,8 +289,8 @@ function createAppApi(provider, mount, title) {
   };
 }
 
-async function runModule(source, mount, provider, title) {
-  const api = createAppApi(provider, mount, title);
+async function runModule(source, mount, provider, title, requires) {
+  const api = createAppApi(provider, mount, title, requires);
   const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
   try {
     const mod = await import(url);
@@ -245,40 +302,89 @@ async function runModule(source, mount, provider, title) {
 // A generated app's window. The app ({ title, source, requires }) rides in
 // the spec's opts, so a reload_ui reruns the module from its source in the
 // new ui's sandbox rather than through a closure of the old one.
+// A `// @geometry` header (parseGeometry, kernel/workspace.js) places the
+// window, and never off the desktop: a corner sits 8 px inside it, under the
+// menubar for the top ones; x,y is as written but kept on screen; a window
+// that would sit across the dock's columns is lifted above the dock (the
+// dock is z 400, so a window under it was hidden by it — measured:
+// bottom-right 300x220 at 700x600 sat under the dock). w and h are the
+// rendered box (os.css's min-width/min-height win over a smaller header)
+// capped to the desktop: `9999x9999` opened 9999 px wide. Draggable after.
+function placeAt(at, el) {
+  const margin = 8, menubar = (document.getElementById('menubar') || { offsetHeight: 30 }).offsetHeight;
+  const dock = document.getElementById('dock');
+  const d = dock ? dock.getBoundingClientRect() : { left: Infinity, right: -Infinity, top: innerHeight };
+  const width = Math.min(el.offsetWidth, innerWidth - 2 * margin);
+  let left = at.corner !== undefined ? (at.corner.endsWith('left') ? margin : innerWidth - width - margin) : at.x !== undefined ? at.x : el.offsetLeft;
+  left = Math.max(margin, Math.min(left, innerWidth - width - margin));
+  const spansDock = left < d.right + margin && left + width > d.left - margin;
+  const floor = (spansDock ? d.top : innerHeight) - margin;
+  const height = Math.min(el.offsetHeight, floor - menubar - margin);
+  let top = at.corner !== undefined ? (at.corner.startsWith('top') ? menubar + margin : floor - height) : at.y !== undefined ? at.y : el.offsetTop;
+  top = Math.max(menubar + margin, Math.min(top, floor - height));
+  return { left: left + 'px', top: top + 'px', width: width + 'px', height: height + 'px' };
+}
+
+// A launched app's chrome carries its file as data-app (apps/<name>), the
+// id read_desktop reports, so the dock can find the window that is open
+// for it. An app with no file (a card's source, a stock module that could
+// not be saved) has no id and is not found — each launch is a window.
 export function launchApp(app) {
   if (!app || typeof app.source !== 'string') throw new Error('launchApp: an app needs a source');
   const missing = missingCaps(app.requires);
+  const at = parseGeometry(app.source);
   return openWindow({
-    title: app.title, badge: missing.length ? 'blocked' : 'app', w: 430, h: 320,
-    render: 'AppWindow', opts: { app },
+    id: app.name ? 'apps/' + app.name : '',
+    title: app.title, badge: missing.length ? 'blocked' : 'app', w: at ? at.w : 430, h: at ? at.h : 320,
+    render: 'AppWindow', opts: { app }, at,
   });
 }
 
 export function AppWindow(body, win, { app }) {
   const missing = missingCaps(app.requires);
   const mount = createAppMount(body);
+  const requires = app.requires || [];
+  // The cap watchers, undone the moment the app starts: an app that has
+  // run owns its DOM, and a watcher left subscribed painted the upsell OVER
+  // a running app (innerHTML) on the next cap loss — forget the key while
+  // an ai app runs, or VM.restart/a restore under a shell app — and, the
+  // start being one-shot, the window was dead when the cap came back.
+  // main called off() before start(); the ai watcher had dropped that.
+  const offs = [];
+  let started = false;
   const start = async () => {
-    try { await runModule(app.source, mount, CAP, app.title); }
+    if (started) return;
+    started = true;
+    for (const off of offs.splice(0)) off();
+    // Whatever the upsell painted goes, and the badge says what the window
+    // is now: an app that appends painted its first reply under "Connect a
+    // model", and the chrome still read "blocked".
+    mount.textContent = '';
+    if (win && win.rec && win.rec.spec.badge === 'blocked') { win.rec.spec.badge = 'app'; win.requestUpdate(); }
+    try { await runModule(app.source, mount, CAP, app.title, requires); }
     catch (e) { mount.textContent = ''; const m = document.createElement('p'); m.className = 'no small'; m.textContent = e.message; mount.appendChild(m); }
   };
   if (!missing.length) return start();
   renderUpsell(mount, missing);
-  // Blocked only on the machine while it boots: open the app the moment
-  // it is ready instead of leaving a "blocked" window behind. The
-  // subscription is the window's: closed or repainted, it lets go. The tty
-  // comes up after 'ready' (its own state, on every emit), so the check is
-  // "nothing missing any more", not the state name.
+  // Blocked only on the machine while it boots, or on a model nobody has
+  // connected yet: open the app the moment the cap is there instead of
+  // leaving a "blocked" window behind. The subscriptions are the window's:
+  // closed or repainted, it lets go. The tty comes up after 'ready' (its
+  // own state, on every emit), so the check is "nothing missing any more",
+  // not the state name.
   // `some`, not `every`: an app on shell AND net while the relay is off is
   // still waiting on the machine, and stayed on "still booting" forever when
   // 'net' in the list switched the watcher off.
-  if (missing.some(c => VM_CAPS.includes(c)) && VM.state !== 'failed' && VM.state !== 'unavailable') {
-    const off = VM.on(() => {
-      const still = missingCaps(app.requires);
-      if (!still.length) { off(); start(); return; }
-      renderUpsell(mount, still);
-    });
-    Windows.onDispose(win, off);
-  }
+  const recheck = () => {
+    const still = missingCaps(requires);
+    if (!still.length) { start(); return; }
+    renderUpsell(mount, still);
+  };
+  const watch = off => { offs.push(off); Windows.onDispose(win, off); };
+  if (missing.some(c => VM_CAPS.includes(c)) && VM.state !== 'failed' && VM.state !== 'unavailable') watch(VM.on(recheck));
+  // A model is the tab's own (Gen) or the connected agent's (RemoteBridge,
+  // when its client samples): either arriving starts the window.
+  if (missing.includes('ai')) { watch(Gen.on(recheck)); watch(RemoteBridge.on(recheck)); }
 }
 
 // The capabilities the VM provides once it is up, as against the native build's.
@@ -292,7 +398,29 @@ function renderUpsell(mount, missing) {
   // the exact apps this OS exists to run. Say what is actually true.
   const vmCaps = missing.filter(c => VM_CAPS.includes(c));
   const net = missing.includes('net');
-  const nativeOnly = missing.filter(c => !VM_CAPS.includes(c) && c !== 'net');
+  const nativeOnly = missing.filter(c => !VM_CAPS.includes(c) && c !== 'net' && c !== 'ai');
+  // ai is a model nobody has connected: the same door the chat offers, and
+  // this window starts by itself once one is there (Gen.on in AppWindow).
+  // First, whatever else is missing: a model is the one thing the person
+  // can fix from here.
+  if (missing.includes('ai')) {
+    const others = missing.filter(c => c !== 'ai');
+    mount.innerHTML = `
+      <div class="upsell">
+        <h3 style="margin:0 0 6px">Connect a model</h3>
+        <p class="small muted" style="margin:0 0 10px">This app asks a model (api.ai), and none is connected yet: paste an API key or sign in, and it runs right here. <span class="others"></span></p>
+        <p class="small no" id="upsellWhy" hidden style="margin:0 0 10px"></p>
+        <button class="btn p sm" id="upsellConnect">Connect a model</button>
+      </div>`;
+    // The other caps are header words from a file the guest can write: text.
+    mount.querySelector('.others').textContent = others.length ? `It also needs ${others.join(' and ')}.` : '';
+    // An agent is driving the desktop but its MCP client cannot sample: say
+    // so in the package's own words (the agent's name is the client's).
+    const why = mount.querySelector('#upsellWhy');
+    if (RemoteBridge.state === 'connected' && !RemoteBridge.sampling) { why.textContent = Gen.samplingRefusal(RemoteBridge.agentName); why.hidden = false; }
+    mount.querySelector('#upsellConnect').onclick = () => Gen.askForKey();
+    return;
+  }
   // net is neither the machine's nor the native build's: it is the relay,
   // and the relay is a setting. Say that instead of sending people to a
   // binary for a switch in Settings — alone, or under the machine's line

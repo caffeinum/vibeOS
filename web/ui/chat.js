@@ -48,18 +48,36 @@ export function renderMd(el, text) {
 // turn in flight included. Every model, tool or guest string lands through
 // textContent or renderMd: a refused title, a card, a reply are never markup.
 export function ChatApp(body, win) {
-  body.style.padding = '0';
+  // The body is a column: the log scrolls, the footer with the input is
+  // pinned to the window's bottom. A sticky footer inside the scrolling
+  // body sat right under the last bubble while the log was short — "the
+  // input glues to the end of content". The input is a two-line textarea:
+  // Enter sends, Shift+Enter is a newline.
+  body.style.cssText = 'padding:0;display:flex;flex-direction:column;overflow:hidden';
   body.innerHTML = `
-    <div id="log" style="padding:12px;display:flex;flex-direction:column;gap:10px"></div>
-    <div style="position:sticky;bottom:0;border-top:1px solid var(--barline);background:var(--panel)">
+    <div id="log" style="flex:1 1 auto;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px"></div>
+    <div id="composer" style="flex:0 0 auto;border-top:1px solid var(--barline);background:var(--panel)">
       <div id="chips" class="row" hidden style="flex-wrap:wrap;gap:6px;padding:8px 10px 0"></div>
-      <div class="row" style="gap:6px;padding:8px 10px">
-        <input type="text" id="msg" placeholder="ask for a window, or a script for the VM — paste a screenshot too"
-               style="flex:1;border:1px solid var(--line);border-radius:var(--radius-ctl);background:var(--panel2);padding:7px 10px;font-size:13px" />
+      <div class="row" style="gap:6px;padding:8px 10px;align-items:flex-end">
+        <button class="btn sm" id="attach" type="button" title="attach an image" aria-label="attach an image"></button>
+        <input type="file" id="pick" accept="image/*" multiple hidden>
+        <textarea id="msg" rows="2" placeholder="ask for a window, or a script for the VM — attach or paste an image"
+               style="flex:1;border:1px solid var(--line);border-radius:var(--radius-ctl);background:var(--panel2);color:inherit;padding:7px 10px;font:inherit;font-size:13px;line-height:1.35;resize:none;min-height:0"></textarea>
         <button class="btn p sm" id="send">Send</button>
       </div>
     </div>`;
   const log = body.querySelector('#log'), input = body.querySelector('#msg'), chips = body.querySelector('#chips');
+  // A picked file lands exactly like a pasted or dropped one: Chat.attach,
+  // the chip row, the next message. Nothing said pictures were welcome
+  // before; the paperclip and the placeholder do now.
+  const attachBtn = body.querySelector('#attach'), pick = body.querySelector('#pick');
+  attachBtn.textContent = '📎';
+  attachBtn.onclick = () => pick.click();
+  pick.addEventListener('change', () => {
+    const files = [...pick.files];
+    pick.value = '';
+    if (files.length) Chat.attach(files).then(() => input.focus());
+  });
 
   const bubble = (who, html, before = null) => {
     const d = document.createElement('div');
@@ -80,7 +98,7 @@ export function ChatApp(body, win) {
   // and does not exist on vibeos.sh — it read as an error on the hosted build.
   // Offer the two things that actually work, as a button rather than a chore.
   const readyLine = () =>
-    `Ask for anything. I build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM — whichever fits.<br><span class="tiny dimmer">${Gen.model}</span>`;
+    `Ask for anything. I build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM — whichever fits.<br><span class="tiny dimmer" id="model"></span>`;
   // Three shapes: a model is connected; no model but an agent drives the
   // desktop through vibeos-mcp (then this box is optional, not missing); or
   // nothing yet. The agent's name is the MCP client's own string: textContent.
@@ -94,6 +112,9 @@ export function ChatApp(body, win) {
          <span class="row" style="margin-top:8px"><button class="btn p sm" id="chatConnect">Connect a model</button></span>`;
     if (introEl && introEl.isConnected) { introEl.innerHTML = html; }
     else introEl = bubble('vibeos', html);
+    // The id is whatever the pane stored: text, like every model string.
+    const model = introEl.querySelector('#model');
+    if (model) model.textContent = Gen.model;
     if (agent && !Gen.available) introEl.querySelector('b').textContent = RemoteBridge.detail || 'your agent';
     const connectBtn = introEl.querySelector('#chatConnect');
     if (connectBtn) connectBtn.onclick = async () => { await Gen.askForKey(); paintIntro(); };
@@ -113,7 +134,9 @@ export function ChatApp(body, win) {
     const what = document.createElement('span'); what.textContent = e.what ? ' ' + e.what : '';
     const st = document.createElement('span'); st.className = 'tiny ' + (e.ok === false ? 'no' : 'dimmer');
     st.textContent = e.ok === false ? ' — refused: ' + e.error : ` — ${e.ms} ms`;
-    d.append(tool, what, st); log.appendChild(d); body.scrollTop = body.scrollHeight;
+    const stick = atEnd();
+    d.append(tool, what, st); log.appendChild(d);
+    if (stick) log.scrollTop = log.scrollHeight;
   };
   let agentOnly = false;
   const agentMode = () => {
@@ -121,7 +144,7 @@ export function ChatApp(body, win) {
     if (on === agentOnly) return;
     agentOnly = on;
     if (on) { input.disabled = true; input.placeholder = `${RemoteBridge.detail || 'your agent'} drives this desktop — talk to it in its own window`; }
-    else if (Chat.ready) { input.disabled = false; input.placeholder = placeholder; }
+    else if (Chat.ready) { input.disabled = false; hint(); }
   };
   Windows.onDispose(win, RemoteBridge.onActivity(e => { if (RemoteBridge.state === 'connected') paintActivity(e); }));
 
@@ -161,10 +184,12 @@ export function ChatApp(body, win) {
     } else {
       act.textContent = 'Open';
       act.onclick = async () => {
+        // A stock module has no file, so it has no identity to reuse; a saved
+        // app does, and Open must not open a second window on it.
         if (c.src) return launchApp({ title: c.title, source: c.src, requires: parseRequires(c.src) });
         const app = (await Apps.list()).apps.find(a => a.title === c.title);
         if (!app) return show('no app titled "' + c.title + '" in the workspace or the VM now');
-        launchApp(app);
+        (UI.live().openOrRerun || launchApp)(app);
       };
     }
   };
@@ -176,7 +201,31 @@ export function ChatApp(body, win) {
     b.querySelector('#addKeyNow').onclick = () => Chat.retryWithKey();
     return b;
   };
-  const paintTurn = t => {
+  // A model reply that failed: the provider's words (a slice of a proxy's
+  // HTML error page, an interstitial — text, never markup), nothing built,
+  // and a button that clears Settings › Model and sends the same prompt as
+  // the default (Chat.defaultModel says which). The button rides the LAST
+  // failed turn in the log, not the last turn: a bad Settings › Model
+  // override survives a reload and any turn after it, and gating on the
+  // last turn left the desktop with Settings by hand as the only way back.
+  const lastFailure = () => {
+    for (let i = Chat.turns.length - 1; i >= 0; i--) {
+      const f = Chat.turns[i].failure;
+      if (f && f !== 'no model configured') return i;
+    }
+    return -1;
+  };
+  const paintFailure = (t, i) => {
+    const last = i === lastFailure() && !Chat.running;
+    const to = Chat.defaultModel();
+    const b = bubble('vibeos', '<span class="no" id="failure"></span>' + (last && to ? '<div class="row" style="margin-top:8px"><button class="btn sm" id="resetModel"></button></div>' : ''));
+    b.querySelector('#failure').textContent = t.failure;
+    const btn = b.querySelector('#resetModel');
+    if (!btn) return;
+    btn.textContent = 'Reset model to ' + to + ' and retry';
+    btn.onclick = () => { btn.disabled = true; Chat.resetModelAndRetry(Chat.turns[i - 1].text).catch(e => Chat.line(e.message, true)); };
+  };
+  const paintTurn = (t, i) => {
     if (t.role === 'user') {
       const b = bubble('you', '<span id="t"></span>' + (t.images && !t.shots ? '<span class="tiny dimmer" id="i"></span>' : ''));
       b.querySelector('#t').textContent = t.text;
@@ -197,15 +246,79 @@ export function ChatApp(body, win) {
     else if (t.failure === 'no model configured') line('that was a stock module — no model was configured');
     // The message may carry a slice of a proxy's HTML error page (a
     // Cloudflare 502, an interstitial) — text, never markup.
-    else if (t.failure) { const b = bubble('vibeos', '<span class="no"></span> — fell back to a stock module.'); b.querySelector('.no').textContent = t.failure; }
+    else if (t.failure) paintFailure(t, i);
     else if (!t.text) line('the page was closed before this turn finished');
   };
 
+  // A message typed while a turn runs: sent as far as the person is
+  // concerned, waiting for the agent's next step. Its own class, its text
+  // and its pictures through textContent like any user turn.
+  // A waiting message can be taken back until a step drains it: steering is
+  // for the moment you realise the agent is doing the wrong thing, and half
+  // that moment is realising your correction was wrong too. The text goes
+  // back to the composer with its pictures, so it can be fixed and sent
+  // again rather than retyped.
+  const paintQueued = (e) => {
+    const b = bubble('you', '<span id="t"></span><span class="tiny" id="q"></span><button class="x" id="unq" title="Take it back"></button>');
+    b.className = 'queued';
+    b.style.opacity = '.72';
+    b.querySelector('#t').textContent = e.text;
+    b.querySelector('#q').textContent = ' · waiting for the agent';
+    b.querySelector('#unq').textContent = '\u00d7';
+    b.querySelector('#unq').onclick = () => {
+      if (!Chat.unqueue(e)) return;              // a drain won the race; it is on its way
+      input.value = input.value ? e.text + '\n' + input.value : e.text;
+      if (e.images && e.images.length) { Chat.pending.unshift(...e.images); Chat.emit('chips'); }
+      input.focus();
+    };
+    for (const img of e.images || []) { const el = document.createElement('img'); el.className = 'shot'; el.alt = ''; el.src = img.dataUrl; b.appendChild(el); }
+  };
+
+  // EXAMPLE_PROMPTS (kernel/agent.js) as chips, only while there is nothing
+  // in the log — a fresh desktop, or a restored log that is empty — and not
+  // while an agent drives the desktop from its own window. A click sends the
+  // prompt the way typing it would, and the first turn takes the chips away.
+  const paintExamples = () => {
+    if (Chat.turns.length || Chat.running || agentOnly) return;
+    const row = document.createElement('div');
+    row.id = 'examples';
+    row.className = 'row';
+    row.style.cssText = 'flex-wrap:wrap;gap:6px;align-self:flex-start;max-width:92%';
+    for (const text of EXAMPLE_PROMPTS) {
+      const chip = document.createElement('button');
+      chip.className = 'btn sm example';
+      chip.type = 'button';
+      chip.textContent = text;
+      chip.onclick = () => { input.value = text; send(); };
+      row.appendChild(chip);
+    }
+    log.appendChild(row);
+  };
+
   // The whole log from the kernel's state, in order: the intro, then each
-  // turn with the restore line and the notes that landed after it.
+  // turn with the restore line and the notes that landed after it. The log
+  // is rebuilt on every event, so where the person was reading is measured
+  // first: at the end (within 8 px), or an empty log — a fresh boot, the
+  // restore's first paint — it follows to the end; scrolled up, it stays
+  // exactly where it was.
+  const STICK_PX = 8;
+  const atEnd = () => log.scrollHeight - log.scrollTop - log.clientHeight < STICK_PX;
+  // The first paint runs before the chrome is in the document (build() paints
+  // into a detached element), where the log is 0 px tall and "the end" is
+  // 0 — a restored log used to open at its top. The observer fires once the
+  // log has a size, and on every resize of the window: at the end, it stays
+  // at the end.
+  let stickOnResize = true;
+  log.addEventListener('scroll', () => { stickOnResize = atEnd(); });
+  const ro = new ResizeObserver(() => { if (stickOnResize) log.scrollTop = log.scrollHeight; });
+  ro.observe(log);
+  Windows.onDispose(win, () => ro.disconnect());
   const paint = () => {
+    const stick = atEnd();
+    const was = log.scrollTop;
     log.textContent = '';
     paintIntro();
+    paintExamples();
     if (Chat.loadError) line(Chat.loadError, true);
     const notesAt = i => Chat.notes.filter(n => n.at === i).forEach(n => line(n.text, n.error));
     for (let i = 0; i <= Chat.turns.length; i++) {
@@ -214,13 +327,14 @@ export function ChatApp(body, win) {
         if (Chat.note) paintReload(Chat.note);
       }
       notesAt(i);
-      if (i < Chat.turns.length) paintTurn(Chat.turns[i]);
+      if (i < Chat.turns.length) paintTurn(Chat.turns[i], i);
     }
     if (!Chat.restored && Chat.note) paintReload(Chat.note);
+    Chat.queue.forEach(paintQueued);
     // The agent's activity is kernel state like the turns: a repaint (the
     // intro following the bridge, a restore) draws it again, newest last.
     if (RemoteBridge.state === 'connected') for (const e of RemoteBridge.activity) paintActivity(e);
-    body.scrollTop = body.scrollHeight;
+    log.scrollTop = stick ? log.scrollHeight : was;
   };
   const paintChips = () => {
     chips.innerHTML = '';
@@ -250,23 +364,38 @@ export function ChatApp(body, win) {
   body.addEventListener('dragover', e => e.preventDefault());
   body.addEventListener('drop', e => { e.preventDefault(); Chat.attach(Attachments.filesOf(e)); });
 
+  // The box is emptied only once the kernel has taken the text. Chat.send
+  // answers with { started } (this text is the turn), { queued } (a turn was
+  // running and it waits for its next step) or null — refused, the line above
+  // says why, and the typed message stays exactly where it was.
   const send = () => {
     const text = input.value;
     if (!text.trim() && !Chat.pending.length) return;
-    input.value = '';
-    Chat.send(text);
+    if (Chat.send(text)) input.value = '';
+    else input.focus();   // refused: the text is still there, put the cursor back in it
   };
   body.querySelector('#send').onclick = send;
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+  input.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+    e.preventDefault();
+    send();
+  });
 
   const placeholder = input.placeholder;
-  const enable = () => { if (agentOnly) return; input.disabled = false; input.placeholder = placeholder; };
+  // While a turn runs the box still takes a message — it reaches the model at
+  // the turn's next step — and says so. Send stays enabled: nothing about the
+  // composer changes but this line.
+  const STEERING = 'the agent is working — send anyway and it takes this at its next step';
+  const hint = () => { if (agentOnly || !Chat.ready) return; input.placeholder = (Chat.running || Chat.starting) ? STEERING : placeholder; };
+  const enable = () => { if (agentOnly) return; input.disabled = false; hint(); };
   agentMode();
   if (!Chat.ready) { input.disabled = true; input.placeholder = 'loading chat…'; }
+  else hint();   // a reload_ui mid-turn opens this window with the turn already running
   const off = Chat.on((type, data) => {
     if (type === 'chips') return paintChips();
     if (type === 'status') return status(data.text);
     if (type === 'loaded') enable();
+    hint();
     paint();
     // A stock module opens in its own window, on top of this chat — so the
     // key offer can end up buried under the very thing it is offering to

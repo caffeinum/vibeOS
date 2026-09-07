@@ -402,20 +402,30 @@ export function TerminalApp(body, win) {
 
   const say = (text, cls) => { note.textContent = text; note.className = 'tty-note small' + (cls ? ' ' + cls : ''); note.hidden = !text; };
   const focus = () => input.focus();
-  screen.addEventListener('mousedown', e => { if (!window.getSelection().toString()) { e.preventDefault(); focus(); } });
+  // Selecting text. The browser starts a selection on mousedown, and the
+  // first cut called preventDefault there (to keep the hidden textarea
+  // focused), so no drag over the screen ever selected anything and Cmd+C
+  // had nothing to copy — measured: mid-drag selection "" on every row.
+  // Now mousedown is the browser's: the screen takes focus (tabIndex 0)
+  // and the drag selects; keys and paste on the screen reach the guest
+  // exactly as on the textarea, so typing after a selection still works,
+  // and a Cmd-combination is null from keyBytes — the browser copies the
+  // selection and the guest sees nothing. The textarea is focused on a
+  // click that selected nothing: paste and mobile keyboards want it.
   screen.addEventListener('mouseup', () => { if (!window.getSelection().toString()) focus(); });
-  input.addEventListener('keydown', e => {
+  const onKey = e => {
     if (!tty) return;
     const bytes = keyBytes(e);
     if (bytes === null) return;
     e.preventDefault();
     tty.write(bytes);
-  });
-  input.addEventListener('paste', e => {
+  };
+  const onPaste = e => {
     e.preventDefault();
     const text = e.clipboardData.getData('text');
     if (tty && text) tty.write(text.replace(/\r?\n/g, '\r'));
-  });
+  };
+  for (const el of [input, screen]) { el.addEventListener('keydown', onKey); el.addEventListener('paste', onPaste); }
   input.addEventListener('input', () => { input.value = ''; });
 
   // Cells from a probe glyph, so cols/rows are what fits, not a guess.
@@ -565,7 +575,7 @@ export function WorkspaceApp(body) {
       card.append(el('span', '', missing.length ? '🔒' : '📦'), label(a.title, '', a.name, 'tiny dimmer mono'));
       a.requires.forEach(r => card.append(el('span', 'req' + (CAP.supports[r] ? '' : ' miss'), r)));
       const open = el('button', 'btn sm', missing.length ? 'Why?' : 'Open');
-      open.onclick = () => launchApp(a);
+      open.onclick = () => (UI.live().openOrRerun || launchApp)(a);
       card.append(open);
       list.appendChild(card);
     });
@@ -643,6 +653,7 @@ export function CapsApp(body, win) {
     ['Run YOUR shell',        'shell',    'Never. The Terminal runs a real Linux, but on a virtual disk.'],
     ['Your processes',        'process',  'Workers give real concurrency; host processes are out of reach.'],
     ['Arbitrary REST APIs',   'net',      'Blocked without CORS headers. WebSockets are not CORS-bound.'],
+    ['A model for apps',      'ai',       'api.ai.generate: a pasted key, a ChatGPT login, or a paired agent whose client samples. Settings › Model.'],
     ['USB devices',           'usb',      'WebUSB, user gesture, Chromium only.'],
     ['Serial devices',        'serial',   'WebSerial, Chromium only.'],
     ['HID devices',           'hid',      'WebHID, Chromium only.'],
@@ -679,7 +690,8 @@ export function CapsApp(body, win) {
     <div class="row" style="gap:6px">
       <button class="btn p sm" id="mcpPair">Pair an agent</button>
       <button class="btn sm" id="mcpRetry" hidden>Retry</button>
-      <button class="btn sm" id="mcpRevoke" hidden>Revoke</button>
+      <button class="btn sm" id="mcpTakeOver" hidden>Take over here</button>
+      <button class="btn sm" id="mcpRevoke" hidden>Forget this agent</button>
     </div>`;
   mcpPane(body, win);
 }
@@ -691,7 +703,7 @@ export function CapsApp(body, win) {
 function mcpPane(body, win) {
   const state = body.querySelector('#mcpState'), cmd = body.querySelector('#mcpCmd'), code = body.querySelector('#mcpCommand');
   const trust = body.querySelector('#mcpTrust'), pair = body.querySelector('#mcpPair'), retry = body.querySelector('#mcpRetry'), revoke = body.querySelector('#mcpRevoke'), copy = body.querySelector('#mcpCopy');
-  trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token lives in this tab only and dies with it.';
+  trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token is remembered in this browser for seven days — Forget this agent ends it, closing the tab does not.';
   const refusal = RemoteBridge.refusal();
   let probe = null;
   // Which relay this tab is on, and the instance that answered. On the
@@ -708,6 +720,7 @@ function mcpPane(body, win) {
       : st === 'pairing' ? 'Pairing — ' + d + '…'
       : st === 'waiting' ? 'Waiting for an agent: paste the command into your MCP client. Talk to your agent in its own window; it drives this desktop, and the built-in chat keeps working alongside it.' + inst()
       : st === 'connected' ? d + ' is connected and driving this desktop (' + RemoteBridge.calls + ' call' + (RemoteBridge.calls === 1 ? '' : 's') + '). Talk to it in its own window.' + inst()
+        + (RemoteBridge.sampling ? ' ' + d + ' can power apps (sampling).' : ' ' + d + ' cannot power apps: its client does not support sampling.')
       : 'Not connected — ' + d;
     const hasToken = !!RemoteBridge.token;
     cmd.hidden = !hasToken;
@@ -715,11 +728,14 @@ function mcpPane(body, win) {
     pair.hidden = hasToken || !!refusal;
     pair.disabled = !!refusal || (probe !== null && !probe.ok);
     revoke.hidden = !hasToken;
+    takeOver.hidden = !RemoteBridge.heldElsewhere;
     retry.hidden = !(st === 'error' && hasToken && !RemoteBridge.socket);
   };
   pair.onclick = async () => { pair.disabled = true; await RemoteBridge.pair(); paint(); };
   retry.onclick = () => { RemoteBridge.retry(); paint(); };
   revoke.onclick = () => { RemoteBridge.revoke(); paint(); };
+  const takeOver = body.querySelector('#mcpTakeOver');
+  takeOver.onclick = () => { RemoteBridge.takeOver(); paint(); };
   copy.onclick = async () => {
     try { await navigator.clipboard.writeText(RemoteBridge.command()); copy.textContent = 'copied'; }
     catch (e) { copy.textContent = 'select the line and copy it (' + e.message + ')'; }
@@ -1005,28 +1021,15 @@ export function DesignApp(body) {
 
 function DesignAppRender(body, rerender) {
   const skills = VibeOSSkills.installed().skills;
-  const theme = VibeOSSkills.getTheme(Theme.id);
-  const swatches = Object.entries(Theme.tokens()).map(([name, hex]) =>
-    `<div class="row" style="gap:7px;align-items:center">
-       <span style="width:14px;height:14px;border-radius:var(--radius-sm);border:1px solid var(--line2);background:${hex};flex:0 0 auto"></span>
-       <code class="tiny">${name}</code><span class="tiny dimmer">${hex}</span>
-     </div>`).join('');
-
-  const themeButtons = Object.values(VibeOSSkills.THEMES).map(t =>
-    `<button class="btn sm${t.id === Theme.id ? ' p' : ''}" data-theme="${t.id}">${t.title}</button>`).join('');
 
   body.innerHTML = `
     <h3>Design</h3>
-    <div class="row" style="gap:6px;margin-bottom:10px">${themeButtons}
-      ${Theme.custom ? '<button class="btn sm" id="themeReset">Clear overrides</button>' : ''}</div>
+    <div class="row" style="gap:6px;margin-bottom:6px;flex-wrap:wrap" id="themes"></div>
+    <p class="tiny dimmer" style="margin-top:0" id="themeNote"></p>
     <p class="small muted" style="margin-top:0">
       What the agent is told about looks and behaviour, on top of the build rules.
-      Both are appended to every prompt, whichever model you are using.
+      Appended to every prompt, whichever model you are using.
     </p>
-
-    <h4 class="small" style="margin-bottom:4px">Theme &middot; ${theme.title}</h4>
-    <p class="tiny dimmer" style="margin-top:0">${theme.summary}</p>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 14px;margin-bottom:14px">${swatches}</div>
 
     ${skills.map(sk => `
       <h4 class="small" style="margin-bottom:4px">Skill &middot; ${sk.title}</h4>
@@ -1036,15 +1039,33 @@ function DesignAppRender(body, rerender) {
     <h4>Source</h4>
     <p class="tiny dimmer" style="margin-top:0" id="whoseCopy"></p>
     ${forkVersionHtml()}
-    <p class="note">The agent can change this itself &mdash; ask it for light mode. Apps mount inside this document, so the tokens above are inherited &mdash;
+    <p class="note">The agent can change this itself &mdash; ask it for a new theme. Apps mount inside this document, so the tokens are inherited &mdash;
     a generated app using <code>var(--text)</code> follows the desktop instead of drifting from it.</p>`;
 
-  body.querySelector('#whoseCopy').textContent = whoseCopyText();
-  body.querySelectorAll('[data-theme]').forEach(b => {
-    b.onclick = () => { Theme.set(b.dataset.theme); rerender(); };
+  // Titles and summaries come from os.css, which the agent (or anyone with
+  // the folder) writes: text, never markup. The buttons carry data-id, not
+  // data-theme — a data-theme attribute on the button would put that block's
+  // properties on the button itself.
+  const themesEl = body.querySelector('#themes'), note = body.querySelector('#themeNote');
+  Theme.list().then(themes => {
+    if (!themesEl.isConnected) return;
+    for (const t of themes) {
+      const b = document.createElement('button');
+      b.className = 'btn sm' + (t.id === Theme.id ? ' p' : '');
+      b.dataset.id = t.id; b.title = t.summary; b.textContent = t.title;
+      b.onclick = () => Theme.set(t.id).then(rerender, e => { note.textContent = e.message; });
+      themesEl.appendChild(b);
+    }
+    const on = themes.find(t => t.id === Theme.id);
+    note.textContent = (on ? on.title + ' — ' + on.summary + ' ' : '')
+      + (Theme.lost ? `The theme "${Theme.lost}" this browser had chosen is not in os.css any more, so this is the default. ` : '')
+      + 'Themes are the [data-theme] blocks in system/os.css — ask the agent for a new one.';
+  }, e => {
+    if (!themesEl.isConnected) return;
+    note.textContent = 'Themes could not be listed: ' + e.message + ' Themes are the [data-theme] blocks in system/os.css; fix the file or write it empty to go back to the served one.';
   });
-  const clear = body.querySelector('#themeReset');
-  if (clear) clear.onclick = () => { Theme.set(Theme.id, {}); rerender(); };
+
+  body.querySelector('#whoseCopy').textContent = whoseCopyText();
   const fv = body.querySelector('#forkVersion');
   if (fv) {
     fv.querySelector('.d').textContent = forkVersionText();
