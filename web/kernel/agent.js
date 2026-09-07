@@ -2424,12 +2424,16 @@ const Agent = {
     for (let step = 0; step < this.MAX_STEPS; step++) {
       // The note rides this request only, never `msgs`: it would otherwise
       // stack one copy per step in the thread the next request carries.
-      // Anthropic takes it on the system string — a second user message behind
-      // the tool_result one is a shape /v1/messages is free to refuse.
+      // Last, never on the system string: both providers cache the longest
+      // stable PREFIX of a request (system + tools), so a note there is a
+      // cache miss on the biggest part of the request, on exactly the steps
+      // where the thread is longest. Behind the thread it changes nothing
+      // before it. Marked as vibeOS's, not the person's, since it rides as a
+      // user turn — the same shape steering uses.
       const note = this.stepNote(step);
       if (note) onStatus?.(this.stepStatus(step));
       const res = anthropic
-        ? await this.stepAnthropic(note ? system + '\n\n' + note : system, msgs)
+        ? await this.stepAnthropic(system, note ? [...msgs, { role: 'user', content: `(note from vibeOS, not the person: ${note})` }] : msgs)
         : await this.stepOpenAI(system, note ? [...msgs, { role: 'system', content: note }] : msgs);
       lastText = res.text || lastText;
       if (!res.calls.length) return { text: lastText, created, steps: step + 1 };
