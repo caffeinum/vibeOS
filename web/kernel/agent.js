@@ -53,7 +53,19 @@ const Gen = {
     this.setProvider();
     return this.key;
   },
+  // Who is told when the model changes: the dock (an app that needs ai is
+  // greyed until one is connected), a blocked window waiting for one, the
+  // Capabilities pane. Announced from setProvider when anything a reader
+  // can see changed, the way VM.on announces the machine.
+  listeners: new Set(),
+  on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
+  emit() { this.listeners.forEach(fn => { try { fn(this); } catch (e) { console.error('Gen listener failed:', e); } }); },
   setProvider() {
+    const was = `${this.available}|${this.provider}|${this.model}|${this.viaServer}`;
+    this._setProvider();
+    if (was !== `${this.available}|${this.provider}|${this.model}|${this.viaServer}`) this.emit();
+  },
+  _setProvider() {
     if (this.viaServer) {
       this.available = true;
       return;
@@ -75,6 +87,11 @@ const Gen = {
     this.model = '';
     this.available = false;
   },
+  // A model an app can call: a pasted key or a ChatGPT login — the page
+  // posts to the provider itself (or to the codex proxy). The local demo
+  // server's /api/generate takes a prompt and answers a module, so it is
+  // not one. CAP.supports.ai reads this.
+  get forApps() { return this.available && !this.viaServer; },
   saveKey(k) {
     this.key = (k || '').trim();
     try { k ? localStorage.setItem('vibeos-key', this.key) : localStorage.removeItem('vibeos-key'); } catch {}
@@ -196,7 +213,7 @@ const Gen = {
       overlay.querySelector('#keySaveBtn').onclick = () => {
         const k = overlay.querySelector('#keyInput').value.trim();
         this.saveKey(k);
-        if (k) track('key_added');
+        if (k) track('key_added', { via: 'paste' });
         finish();
       };
       overlay.querySelector('#keyCreateBtn').onclick = () => {
@@ -228,7 +245,7 @@ const Gen = {
             },
           });
           this.saveOAuth(tokens);
-          track('key_added');
+          track('key_added', { via: 'codex' });
           finish();
         } catch (e) {
           if (slot.querySelector('#oauthPanel')) {
@@ -270,7 +287,10 @@ const Gen = {
     return this.available;
   },
 
-  async generate(prompt, history, onStatus, images) {
+  // steer: the tool loop's drain (Chat.drain), passed through untouched — a
+  // one-shot completion has no steps to hand a queued message to, so only the
+  // agent loop below reads it.
+  async generate(prompt, history, onStatus, images, steer) {
     if (this.viaServer) {
       // The local demo server takes a prompt string and nothing else; dropping
       // the image here would send text that talks about a screenshot it lost.
@@ -310,110 +330,290 @@ const Gen = {
       if (src.startsWith('```')) src = src.split('\n').slice(1).join('\n').replace(/```\s*$/, '').trim();
       return src;
     }
-    if (this.oauth) return Agent.run(prompt, history, onStatus, images);
+    if (this.oauth) return Agent.run(prompt, history, onStatus, images, steer);
     throw new Error('no model configured');
   },
+
+  /* One plain completion for a window app (api.ai.generate): no tools, not
+     the app-builder prompt — the app's own system line, or a one-line
+     default. images are data urls (a canvas frame); json: true asks for one
+     JSON object and returns it parsed, a reply that does not parse throws
+     naming its first 120 characters. Every provider error is the provider's
+     own words with its status. The local demo server has no such route and
+     answers modules, so it is not a model here. */
+  ASK_SYSTEM: 'You answer for a small app running on a desktop; answer only what is asked.',
+  ASK_MAX_TOKENS: 1000, ASK_TOKENS_CAP: 4000,
+  async ask(opts) {
+    if (!opts || typeof opts !== 'object') throw new Error('ask: pass { prompt, system, images, json, maxTokens }');
+    const { prompt, json = false } = opts;
+    if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('ask: prompt must be a non-empty string');
+    if (opts.system !== undefined && (typeof opts.system !== 'string' || !opts.system.trim())) throw new Error('ask: system must be a non-empty string; leave it out for the default');
+    if (opts.images !== undefined && !Array.isArray(opts.images)) throw new Error('ask: images must be an array of data urls, got ' + (typeof opts.images === 'string' ? 'a string — wrap it: images: [dataUrl]' : typeof opts.images));
+    if (opts.maxTokens !== undefined && (!Number.isInteger(opts.maxTokens) || opts.maxTokens <= 0)) throw new Error('ask: maxTokens must be a positive integer');
+    const maxTokens = Math.min(opts.maxTokens || this.ASK_MAX_TOKENS, this.ASK_TOKENS_CAP);
+    const images = (opts.images || []).map(askImage);
+    const system = (opts.system !== undefined ? opts.system : this.ASK_SYSTEM) + (json ? '\nReply with exactly one JSON object and nothing else: no prose, no code fence.' : '');
+    // The tab's own model wins; with none, the connected agent's model
+    // through vibeos-mcp (MCP sampling) when its client declared it. An
+    // agent whose client cannot sample is named in the refusal, so the app
+    // and the upsell say why instead of "no model connected".
+    if (!this.forApps && !this.viaAgent) throw new Error(RemoteBridge.state === 'connected' ? samplingRefusal(RemoteBridge.agentName) : 'no model connected');
+    const provider = this.forApps ? this.provider : 'mcp-sampling';
+    let text;
+    try {
+      text = provider === 'anthropic' ? await this.askAnthropic(system, prompt, images, maxTokens)
+           : provider === 'openai' ? await this.askOpenAI(system, prompt, images, maxTokens)
+           : provider === 'openai-codex' ? await this.askCodex(system, prompt, images, maxTokens)
+           : provider === 'mcp-sampling' ? await this.askAgent(system, prompt, images, maxTokens, json)
+           : (() => { throw new Error('no model connected'); })();
+    } catch (e) {
+      track('app_ai_call', { provider, images: images.length, ok: false });
+      throw e;
+    }
+    track('app_ai_call', { provider, images: images.length, ok: true });
+    if (!json) return text;
+    let body = text.trim();
+    if (body.startsWith('```')) body = body.split('\n').slice(1).join('\n').replace(/```\s*$/, '').trim();
+    try { return JSON.parse(body); }
+    catch { throw new Error('the model did not answer with JSON: ' + text.trim().slice(0, 120)); }
+  },
+  async askAnthropic(system, prompt, images, maxTokens) {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': this.key,
+                 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({ model: this.model, max_tokens: maxTokens, system,
+        messages: [{ role: 'user', content: Agent.userContent('anthropic', prompt, images) }] }),
+    });
+    const j = await jsonOf(r, 'anthropic');
+    if (!r.ok) throw new Error(`anthropic ${r.status}: ${j.error?.message || 'request failed'}`);
+    if (j.stop_reason === 'max_tokens') throw new Error(`the reply was cut off at maxTokens (${maxTokens})`);
+    return (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  },
+  // /v1/responses, as the agent (stepOpenAI): chat completions is what
+  // gpt-6-astra refuses, and the input_image part is the same shape.
+  async askOpenAI(system, prompt, images, maxTokens) {
+    const r = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + this.key },
+      body: JSON.stringify({ model: this.model, max_output_tokens: maxTokens, store: false, instructions: system,
+        input: [{ role: 'user', content: Agent.userContent('responses', prompt, images) }] }),
+    });
+    const j = await jsonOf(r, 'openai');
+    if (!r.ok) throw new Error(`openai ${r.status}: ${j.error?.message || 'request failed'}`);
+    if (j.status === 'incomplete' && j.incomplete_details?.reason === 'max_output_tokens') throw new Error(`the reply was cut off at maxTokens (${maxTokens})`);
+    if (!Array.isArray(j.output)) throw new Error('openai answered with no output items (status ' + j.status + ')');
+    return j.output.filter(o => o.type === 'message').flatMap(o => o.content || []).filter(c => c.type === 'output_text').map(c => c.text).join('');
+  },
+  // The connected agent's model, through vibeos-mcp: the package answers an
+  // {ask} frame with sampling/createMessage on its client. json rides along
+  // (the package appends its own "JSON only" line); the parse is the tab's.
+  async askAgent(system, prompt, images, maxTokens, json) {
+    return RemoteBridge.ask({ prompt, images: images.map(i => ({ mime: i.mediaType, base64: i.data })), json, system, maxTokens });
+  },
+  // A model an app can call through the connected agent: paired, and its
+  // MCP client declared the sampling capability (the want frame says).
+  get viaAgent() { return RemoteBridge.state === 'connected' && RemoteBridge.sampling; },
+  samplingRefusal(agent) { return samplingRefusal(agent); },
+  // The codex proxy (app/api/openai/generate) with { ask }: the route runs
+  // the same generateText with no tools and this system, and answers { text }.
+  async askCodex(system, prompt, images, maxTokens) {
+    const j = await Agent.callServer(Object.assign(
+      { ask: { system, maxTokens }, messages: [{ role: 'user', content: Agent.userContent('sdk', prompt, images) }] },
+      this.codexModel ? { model: this.codexModel } : {}));
+    if (typeof j.text !== 'string') throw new Error('the codex proxy answered with no text');
+    return j.text;
+  },
 };
+
+// One picture for Gen.ask, from a data url string or { dataUrl }: the three
+// transport shapes (Agent.userContent) want the media type and the bare
+// base64 as well, and an app has only the url a canvas gave it.
+function askImage(img) {
+  const dataUrl = typeof img === 'string' ? img : img && img.dataUrl;
+  const m = typeof dataUrl === 'string' && dataUrl.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) throw new Error('ask: each image must be a base64 data url of a jpeg, png, webp or gif (canvas.toDataURL), got ' + (typeof dataUrl === 'string' ? dataUrl.slice(0, 40) : typeof dataUrl));
+  return { dataUrl, mediaType: m[1], data: m[2] };
+}
+
+// The package's own words when its client cannot sample (vibeos-mcp
+// answerAsk), so the tab says the same thing before any frame goes out.
+function samplingRefusal(agent) {
+  return 'the connected MCP client (' + (agent || 'unknown') + ') does not support sampling, so it cannot power apps; connect a model in Settings';
+}
 
 // Paste-key path only — talks to the provider directly with one-shot codegen.
 // The prompts describe the BusyBox shell; swap that line for whatever is booted.
 /* ---------- the desktop's own appearance ------------------------------
 
-   Every colour in the chrome is a custom property on :root, so a theme is a
-   set of values rather than a stylesheet. That is what lets the agent restyle
-   the OS it is running inside: it changes state, not source. State has a reset
-   button; source does not.
+   A theme is a rule in system/os.css, not a tool: the default palette is
+   :root and every other theme is a [data-theme="<id>"] block with a header
+   comment on the line before it. The kernel keeps one string — which id is
+   on — as data-theme on <html> and in localStorage. The agent has root on
+   os.css, so a new look is an edit to that file, and the pane lists whatever
+   the loaded stylesheet defines. Nothing here paints a value: a stored id
+   the css no longer defines is dropped and said, never fabricated.
    -------------------------------------------------------------------- */
+
+const THEME_ID = /^[a-z0-9-]{1,40}$/;
+const THEME_HEADER = /\/\*\s*@theme\s+([^\s:]+)\s*:\s*([^\n]*?)\s*\*\//g;
+const THEME_BLOCK = /(^|\n)[ \t]*\[data-theme="([^"\n]*)"\][ \t]*\{/g;
+
+// Every theme the css defines, from its text: [{ id, title, summary, root,
+// line, tokens }]. A header (/* @theme <id>: <Title> — <summary> */) must be
+// followed, after whitespace, by :root { or [data-theme="<id>"] {; a
+// [data-theme] block starting a line must be preceded by its header; the
+// default is the one on :root, and there is exactly one. Each violation is
+// an error naming the line — a theme the pane silently lacks is worse.
+function parseThemes(css) {
+  if (typeof css !== 'string') throw new Error('parseThemes needs the stylesheet text');
+  const lineOf = i => css.slice(0, i).split('\n').length;
+  const themes = [];
+  const blockAt = new Map();
+  for (const m of css.matchAll(THEME_HEADER)) {
+    const line = lineOf(m.index);
+    const id = m[1];
+    if (!THEME_ID.test(id)) throw new Error(`os.css line ${line}: @theme id "${id}" must be lowercase letters, digits and dashes`);
+    const dash = m[2].indexOf('—');
+    if (dash === -1) throw new Error(`os.css line ${line}: @theme ${id} needs "<Title> — <summary>" after the colon`);
+    const title = m[2].slice(0, dash).trim(), summary = m[2].slice(dash + 1).trim();
+    if (!title) throw new Error(`os.css line ${line}: @theme ${id} has no title`);
+    if (themes.some(t => t.id === id)) throw new Error(`os.css line ${line}: @theme ${id} is defined twice`);
+    const rest = css.slice(m.index + m[0].length);
+    const open = rest.match(/^\s*(:root|\[data-theme="([^"\n]*)"\])\s*\{/);
+    if (!open) throw new Error(`os.css line ${line}: @theme ${id} has no :root { or [data-theme="${id}"] { block right after it`);
+    const root = open[1] === ':root';
+    if (!root && open[2] !== id) throw new Error(`os.css line ${line}: @theme ${id} is followed by a [data-theme="${open[2]}"] block`);
+    const bodyStart = m.index + m[0].length + open[0].length;
+    const close = css.indexOf('}', bodyStart);
+    if (close === -1) throw new Error(`os.css line ${line}: the block of @theme ${id} never closes`);
+    const tokens = {};
+    for (const d of css.slice(bodyStart, close).matchAll(/(--[\w-]+)\s*:\s*([^;}]+)/g)) tokens[d[1]] = d[2].trim();
+    if (!root) blockAt.set(m.index + m[0].length + (open[0].length - open[0].trimStart().length), id);
+    themes.push({ id, title, summary, root, line, tokens });
+  }
+  for (const m of css.matchAll(THEME_BLOCK)) {
+    const at = m.index + m[0].indexOf('[');
+    const line = lineOf(at);
+    if (blockAt.get(at) !== m[2])
+      throw new Error(`os.css line ${line}: [data-theme="${m[2]}"] has no /* @theme ${m[2]}: <Title> — <summary> */ header on the line before it`);
+  }
+  const roots = themes.filter(t => t.root);
+  if (roots.length !== 1) throw new Error(roots.length ? `os.css: ${roots.map(t => '@theme ' + t.id).join(' and ')} both sit on :root; one theme is the default` : 'os.css: no @theme header on :root, so there is no default theme');
+  return themes;
+}
 
 const Theme = {
   KEY: 'vibeos-theme',
-  id: VibeOSSkills.DEFAULT_THEME,
-  custom: null,
+  id: 'vibeos-dark',
+  // What load() found: the stored id the loaded css does not define, or the
+  // parse error — surfaced in the chat and in Settings > Design, never a
+  // failed boot.
+  lost: null,
+  error: null,
+  parse: parseThemes,
 
-  tokens() {
-    return Object.assign({}, VibeOSSkills.getTheme(this.id).tokens, this.custom || {});
+  // The stylesheet this page runs: the stored fork when the loader booted
+  // one, else the served file — the loader's record, not document.styleSheets,
+  // so a fork's new block is listed on the boot that runs it.
+  async css() {
+    if (typeof this._css === 'string') return this._css;
+    const b = window.__vibeosBoot;
+    if (!b || !b.files) throw new Error('__vibeosBoot.files is missing: the kernel must boot from the vibeOS loader');
+    let text;
+    if (b.files['os.css'] === 'stored') {
+      text = b.stored && b.stored.files && b.stored.files['os.css'];
+      if (typeof text !== 'string') throw new Error('the loader says system/os.css is stored but handed over no text');
+    } else text = (await Workspace.fetchServed('os.css')).text;
+    this._css = text;
+    return text;
   },
 
-  // A token value is a colour, not CSS. Concatenating one into stylesheet text
-  // meant a value of "x; } * { display: none } :root { y" closed the rule and
-  // opened its own — a persistent white screen, reapplied at boot, hiding the
-  // very Settings pane that could undo it. setProperty cannot escape into a new
-  // rule, and the pattern keeps the value recognisable as a colour on the way in.
-  SAFE_VALUE: /^[^;{}<>]{1,160}$/,
-
-  safeValue(v) {
-    return typeof v === 'string' && this.SAFE_VALUE.test(v);
+  async list() {
+    return parseThemes(await this.css());
   },
 
-  paint() {
-    const root = document.documentElement;
-    for (const [k, v] of Object.entries(this.tokens())) {
-      if (this.safeValue(v)) root.style.setProperty(k, v);
-      else root.style.removeProperty(k);
-    }
-    root.style.colorScheme = this.id === 'vibeos-light' ? 'light' : 'dark';
-  },
-
+  // ?safe=1 (and a recovery boot) runs the stock look without touching what
+  // is stored, so a bad theme is always one URL away from being escapable.
+  // The attribute is set at once from storage so a light desktop does not
+  // flash dark; the id is checked against the css as soon as it is read.
   load(opts) {
-    // ?safe=1 boots the stock theme without touching what is stored, so a bad
-    // saved theme is always one URL away from being escapable. This is the
-    // recovery path, so it must not depend on any UI a theme could hide.
     let safeMode = (opts && opts.stock) || false;
     try { safeMode = safeMode || new URLSearchParams(location.search).has('safe'); } catch {}
-    if (safeMode) { this.paint(); return; }
-
-    try {
-      const saved = JSON.parse(localStorage.getItem(this.KEY) || 'null');
-      if (saved && VibeOSSkills.THEMES[saved.id]) {
-        this.id = saved.id;
-        // Drop anything stored that no longer passes validation rather than
-        // applying it — a value saved before this check must not brick a boot.
-        const custom = {};
-        for (const [k, v] of Object.entries(saved.custom || {})) {
-          if (this.safeValue(v)) custom[k] = v;
-        }
-        this.custom = Object.keys(custom).length ? custom : null;
-      }
-    } catch {}
-    this.paint();
-  },
-
-  set(id, custom) {
-    if (id) VibeOSSkills.getTheme(id);   // throws on an unknown id, loudly
-    if (id) this.id = id;
-    if (custom !== undefined) {
-      // A token the desktop does not define would silently do nothing, so
-      // reject it rather than let the agent think it worked.
-      const known = VibeOSSkills.getTheme(this.id).tokens;
-      for (const [key, value] of Object.entries(custom || {})) {
-        if (!(key in known)) {
-          // There is no wallpaper token, on purpose: an image is an edit to
-          // the #desktop rule, and the error says where rather than letting
-          // the model guess a fourth name for it.
-          const hint = /wallpaper|bg|background/i.test(key) ? ' Wallpaper is an edit to system/os.css (#desktop rule).' : '';
-          throw new Error('unknown theme token: ' + key + hint);
-        }
-        if (!this.safeValue(value)) {
-          throw new Error('theme token ' + key + ' must be a plain colour value, got: ' + String(value).slice(0, 40));
-        }
-      }
-      this.custom = custom && Object.keys(custom).length ? custom : null;
+    if (safeMode) { this.ready = Promise.resolve(); return this.ready; }
+    let stored = null;
+    try { stored = localStorage.getItem(this.KEY); } catch {}
+    if (stored && stored[0] === '{') {
+      // The record an older desktop wrote: { id, custom }. The id is real;
+      // the overrides were tokens, and a theme is a css block now.
+      try { stored = JSON.parse(stored).id; } catch { stored = null; }
     }
-    this.paint();
-    try { localStorage.setItem(this.KEY, JSON.stringify({ id: this.id, custom: this.custom })); } catch {}
-    return { theme: this.id, custom: this.custom };
+    if (typeof stored === 'string' && THEME_ID.test(stored)) this.apply(stored);
+    this.ready = this.verify(stored);
+    return this.ready;
   },
 
-  reset() {
-    this.id = VibeOSSkills.DEFAULT_THEME;
-    this.custom = null;
-    try { localStorage.removeItem(this.KEY); } catch {}
-    this.paint();
+  async verify(stored) {
+    let themes;
+    try { themes = await this.list(); }
+    catch (e) {
+      this.error = e.message;
+      console.error('themes:', e);
+      Chat.line('Settings > Design cannot list the themes: ' + e.message + ' — fix system/os.css (or write it empty to go back to the served one).', true);
+      return;
+    }
+    const dflt = themes.find(t => t.root).id;
+    if (stored === null || stored === undefined) { this.apply(dflt, themes); return; }
+    if (themes.some(t => t.id === stored)) { this.apply(stored, themes); this.store(stored, themes); return; }
+    this.lost = stored;
+    this.apply(dflt, themes);
+    this.store(dflt, themes);
+    Chat.line(`The theme "${String(stored).slice(0, 40)}" this browser had chosen is not in system/os.css any more (it defines ${themes.map(t => t.id).join(', ')}), so the desktop is on ${dflt}. Pick one in Settings > Design or ask for it back.`, true);
+  },
+
+  // The attribute: absent for the default (the :root palette), the id
+  // otherwise. With the list in hand the default is known; before the css is
+  // read (the flash-free path at boot) any id goes on and verify() settles it.
+  apply(id, themes) {
+    this.id = id;
+    const root = document.documentElement;
+    const theme = themes && themes.find(t => t.id === id);
+    if (theme && theme.root) delete root.dataset.theme;
+    else root.dataset.theme = id;
+  },
+
+  // What is stored is the id string, and nothing for the default: a stored
+  // default id went on <html> as data-theme until verify() took it off, and
+  // a later fork that renamed the :root header reported it "lost" to someone
+  // who only ever picked the default. An older { id, custom } record is
+  // rewritten here on the boot that reads it.
+  store(id, themes) {
+    const theme = themes.find(t => t.id === id);
+    if (!theme) throw new Error('Theme.store: ' + id + ' is not in the list');
+    try { if (theme.root) localStorage.removeItem(this.KEY); else localStorage.setItem(this.KEY, id); } catch {}
+  },
+
+  async set(id) {
+    if (typeof id !== 'string' || !THEME_ID.test(id)) throw new Error('a theme is its id: ' + String(id).slice(0, 40));
+    const themes = await this.list();
+    if (!themes.some(t => t.id === id)) throw new Error(`unknown theme: ${id}. system/os.css defines ${themes.map(t => t.id).join(', ')}; a new one is a [data-theme="${id}"] block with its @theme header.`);
+    this.apply(id, themes);
+    this.lost = null;
+    this.store(id, themes);
+    return { theme: id };
+  },
+
+  async reset() {
+    const themes = await this.list();
+    const dflt = themes.find(t => t.root).id;
+    this.apply(dflt, themes);
+    this.lost = null;
+    this.store(dflt, themes);
   },
 };
 
 function withSkills(prompt) {
-  return VibeOSSkills.composePrompt(prompt, { theme: Theme.id });
+  return VibeOSSkills.composePrompt(prompt);
 }
 
 function forImage(prompt) {
@@ -421,22 +621,54 @@ function forImage(prompt) {
   return prompt.replace(IMAGES.busybox.shellLine, line);
 }
 
-const PASTE_KEY_SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
-
-TARGET 1, a desktop window (default). Header exactly:
-// @title <Short Name>
+// The contract a window app is held to: the three headers, what api offers,
+// the layout rules, the size hint. The same text as lib/system-prompt.ts
+// APP_CONTRACT (pinned byte-equal by tests/agent-tools.test.ts); the paste-key
+// prompt embeds it and create_app's description carries it, so an agent on
+// vibeos-mcp — which never sees a prompt of ours — reads the same rules.
+const APP_CONTRACT = `// @title <Short Name>
 // @target browser
 // @requires <space-separated caps, or none>
-Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs), net (raw TCP through the relay). Use none unless needed.
+Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs), net (raw TCP through the relay), ai (the connected model, api.ai.generate). Use none unless needed.
+Optional fourth header, where and how big the window opens: // @geometry <top-left|top-right|bottom-left|bottom-right> [<w>x<h>] or // @geometry <x>,<y>,<w>,<h> or // @geometry <w>x<h> alone (px; without it the window cascades at 430x320; a window is at least 300x180, is kept on screen under the menubar and clear of the dock, and is no bigger than the desktop). A helper, mascot or widget "in the corner of the screen" is a small window with a corner geometry, e.g. // @geometry bottom-right 300x220 — never position:fixed or a transform to escape the window.
 Then: export default function (mount, api) { ... }
-mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size.
+mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size. api.mountSize() -> {width,height}.
 api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): one-shot commands. Waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app that uses it and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted — those want api.tty(). List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
 api.tty() -> { write(bytesOrString), onData(fn) -> off, resize(cols, rows), close() } (needs tty): a terminal is api.tty(): bytes both ways, ctrl-c, top, nano, passwords work; api.shell is for one-shot commands. It is its own shell on the machine's second serial line, not the one api.shell and the agent share, so a cd there stays there. The line echoes what you write: paint what onData delivers (\\r, \\n, \\b and ANSI escapes; answer \\x1b[6n with \\x1b[row;colR or vi and ash wait on it) instead of echoing keys yourself; send Enter as \\r, Ctrl-C as \\x03, arrows as \\x1b[A..D, and resize(cols, rows) when the pane changes. One tty per machine: while the built-in Terminal or another app holds it, api.tty() throws naming the holder — show that message; closing that window releases it.
 api.net.connect(host, port) -> { write(bytesOrString), onData(fn) -> off, onClose(fn) -> off, close(), state, reason } (needs net): opens raw TCP through the relay for a TCP client — a redis, irc or smtp toy; http stays on the proxy and the Browser, not this. Plain TCP only (no tls option; https means fetch or curl in the machine). localhost, private and loopback addresses and ports outside the relay's list (80, 443, 21, 22, 70, 1965, 3000, 8080, 8443) throw naming the rule; the relay closes a stream it refuses and onClose says why. The relay is a serverless function that ends about every 13 minutes: every open stream then closes with "network error: the relay reconnected and the connection was lost", so a long-lived client (irc, redis) must reconnect from onClose. A write after close throws. Closing the window closes the connection.
+api.ai.generate({ prompt, images?, json?, system?, maxTokens? }) -> Promise<string | object> (needs ai): the model connected to this desktop — the tab's own, or the connected agent's (MCP sampling), in which case a call may take up to two minutes while a person approves it, so show your own "asking…" state — one plain completion with no tools. Anything that needs judgment — identify what is in a picture, estimate, summarise, classify, write — is a call to it, never a keyword table, a lookup of your own, or a "cannot do this in the browser" note. images is an array of data urls (canvas.toDataURL('image/jpeg') of a video frame, a file read as a data url); json: true asks for one JSON object and returns it parsed (name the keys in prompt); system replaces the one-line default. The reply is text the app shows with textContent; it rejects with the provider's own error — show that too. A window that needs it declares // @requires ai and shows a connect prompt while no model is present, then runs when one is.
 
-Layout rules (required): root width/height 100%, box-sizing:border-box, display:flex, flex-direction:column, overflow:hidden on mount. No document scroll, no min-height exceeding the window. Modest type and padding; empty states must fit. Scroll inner panes only (overflow:auto, scrollbar-width:thin), never mount.
+Layout rules (required):
+- Root element: width:100%; height:100%; box-sizing:border-box; display:flex; flex-direction:column; overflow:hidden. No document scroll, no min-height larger than the window, no fat browser scrollbars on mount.
+- Fit the actual mount, not a desktop-sized page. Modest type (13-15px body, not huge serif headlines) and tight padding. Empty states must fit without overflowing.
+- Do not imitate getslash.co / Slash-style UIs with oversized serif titles and generous vertical padding — those overflow a ~430×320px window immediately.
+- If a region scrolls, use an inner child with overflow:auto and scrollbar-width:thin (or class app-scroll) — never scroll mount itself.
+- Respond to resize: use flex/%/min-height:0 throughout, or api.onResize to reflow.
 
-Plain JavaScript only, no JSX, no imports, no external URLs. Under 60 lines and it must work.
+Plain JavaScript only, no JSX, no imports, no external URLs. Under 60 lines and it must work.`;
+
+const CREATE_APP_LEAD = 'Create a vibeOS desktop window app (// @target browser, the contract below) or install a VM script (// @title, // @target vm, // @file <name.sh>, then a shell script for the Linux the prompt names). Pass complete source with the headers; the reply names the dock entry and the file. A window app is held to this contract:';
+const CREATE_APP_DESCRIPTION = CREATE_APP_LEAD + '\n' + APP_CONTRACT;
+// Word for word lib/agent-tools.ts; the test pins them.
+const SEARCH_FILE_DESCRIPTION = 'Find lines matching a regex. path is one file, a directory (system/, system/ui/) or a glob (system/**/*.js, apps/*.js): a directory or glob searches every text file under it and each hit carries file and line; 60 hits at most, binaries and files over 1 MB skipped and named; system/chat.json and the snapshots are never searched or listed. Use before edit_file on a system/ file. A path that matches nothing is refused naming what exists there.';
+const LIST_FILES_DESCRIPTION = 'List the workspace. path is \'\' for the top (apps/, data/, system/) or a directory: apps/, data/, system/, system/kernel, system/ui. Entries carry kind (file|dir), size and modified; under system/ every file the OS loads is listed whether or not a copy is stored, with source (stored: your fork boots next; served: stock) and booted (which one this page runs — stored but booted served means reload_os is pending). A path that does not exist is refused naming what its parent holds.';
+// What a remote agent is told on every pairing, as the MCP server's
+// instructions: not the prompt (aleks: basic instructions), the map. The app
+// contract rides behind it so the two never drift.
+const MCP_INSTRUCTIONS_LEAD = `You are driving vibeOS through vibeos-mcp: a small desktop OS running in one browser tab, with a Linux VM (v86, i686) inside it. Every tool here runs in that tab; you see nothing else of it, so start with read_desktop (windows, dock, machine state; { window } for a window's text, { screen: 'png' } for the VM's VGA screen — there is no screenshot of the desktop itself).
+
+The OS is files in the person's workspace, and you have root on them. system/kernel/*.js never hot-reloads (machine.js the VM, workspace.js the folder and sync, agent.js the model and these tools, boot.js the window registry and the boot); system/ui/*.js is what people see (windows.js, dock.js, chat.js, browser.js, settings.js) and reloads live; system/os.css is every style, and a theme is a [data-theme="id"] block there with a /* @theme id: Title — summary */ header on the line before. A change to the desktop is an edit to one of those files: search_file, read_file around the place, edit_file with an exact unique anchor, then reload_ui for a ui file (live, the turn continues) or reload_os for a kernel file or os.css (the page reloads; call it once, last — the pairing survives it, call again a few seconds later if a call fails right after). Your first edit forks the served file into the workspace; a fork that fails to load is skipped on the next boot and the desktop says so, and write_file('') retires it.
+
+The machine: vm_exec runs a shell line on ttyS0 and returns its output (timeout_s up to 600); /mnt is the workspace's data/ and apps/ flat, /mnt/system a read-only copy of the OS source for cat, grep and diff. Apps are files under apps/: a .js with a // @title header is a dock entry, and create_app writes one and opens it. Generated apps must use the desktop's CSS custom properties (var(--text), var(--panel), var(--accent) …), never hardcoded colours.
+
+Results are JSON. A reply over 128 KB is refused naming the size — narrow the request. Everything you send and read goes through a relay in plaintext, and the token you hold is root on this desktop.`;
+
+const READ_DESKTOP_DESCRIPTION = 'What the desktop looks like, as text: every open window (app id, title, minimized, z-order — first is on top — geometry, whether it is the built-in chat/Browser/Settings or a generated app and its file), the dock entries, the machine pill (VM.state, image, net, tty) and the theme. Pass { window: <title or app id> } for that window\'s body as trimmed text, one line per block (scripts and styles dropped, 8 KB cap); add { dom: true } for its sanitised outerHTML instead (no script, style, link or on* attributes, no javascript: urls, media and form urls replaced by data:, 16 KB cap); either way the value of a password or hidden input is withheld. { screen: \'png\' } is the machine\'s VGA screen as image {mimeType, data} (a jpeg no wider than 1024, under the relay\'s 128 KB frame) with the text console\'s rows as text when it is in text mode. A bitmap of the desktop itself is not available (no html2canvas is vendored): the text and DOM views are the substitute. Everything here is read; nothing runs.';
+
+const PASTE_KEY_SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
+
+TARGET 1, a desktop window (default). Header exactly:
+${APP_CONTRACT}
 
 TARGET 2, a program inside the VM. Use when the request is about files, text processing or system tasks. Header exactly:
 // @title <Short Name>
@@ -659,10 +891,11 @@ const WebTools = {
 /* ---------- letting the guest drive the desktop -----------------------
 
    The agent runs in the page, not in the VM, and that is the right way round:
-   five of its six tools are host-only — create_app ends in import(blobURL),
-   set_theme mutates the host document, the web tools go out through the page's
-   proxy. Moving the loop into the guest would turn five of six calls into
-   round-trips back out, to gain speed on the one that is already cheapest.
+   all but one of its tools are host-only — create_app ends in import(blobURL),
+   edit_file writes the workspace and reload_ui repaints the host document, the
+   web tools go out through the page's proxy. Moving the loop into the guest
+   would turn every call but vm_exec into a round-trip back out, to gain speed
+   on the one that is already cheapest.
 
    So the loop stays, and the guest gets a door instead. A process inside Linux
    writes a request file; the write hook the desktop already installs fires;
@@ -675,7 +908,7 @@ const WebTools = {
    archive) can create an app or restyle the desktop without a click.
    -------------------------------------------------------------------- */
 
-const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'set_theme', 'read_file', 'search_file', 'edit_file', 'write_file', 'reload_ui', 'reload_os', 'web_fetch', 'web_search']);
+const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'list_files', 'read_desktop', 'read_file', 'search_file', 'edit_file', 'write_file', 'reload_ui', 'reload_os', 'web_fetch', 'web_search']);
 
 // What the agent is told about the shell's own apps. They are functions in
 // os.js, so "change the Browser" is an edit to system/os.js — not a request.
@@ -712,8 +945,28 @@ async function bridgeCall(call, event) {
   }
   if (!GUEST_TOOLS.has(call.tool)) return { ok: false, error: 'unknown tool: ' + call.tool, available: [...GUEST_TOOLS, 'js'] };
   track(event, { tool: call.tool });
-  try { return await Agent.executeTool({ toolName: call.tool, input: call.input || {} }); }
-  catch (e) { return { ok: false, error: e.message }; }
+  let result;
+  // remember: false, spelled out — a read made by the guest CLI or a remote
+  // agent is not the chat model's own, and must never reach its read memory.
+  try { result = await Agent.executeTool({ toolName: call.tool, input: call.input || {} }, null, false); }
+  catch (e) { result = { ok: false, error: e.message }; }
+  if (event === 'guest_rpc') guestSystemNote(call, result);
+  return result;
+}
+
+// A process in the machine keeps root on the OS (aleks: root, no confirm),
+// so a write under system/ or a reload that came from the guest — an apk
+// post-install as easily as the person's own script — is said in the chat,
+// naming the tool and the file, whether it was applied or refused.
+const GUEST_SYSTEM_TOOLS = new Set(['edit_file', 'write_file', 'reload_ui', 'reload_os']);
+function guestSystemNote(call, result) {
+  if (!GUEST_SYSTEM_TOOLS.has(call.tool)) return;
+  const path = call.input && typeof call.input.path === 'string' ? call.input.path : '';
+  if (/^(edit|write)_file$/.test(call.tool) && !/^\/?system\//.test(path)) return;
+  const what = call.tool + (path ? ' ' + path : '');
+  const outcome = result && result.ok ? 'applied' : 'refused: ' + String(result && result.error || 'no reply').slice(0, 200);
+  track('guest_system_write', { tool: call.tool, ok: !!(result && result.ok) });
+  Chat.line('From inside the machine (the vibeos command): ' + what + ' — ' + outcome, !(result && result.ok));
 }
 
 const GuestBridge = {
@@ -731,7 +984,7 @@ const GuestBridge = {
     return [
       '#!/bin/sh',
       '# vibeOS guest CLI — call the desktop from inside the VM.',
-      '# usage: vibeos <tool> [json]   e.g. vibeos set_theme \'{"theme":"vibeos-light"}\'',
+      '# usage: vibeos <tool> [json]   e.g. vibeos read_desktop \'{}\'',
       'if [ -z "$1" ]; then echo "usage: vibeos <tool> [json]" >&2; exit 2; fi',
       'ID=$$$(date +%s 2>/dev/null || echo 0)',
       'REQ=/mnt/' + this.PREFIX + '$ID.json',
@@ -822,19 +1075,409 @@ const GuestBridge = {
 // Tool schemas for the paste-key path. lib/agent-tools.ts is the server's copy
 // and tests/agent-tools.test.ts pins the two name lists equal, so a tool added
 // on one side cannot quietly go missing on the other.
+/* ---------- what the desktop looks like, as text --------------------
+
+   An agent on vibeos-mcp has no eyes: it built a window and could not tell
+   whether the window said anything. read_desktop is the substitute for a
+   screenshot of the page (nothing that rasterises the DOM is vendored):
+   the window records, the dock, the machine pill, and on request one
+   window's body as text per block or as markup with nothing executable
+   left in it, or the machine's VGA screen, which v86 can draw. Every
+   string is a value in a JSON reply; nothing here runs anything.
+   -------------------------------------------------------------------- */
+const Desktop = {
+  TEXT_MAX: 8 * 1024, DOM_MAX: 16 * 1024,
+  // The relay carries 128 KB a frame and the reply is JSON around the
+  // image, so the picture itself stays under 110 KB of base64.
+  IMAGE_WIDE: 1024, IMAGE_SIDES: [1024, 768, 512], IMAGE_QUALITIES: [0.85, 0.7, 0.55, 0.4, 0.3, 0.2], IMAGE_B64_MAX: 110 * 1024,
+  BLOCK: /^(DIV|P|LI|TR|H[1-6]|PRE|SECTION|ARTICLE|HEADER|FOOTER|UL|OL|TABLE|TEXTAREA|BUTTON|LABEL|FORM|DETAILS|SUMMARY|BLOCKQUOTE|DT|DD|OPTION|NAV|ASIDE|MAIN|HR|BR)$/,
+  DROP: /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|IFRAME|FRAME|FRAMESET|OBJECT|EMBED|APPLET|LINK|BASE|META)$/,
+  // Anything that loads bytes or names a document: its url is dropped in dom().
+  URL_ATTR: /^(src|srcset|href|xlink:href|poster|action|formaction|data|background|ping|cite|longdesc|codebase|manifest|usemap)$/,
+  MEDIA: /^(IMG|VIDEO|AUDIO|SOURCE|TRACK|PICTURE|INPUT|IMAGE|USE|FEIMAGE)$/,
+  SECRET_INPUT: /^(password|hidden)$/i,
+
+  px(v) { const n = parseFloat(v); return Number.isFinite(n) ? Math.round(n) : null; },
+
+  windows() {
+    const shell = UI.stable().SHELL;
+    return Windows.list.map(rec => {
+      const el = rec.el, s = rec.spec;
+      const app = s.opts && s.opts.app;
+      const builtin = s.id && shell[s.id] ? shell[s.id] : null;
+      const out = {
+        id: rec.id, app: this.appId(rec), title: String(s.title), badge: String(s.badge || ''),
+        builtin: !!builtin, kind: builtin ? 'builtin' : app ? 'app' : 'other',
+        minimized: !!el && el.classList.contains('min'), zoomed: !!el && el.dataset.full === '1',
+        z: el ? Number(el.style.zIndex) || 0 : 0,
+        x: el ? this.px(el.style.left) : null, y: el ? this.px(el.style.top) : null,
+        w: el ? this.px(el.style.width) : null, h: el ? this.px(el.style.height) : null,
+      };
+      if (builtin) out.file = 'system/' + builtin.file;
+      else if (app && app.name) out.file = 'apps/' + app.name;
+      if (app) out.requires = Array.isArray(app.requires) ? app.requires.slice() : [];
+      if (s.opts && typeof s.opts.tab === 'string') out.tab = s.opts.tab;
+      return out;
+    }).sort((a, b) => b.z - a.z);
+  },
+
+  // What paintDock paints, from the list it paints from: the shell's two
+  // icons, the first eight apps, Settings.
+  async dock() {
+    const shell = UI.stable().SHELL;
+    const { apps } = await Apps.list();
+    const entry = (id, title) => ({ id, title: String(title), builtin: true, file: 'system/' + shell[id].file });
+    return [
+      entry('chat', shell.chat.title), entry('browser', shell.browser.title),
+      ...apps.slice(0, 8).map(a => ({ id: 'apps/' + a.name, title: String(a.title), builtin: false, file: 'apps/' + a.name, requires: a.requires })),
+      entry('settings', shell.settings.title),
+    ];
+  },
+
+  vm() {
+    const pill = document.getElementById('lxText');
+    return { state: VM.state, image: VM.bootedImage || null, net: VM.net || null, tty: VM.ttyState || null, ip: VM.ip || null, restored: !!VM.restored, pill: pill ? pill.textContent : '' };
+  },
+
+  async overview() {
+    const windows = this.windows();
+    return { ok: true, windows, dock: await this.dock(), vm: this.vm(), theme: Theme.id, workspace: Workspace.label,
+             remote: { state: RemoteBridge.state, agent: RemoteBridge.agentName || null, sampling: RemoteBridge.sampling },
+             note: windows.length ? 'windows are top first; pass { window: <title or app id> } for one window\'s text' : 'no window is open' };
+  },
+
+  // A window's app id is its shell id (chat, browser, settings) or its
+  // app file (apps/<name>.js) — what the windows list and the dock print.
+  appId(rec) {
+    const app = rec.spec.opts && rec.spec.opts.app;
+    return rec.spec.id || (app && app.name ? 'apps/' + app.name : null);
+  },
+
+  find(which) {
+    const want = String(which), lower = want.toLowerCase();
+    const recs = Windows.list;
+    const byId = recs.find(r => r.id === want) || recs.find(r => this.appId(r) === want) || recs.find(r => (this.appId(r) || '').toLowerCase() === lower)
+      || recs.find(r => String(r.spec.title) === want) || recs.find(r => String(r.spec.title).toLowerCase() === lower);
+    if (!byId) throw new Error('no open window is "' + want + '"; open: ' + (recs.map(r => '"' + r.spec.title + '"' + (this.appId(r) ? ' (' + this.appId(r) + ')' : '')).join(', ') || 'none'));
+    if (!byId.el) throw new Error('the window "' + byId.spec.title + '" has no chrome yet');
+    return byId;
+  },
+
+  // One line per block, whitespace collapsed, form values in brackets so a
+  // typed-but-unsent line is visible. Hidden nodes and script/style are not
+  // text anyone sees, so they are not text here either — nor is a password
+  // or a hidden field's value, which the reply would hand a remote agent.
+  text(root) {
+    const out = [];
+    const walk = node => {
+      for (const n of node.childNodes) {
+        if (n.nodeType === 3) { out.push(n.nodeValue); continue; }
+        if (n.nodeType !== 1) continue;
+        if (this.DROP.test(n.tagName) || n.hidden) continue;
+        const block = this.BLOCK.test(n.tagName);
+        if (block) out.push('\n');
+        if (n.tagName === 'INPUT' && this.SECRET_INPUT.test(n.type)) continue;
+        if (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA' || n.tagName === 'SELECT') out.push(n.value ? '[' + n.value + ']' : '');
+        else walk(n);
+        if (block) out.push('\n');
+      }
+    };
+    walk(root);
+    const lines = out.join('').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const text = lines.join('\n');
+    return { text: text.slice(0, this.TEXT_MAX), truncated: text.length > this.TEXT_MAX, lines: lines.length };
+  },
+
+  // The markup with nothing that could run or fetch left in it: no script,
+  // style, link or handler attributes; a url whose scheme is a script
+  // (javascript:, vbscript: — the scheme read the way a browser reads it,
+  // whitespace and control characters dropped, so java\nscript: is caught)
+  // is removed from any attribute; every url on a media element, a form
+  // or an svg image is replaced by data:, (a chat card's src is a whole
+  // screenshot in base64, and a guest url would be fetched by the host).
+  dom(root) {
+    const copy = root.cloneNode(true);
+    for (const n of [...copy.querySelectorAll('*')]) {
+      if (this.DROP.test(n.tagName)) { n.remove(); continue; }
+      const tag = n.tagName.toUpperCase();
+      const secret = tag === 'INPUT' && this.SECRET_INPUT.test(n.type);
+      for (const a of [...n.attributes]) {
+        const name = a.name.toLowerCase();
+        const scheme = a.value.replace(/[\s\x00-\x1f\x7f]/g, '').toLowerCase();
+        if (name.startsWith('on') || name === 'srcdoc' || name === 'style' || /^(javascript|vbscript|livescript):|^data:text\/html/.test(scheme)) { n.removeAttribute(a.name); continue; }
+        if (secret && name === 'value') { n.removeAttribute(a.name); continue; }
+        if (this.URL_ATTR.test(name) && (this.MEDIA.test(tag) || tag === 'FORM' || tag === 'BUTTON' || name !== 'href')) n.setAttribute(a.name, 'data:,');
+      }
+    }
+    const html = copy.outerHTML;
+    return { dom: html.slice(0, this.DOM_MAX), truncated: html.length > this.DOM_MAX };
+  },
+
+  // The VGA screen: v86 draws text mode to a div of rows and graphics to a
+  // canvas, and its screen adapter renders either as a PNG. The rows travel
+  // as text too, so a text-mode console needs no image at all. The PNG is
+  // re-encoded as a JPEG no wider than 1024 and under the relay's frame.
+  async screen() {
+    if (!VM.emu || !VM.screen) throw new Error('the machine is ' + VM.state + ': no screen');
+    const adapter = VM.emu.screen_adapter;
+    if (!adapter || typeof adapter.make_screenshot !== 'function' || typeof adapter.get_text_screen !== 'function') throw new Error('this v86 build has no screen adapter to draw from');
+    const canvas = VM.screen.querySelector('canvas');
+    const graphical = !!canvas && canvas.style.display !== 'none' && canvas.width > 0;
+    const rows = adapter.get_text_screen().map(r => r.replace(/\s+$/, ''));
+    const text = rows.join('\n').replace(/\n+$/, '');
+    const png = adapter.make_screenshot().src;
+    if (typeof png !== 'string' || !png.startsWith('data:image/png')) throw new Error('the screen adapter drew no PNG');
+    const image = await this.jpeg(png);
+    return { mode: graphical ? 'graphical' : 'text', image, text, size: graphical ? { width: canvas.width, height: canvas.height } : { cols: rows[0] ? rows[0].length : 0, rows: rows.length },
+             note: graphical ? 'the machine is in graphics mode; the image is the frame' : 'text mode: the rows are the screen, the image is the same rows drawn' };
+  },
+
+  // A jpeg under `max` characters of base64: the longest side at IMAGE_WIDE
+  // first, the quality stepping down, then the side stepping down
+  // (IMAGE_SIDES) and the qualities again — a ui screenshot with text on
+  // a flat colour missed a 43 KB share at every quality at 1024 (measured:
+  // 84 KB at 0.85, 40 KB only under a 43 KB cap, refused under 30 KB), so
+  // an ask with three or more pictures refused with no picture scaled.
+  // The screen and an ask's pictures (RemoteBridge.ask) both go through
+  // here; a refusal names the smallest it got to.
+  async jpeg(src, max = this.IMAGE_B64_MAX) {
+    const img = new Image();
+    img.src = src;
+    try { await img.decode(); } catch (e) { throw new Error('the image could not be decoded as a picture (' + (e && e.message ? e.message : String(e)) + ')'); }
+    const longest = Math.max(img.naturalWidth, img.naturalHeight) || 1;
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    let smallest = Infinity, last = null;
+    for (const side of [...new Set(this.IMAGE_SIDES.map(w => Math.min(w, longest)))]) {
+      const scale = side / longest;
+      c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      for (const quality of this.IMAGE_QUALITIES) {
+        const url = c.toDataURL('image/jpeg', quality);
+        const data = url.slice(url.indexOf(',') + 1);
+        if (data.length <= max) return { mimeType: 'image/jpeg', data, width: c.width, height: c.height, quality };
+        if (data.length < smallest) { smallest = data.length; last = c.width + 'x' + c.height; }
+      }
+    }
+    throw new Error('the image is over ' + Math.round(max / 1024) + ' KB of base64 at every quality down to ' + last + ' (smallest ' + Math.round(smallest / 1024) + ' KB); the relay carries ' + (MCP_FRAME_MAX / 1024) + ' KB a frame');
+  },
+
+  async read(input) {
+    const i = input || {};
+    if (i.screen !== undefined) {
+      if (i.screen !== 'image' && i.screen !== 'png') throw new Error('screen must be "image" (png is accepted as an alias), got ' + JSON.stringify(i.screen));
+      return { ok: true, ...(await this.screen()) };
+    }
+    if (i.window === undefined) return this.overview();
+    const rec = this.find(i.window);
+    const body = rec.el.querySelector('.body');
+    if (!body) throw new Error('the window "' + rec.spec.title + '" has no body');
+    const head = { id: rec.id, app: this.appId(rec), title: String(rec.spec.title), minimized: rec.el.classList.contains('min') };
+    return { ok: true, window: { ...head, ...(i.dom ? this.dom(body) : this.text(body)) } };
+  },
+};
+
+/* ---------- the workspace tree, for list_files and search_file ----------
+
+   apps/ and data/ are directories on disk; system/ is the OS: what the
+   loader boots is OS_FILES whether or not a copy is stored, so the listing
+   is the loader's list merged with what the folder holds, each file saying
+   which copy boots next and which one this page ran. A miss is refused
+   naming what the parent holds — an agent guessing at system/os.js finds
+   the kernel/ and ui/ it should have looked in.
+   -------------------------------------------------------------------- */
+const Files = {
+  TOP: ['apps', 'data', 'system'],
+  // The chat log and the machine snapshots live under system/ but are not
+  // the OS: the mount rule keeps them out of /mnt, and the tools keep them
+  // out of every listing, walk and read — a remote agent is not the person
+  // whose chat that is.
+  PRIVATE: /^system\/(chat\.json|vm-[^/]+\.state)$/,
+  PRIVATE_NAME: /^(chat\.json|vm-[^/]+\.state)$/,
+  isPrivate(rel) { return this.PRIVATE.test(this.norm(rel)); },
+  refusePrivate(rel) { if (this.isPrivate(rel)) throw new Error(this.norm(rel) + ' is not readable through the tools: the chat log and the machine snapshots are the person\'s, not the OS'); },
+  SKIP: /\.(state|png|jpe?g|gif|webp|zip|gz|tgz|wasm|bin|iso|pdf|woff2?|ttf)$/i,
+  SKIP_BYTES: 1024 * 1024,
+  HITS_MAX: 60,
+
+  norm(path) { return String(path == null ? '' : path).trim().replace(/^\/+/, '').replace(/\/+$/, ''); },
+  parts(rel) {
+    if (rel === '') return [];
+    const parts = rel.split('/');
+    if (parts.some(p => p === '..' || p === '.' || !p)) throw new Error('bad path: ' + rel + ' (paths are relative to the workspace: apps/, data/, system/)');
+    return parts;
+  },
+
+  async dirHandle(parts) {
+    let dir = Workspace.root;
+    try { for (const seg of parts) dir = await dir.getDirectoryHandle(seg); }
+    catch (e) { if (e.name === 'NotFoundError' || e.name === 'TypeMismatchError') return null; throw e; }
+    return dir;
+  },
+
+  // The entries of one directory, or a throw naming what its parent holds.
+  async entries(rel) {
+    if (!Workspace.open) throw new Error('no workspace is open');
+    const parts = this.parts(rel);
+    if (!parts.length) return this.TOP.map(name => ({ name, kind: 'dir', source: 'stored' }));
+    if (!this.TOP.includes(parts[0])) throw new Error('not found: ' + rel + ' — the workspace has: ' + this.TOP.map(t => t + '/').join(', '));
+    if (parts.length > 1 && (Workspace.systemFile(rel) || await this.isFile(rel))) throw new Error(rel + ' is a file, not a directory: read_file or search_file it');
+    const dir = await this.dirHandle(parts);
+    const out = [];
+    if (dir) for await (const [name, h] of dir.entries()) {
+      if (parts[0] === 'system' && parts.length === 1 && this.PRIVATE_NAME.test(name)) continue;
+      if (h.kind === 'directory') out.push({ name, kind: 'dir', source: 'stored' });
+      else { const f = await h.getFile(); out.push({ name, kind: 'file', source: 'stored', size: f.size, modified: f.lastModified }); }
+    }
+    if (parts[0] === 'system') await this.systemEntries(parts.slice(1).join('/'), out, !!dir || parts.length === 1);
+    else if (!dir) throw new Error(await this.missing(rel));
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  },
+
+  // OS_FILES under system/: a loaded file is listed with or without a copy.
+  async systemEntries(sub, out, exists) {
+    const prefix = sub ? sub + '/' : '';
+    const loaded = OS_FILES.filter(f => f.startsWith(prefix));
+    if (!loaded.length && !exists) throw new Error(await this.missing('system/' + sub));
+    for (const f of loaded) {
+      const rest = f.slice(prefix.length);
+      if (rest.includes('/')) {
+        const name = rest.split('/')[0];
+        if (!out.some(e => e.name === name)) out.push({ name, kind: 'dir', source: 'served' });
+        continue;
+      }
+      const stored = await Workspace.readStoredSystem(f);
+      const entry = out.find(e => e.name === rest) || (out.push({ name: rest, kind: 'file', source: 'served' }), out[out.length - 1]);
+      entry.loads = true;
+      entry.source = stored !== null && stored.trim() ? 'stored' : 'served';
+      entry.booted = window.__vibeosBoot.files[f];
+      if (stored !== null && !stored.trim()) entry.note = 'blank copy: retired, the served file boots';
+    }
+  },
+
+  // "not found: X — <parent> has: a, b/" walking up to the nearest directory that exists.
+  async missing(rel) {
+    const parts = this.parts(rel);
+    for (let n = parts.length - 1; n >= 0; n--) {
+      const parent = parts.slice(0, n).join('/');
+      let names;
+      try { names = (await this.entries(parent)).map(e => e.name + (e.kind === 'dir' ? '/' : '')); } catch { continue; }
+      return 'not found: ' + rel + ' — ' + (parent ? parent + '/' : 'the workspace') + ' has: ' + (names.join(', ') || 'nothing');
+    }
+    return 'not found: ' + rel;
+  },
+
+  async walk(rel, out = []) {
+    for (const e of await this.entries(rel)) {
+      const path = rel ? rel + '/' + e.name : e.name;
+      if (e.kind === 'dir') await this.walk(path, out);
+      else out.push({ path, size: e.size, source: e.source });
+    }
+    return out;
+  },
+
+  globRe(glob) {
+    const re = glob.split('/').map(seg => seg === '**' ? '(?:.*)' : seg.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')).join('/').replace(/\(\?:\.\*\)\//g, '(?:.*/)?');
+    return new RegExp('^' + re + '$');
+  },
+
+  // One file, every file under a directory, or a glob's matches — as paths.
+  async resolve(spec) {
+    const rel = this.norm(spec);
+    if (/[*?]/.test(rel)) {
+      const segs = rel.split('/');
+      const fixed = []; for (const s of segs) { if (/[*?]/.test(s)) break; fixed.push(s); }
+      const files = await this.walk(fixed.join('/'));
+      const re = this.globRe(rel);
+      const hit = files.filter(f => re.test(f.path));
+      if (!hit.length) throw new Error('no file matches ' + rel + ' — ' + (fixed.length ? fixed.join('/') + '/' : 'the workspace') + ' has: ' + (await this.entries(fixed.join('/'))).map(e => e.name + (e.kind === 'dir' ? '/' : '')).join(', '));
+      return { kind: 'glob', files: hit };
+    }
+    this.refusePrivate(rel);
+    if (rel && Workspace.systemFile(rel)) return { kind: 'file', files: [{ path: rel, size: (await Workspace.readPath(rel)).length }] };
+    const st = rel ? await this.stat(rel) : null;
+    if (st) return { kind: 'file', files: [{ path: rel, size: st.size }] };
+    const dir = await this.entries(rel).catch(() => null);
+    if (dir) return { kind: 'dir', files: await this.walk(rel) };
+    throw new Error(await this.missing(rel));
+  },
+
+  async isFile(rel) { return !!(await this.stat(rel)); },
+  async stat(rel) {
+    try { return await Workspace.statPath(rel); }
+    catch (e) { if (e.name === 'TypeMismatchError') return null; throw e; }
+  },
+
+  // The matching runs in a worker with a deadline: a pattern with nested
+  // quantifiers (^(\w+\s?)+$ on a long line that does not match) is
+  // exponential, and on the main thread it froze the desktop for 50 s —
+  // measured by vibeos-mcp with one search_file call from a remote agent. A
+  // worker can be terminated; the main thread cannot interrupt itself.
+  SEARCH_MS: 3000,
+  matchInWorker(files, pattern, cap) {
+    const src = `onmessage = e => { const { files, pattern, cap } = e.data; let re; try { re = new RegExp(pattern, 'i'); } catch (err) { postMessage({ error: 'bad regex: ' + err.message }); return; }
+      const hits = []; let truncated = false;
+      for (const f of files) { const lines = f.text.split('\\n'); for (let i = 0; i < lines.length; i++) { if (!re.test(lines[i])) continue; if (hits.length >= cap) { truncated = true; break; } hits.push({ path: f.path, line: i + 1, text: lines[i].slice(0, 200) }); } if (truncated) break; }
+      postMessage({ hits, truncated }); };`;
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    const w = new Worker(url);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { w.terminate(); URL.revokeObjectURL(url); reject(new Error(`the pattern took longer than ${this.SEARCH_MS / 1000} s over ${files.length} file${files.length === 1 ? '' : 's'} and was stopped — a regex with nested quantifiers such as (\\w+\\s?)+ can run forever on a line that does not match; simplify it or narrow the path`)); }, this.SEARCH_MS);
+      w.onmessage = e => { clearTimeout(timer); w.terminate(); URL.revokeObjectURL(url); if (e.data.error) reject(new Error(e.data.error)); else resolve(e.data); };
+      w.onerror = e => { clearTimeout(timer); w.terminate(); URL.revokeObjectURL(url); reject(new Error('search worker failed: ' + (e.message || 'unknown'))); };
+      w.postMessage({ files, pattern, cap });
+    });
+  },
+  async search(spec, pattern) {
+    if (typeof pattern !== 'string' || !pattern) throw new Error('pattern must be a non-empty regex string' + (pattern === '' ? ' (an empty pattern matches every line: read_file instead)' : ', got ' + JSON.stringify(pattern)));
+    new RegExp(pattern, 'i');   // a bad regex is named here, before any file is read
+    const { kind, files } = await this.resolve(spec);
+    const texts = [], skipped = [];
+    let searched = 0;
+    for (const f of files) {
+      if (this.SKIP.test(f.path)) { skipped.push({ path: f.path, why: 'not text' }); continue; }
+      if (f.size > this.SKIP_BYTES) { skipped.push({ path: f.path, why: Math.round(f.size / 1024) + ' KB, over the 1 MB cap' }); continue; }
+      searched++;
+      texts.push({ path: f.path, text: await Workspace.readPath(f.path) });
+    }
+    const { hits, truncated } = await this.matchInWorker(texts, pattern, this.HITS_MAX);
+    const out = { ok: true, path: String(spec), hits };
+    if (kind !== 'file') out.files = searched;
+    if (skipped.length) out.skipped = skipped;
+    if (truncated) { out.truncated = true; out.note = 'stopped at ' + this.HITS_MAX + ' hits; narrow the pattern or the path'; }
+    return out;
+  },
+};
+
+// What the model gets back from a tool. 4000 characters, cut silently, was a
+// cap from the one-shot era that survived the tool loop: a read_file of 60 KB
+// came back as its first 4000 with no sign it was cut, a search's hits
+// vanished mid-list, and the model reasoned about a file it had not seen.
+// The review named it as the mechanism behind app_generated/opens ≈ 5%. The
+// cap is read_file's own (60 KB) and the cut says so, in the text.
+const TOOL_RESULT_MAX = 60000;
+function toolResultText(output) {
+  const text = JSON.stringify(output);
+  if (text.length <= TOOL_RESULT_MAX) return text;
+  return text.slice(0, TOOL_RESULT_MAX) + `\n…[truncated: ${text.length - TOOL_RESULT_MAX} more characters; narrow the request (from/to, a pattern, a path)]`;
+}
+
 const TOOL_SCHEMAS = [
-  { name: 'create_app', description: 'Create a vibeOS desktop window app or install a VM script. Pass complete source with the // @title, // @target and // @requires headers.',
+  { name: 'create_app', description: CREATE_APP_DESCRIPTION,
     parameters: { type: 'object', properties: { title: { type: 'string' }, source: { type: 'string' } }, required: ['title', 'source'] } },
   { name: 'vm_exec', description: 'Run a shell command in the vibeOS Linux VM and return its output (stdout and stderr, ANSI stripped). Waits 20 s by default; pass timeout_s (up to 600) for an install or a build, or background it (cmd > /mnt/job.log 2>&1 &) and tail the log.',
     parameters: { type: 'object', properties: { command: { type: 'string' }, timeout_s: { type: 'integer', minimum: 1, maximum: 600, description: 'Seconds to wait before the command is interrupted with Ctrl-C and the call fails. Default 20.' } }, required: ['command'] } },
   { name: 'list_apps', description: 'List apps already saved in the vibeOS workspace. .js files without a // @title header are not apps and come back under unlisted with the reason; add the header with edit_file if the user wants one in the dock. The reply also carries the /mnt mapping: the mount is flat and subdirectories under /mnt are not mirrored, and unmirrored names the root entries the mirror skipped (directories, symlinks, special files).',
     parameters: { type: 'object', properties: {}, required: [] } },
-  { name: 'set_theme', description: 'Restyle the desktop itself: a theme id, or individual colour tokens.',
-    parameters: { type: 'object', properties: { theme: { type: 'string', enum: ['vibeos-dark', 'vibeos-light', 'win95'] },
-                  tokens: { type: 'object', additionalProperties: { type: 'string' } } }, required: [] } },
+  { name: 'read_desktop', description: READ_DESKTOP_DESCRIPTION,
+    parameters: { type: 'object', properties: { window: { type: 'string', description: 'A window\'s title or app id: its body as text, one line per block' }, dom: { type: 'boolean', description: 'With window: the sanitised outerHTML instead of text' }, screen: { type: 'string', enum: ['image', 'png'], description: 'The machine\'s VGA screen as an image, with the text console\'s rows' } }, required: [] } },
+  { name: 'list_files', description: LIST_FILES_DESCRIPTION,
+    parameters: { type: 'object', properties: { path: { type: 'string', description: "'' for the top, or a directory: apps/, data/, system/, system/kernel, system/ui" } }, required: [] } },
   { name: 'read_file', description: 'Read a file from the workspace. The operating system is system/kernel/*.js (the machine, workspace, agent loop; reload_os) and system/ui/*.js (windows, dock, chat, Browser, Settings; reload_ui), styled by system/os.css. Optional line range for big files.',
     parameters: { type: 'object', properties: { path: { type: 'string' }, from: { type: 'integer' }, to: { type: 'integer' } }, required: ['path'] } },
-  { name: 'search_file', description: 'Find lines in a workspace file matching a regex; returns line numbers and text. Use before edit_file on a system/ file.',
+  { name: 'search_file', description: SEARCH_FILE_DESCRIPTION,
     parameters: { type: 'object', properties: { path: { type: 'string' }, pattern: { type: 'string' } }, required: ['path', 'pattern'] } },
   { name: 'edit_file', description: 'Replace one exact occurrence of old with new in a workspace file. The first edit of a system/ file forks it from the served copy; from then on yours boots. Call reload_ui to apply a system/ui edit live, reload_os for system/kernel or system/os.css.',
     parameters: { type: 'object', properties: { path: { type: 'string' }, old: { type: 'string' }, new: { type: 'string' } }, required: ['path', 'old', 'new'] } },
@@ -842,7 +1485,7 @@ const TOOL_SCHEMAS = [
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
   { name: 'reload_ui', description: 'Re-import the ui — system/ui/*.js — under the running kernel, live: the machine, the workspace, the chat log and this turn all stay, open windows are repainted by the new ui, and the turn goes on, so say what changed after it. A ui that does not parse, fails to import or throws while painting is refused with the error and the previous ui keeps running. Refuses when no system/ui file has been edited.',
     parameters: { type: 'object', properties: {}, required: [] } },
-  { name: 'reload_os', description: 'Reload the page so edits to system/kernel/*.js or system/os.css take effect (a system/ui edit needs only reload_ui). The reload ends this turn — nothing you say after it reaches the user — so make every edit first, call it once, last, and pass a note: it is shown in the chat after boot. Refuses when nothing has been edited. If the edited OS fails to boot, the stock one runs next time and says so — you cannot lock yourself out. Through vibeos-mcp the reload ends the pairing as well: the token dies with the page, the package is told it was revoked, and driving the desktop again needs a new token from Settings > Capabilities.',
+  { name: 'reload_os', description: 'Reload the page so edits to system/kernel/*.js or system/os.css take effect (a system/ui edit needs only reload_ui). The reload ends this turn — nothing you say after it reaches the user — so make every edit first, call it once, last, and pass a note: it is shown in the chat after boot. Refuses when nothing has been edited. If the edited OS fails to boot, the stock one runs next time and says so — you cannot lock yourself out. Through vibeos-mcp the pairing survives the reload: the tab resumes it after boot and the package reconnects on its own; a call made while the page is down fails with peer not connected — wait a few seconds and call again.',
     parameters: { type: 'object', properties: { note: { type: 'string', description: 'One line shown in the chat after the reboot, e.g. what changed' } }, required: [] } },
   { name: 'web_fetch', description: 'Read a web page as text.',
     parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
@@ -929,6 +1572,51 @@ async function jsonOf(r, who) {
    -------------------------------------------------------------------- */
 
 let remoteToken = null;
+// The token's home for the life of the TAB: sessionStorage is per tab and
+// gone when it closes, the same lifetime a module variable had — but it
+// survives reload_os, which a module variable did not, so an agent that
+// edited the kernel and reloaded read "revoked" for its own reload. The
+// keep flag is set by reload_os alone: pagehide without it (a close, a
+// hand reload) still revokes, and a boot without it does not resume — a
+// duplicated tab (Chrome's Duplicate, window.open(location.href)) gets a
+// copy of sessionStorage, token included, and used to dial with it, kick
+// the original to 4001 and revoke the token when it closed.
+// aleks, 2026-09-04: "so i need to reconnect mcp if i come back next day?" — no.
+// The token is remembered in this browser for seven days (localStorage, with
+// its expiry), so tomorrow's tab pairs with yesterday's `claude mcp add` line
+// untouched; the relay needs nothing, its rows are per connection. Forget
+// this agent (the pane) or the expiry end it; a closed tab does not. Two tabs
+// of one browser share the record, so a boot first asks on a BroadcastChannel
+// whether a live tab already holds the pairing and, if one answers, offers
+// take-over instead of displacing it silently. The reload_os keep flag stays:
+// it is the one case where the SAME tab is coming back and nothing should
+// ask.
+const MCP_TOKEN_KEY = 'vibeos-mcp-token', MCP_AGENT_KEY = 'vibeos-mcp-agent', MCP_KEEP_KEY = 'vibeos-mcp-keep', MCP_EXPIRES_KEY = 'vibeos-mcp-expires';
+const MCP_REMEMBER_MS = 7 * 24 * 3600 * 1000;
+function setRemoteToken(token) {
+  remoteToken = token;
+  try {
+    if (token) { localStorage.setItem(MCP_TOKEN_KEY, token); localStorage.setItem(MCP_EXPIRES_KEY, String(Date.now() + MCP_REMEMBER_MS)); }
+    else { for (const k of [MCP_TOKEN_KEY, MCP_AGENT_KEY, MCP_EXPIRES_KEY]) localStorage.removeItem(k); }
+  } catch (e) { console.warn('RemoteBridge: localStorage refused the token; the pairing will not survive this tab: ' + e.message); }
+}
+// The tabs of one browser tell each other who holds the pairing.
+const mcpTabs = (() => { try { return new BroadcastChannel('vibeos-mcp'); } catch { return null; } })();
+if (mcpTabs) mcpTabs.onmessage = e => {
+  const m = e.data || {};
+  // Only the tab holding THIS token answers: two tabs on two tokens are two
+  // pairings, not a conflict.
+  if (m.ask === 'holder' && remoteToken && m.token === remoteToken && RemoteBridge.state !== 'off' && RemoteBridge.state !== 'error') mcpTabs.postMessage({ holder: true, token: remoteToken, state: RemoteBridge.state });
+  if (m.takeover && remoteToken && m.token === remoteToken) { RemoteBridge.set('error', 'another tab of this browser took over the pairing'); if (RemoteBridge.socket) RemoteBridge.socket.close(); RemoteBridge.socket = null; }
+};
+function anotherTabHolds(token, ms = 300) {
+  return new Promise(res => {
+    if (!mcpTabs) return res(false);
+    let done = false; const on = e => { if (e.data && e.data.holder && e.data.token === token && !done) { done = true; mcpTabs.removeEventListener('message', on); res(true); } };
+    mcpTabs.addEventListener('message', on); mcpTabs.postMessage({ ask: 'holder', token });
+    setTimeout(() => { if (!done) { done = true; mcpTabs.removeEventListener('message', on); res(false); } }, ms);
+  });
+}
 
 // The revoke is a hello with the token and `revoke: true` (lib/mcp-relay.ts
 // revokeFrame, the same bytes): it carries the token, so it does not depend
@@ -1093,6 +1781,11 @@ const RemoteBridge = {
   detail: '',
   socket: null,
   agentName: '',
+  // Whether the agent's MCP client declared the sampling capability, from
+  // its want frame: with it, its model powers api.ai for a tab that has
+  // none of its own (Gen.viaAgent, CAP.supports.ai). false whenever no
+  // agent is connected.
+  sampling: false,
   calls: 0,
   relayErrors: 0,
   keepalive: null,
@@ -1102,7 +1795,12 @@ const RemoteBridge = {
   emit() { this.listeners.forEach(fn => { try { fn(this.state, this.detail); } catch (e) { console.error('RemoteBridge listener failed:', e); } }); },
   set(state, detail = '') {
     if (state === this.state && detail === this.detail) return;
+    const left = this.state === 'connected' && state !== 'connected';
     this.state = state; this.detail = detail;
+    // Leaving 'connected' — the agent gone (4002), displaced (4001), revoked,
+    // a gap — ends what the agent owed: an ask in flight cannot be answered
+    // (its reply would meet a relay with no tab), and sampling is nobody's.
+    if (left) { this.sampling = false; this.failAsks('the agent is no longer connected (' + state + (detail ? ': ' + detail : '') + ')'); }
     this.emit();
   },
 
@@ -1114,7 +1812,11 @@ const RemoteBridge = {
     // (aleks tried exactly that). Cursor and codex take the same npx part.
     // `--relay` names the relay THIS tab is on: the package's default is the
     // origin relay, and a tab on the durable relay would never meet it.
-    return 'claude mcp add vibeos -- npx vibeos-mcp --token ' + remoteToken + ' --relay ' + this.relayUrl();
+    // vibeos-mcp 0.1.8+ defaults to the durable relay, so the line carries
+    // --relay only when this tab is somewhere else (the origin fallback, or
+    // the e2e's local relay); a shorter line is one fewer thing to get wrong.
+    const relay = this.relayUrl();
+    return 'claude mcp add vibeos -- npx vibeos-mcp --token ' + remoteToken + (relay === this.awsUrl ? '' : ' --relay ' + relay);
   },
 
   mint() {
@@ -1130,6 +1832,10 @@ const RemoteBridge = {
   originUrl() { return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/mcp/relay'; },
   // override | aws | origin — which relay the next dial goes to.
   get relay() { return this.override() ? 'override' : this.fellBack ? 'origin' : 'aws'; },
+  toolsFrame() {
+    return { tools: TOOL_SCHEMAS, instructions: MCP_INSTRUCTIONS_LEAD + '\n\n' + APP_CONTRACT };
+  },
+
   relayUrl() {
     const override = this.override();
     if (override) return override;
@@ -1173,10 +1879,60 @@ const RemoteBridge = {
     if (remoteToken) return true;
     const probe = await this.available();
     if (!probe.ok) { this.set('error', probe.reason); return false; }
-    remoteToken = this.mint();
+    setRemoteToken(this.mint());
     this.agentName = '';
     this.set('pairing', 'dialing the relay');
     this.dial();
+    return true;
+  },
+
+  // After reload_os: the token the page before left in sessionStorage is
+  // this tab's, so dial with it. The durable relay kept the agent side; the
+  // package redials and asks for the tools on its own, and a call it made
+  // while the page was down failed with peer not connected — its retry lands.
+  // The keep flag is the proof this boot is that reload: it is consumed
+  // here, so a copied tab (no flag) drops the copied token instead.
+  async resume() {
+    let stored = null, name = '', keep = false, expires = 0;
+    try {
+      stored = localStorage.getItem(MCP_TOKEN_KEY); name = localStorage.getItem(MCP_AGENT_KEY) || ''; expires = Number(localStorage.getItem(MCP_EXPIRES_KEY) || 0);
+      keep = sessionStorage.getItem(MCP_KEEP_KEY) === '1'; sessionStorage.removeItem(MCP_KEEP_KEY);
+    } catch { return false; }
+    if (!stored) return false;
+    if (!MCP_TOKEN_RE.test(stored)) { setRemoteToken(null); throw new Error('the remembered pairing token is not 64 hex; dropped it'); }
+    if (!expires || Date.now() > expires) { setRemoteToken(null); this.set('off', 'the remembered pairing expired after 7 days; pair again'); return false; }
+    if (this.refusal()) { setRemoteToken(null); return false; }
+    if (!keep && await anotherTabHolds(stored)) {
+      // Another tab of this browser is paired: do not dial over it. The
+      // pane offers take-over; RemoteBridge.takeOver() tells that tab to
+      // step aside and dials.
+      remoteToken = stored; this.agentName = name.slice(0, 80); this.heldElsewhere = true;
+      this.set('error', 'another tab of this browser holds this pairing — take it over here, or use that tab');
+      return false;
+    }
+    remoteToken = stored;
+    this.agentName = name.slice(0, 80);
+    this.resumed = true;
+    track('mcp_resumed', { how: keep ? 'reload_os' : 'remembered' });
+    this.set('pairing', keep ? 'resuming the pairing after a reload' : 'resuming the remembered pairing');
+    this.dial();
+    return true;
+  },
+  takeOver() {
+    if (!remoteToken) return false;
+    this.heldElsewhere = false;
+    if (mcpTabs) mcpTabs.postMessage({ takeover: true, token: remoteToken });
+    this.set('pairing', 'taking the pairing over from the other tab');
+    this.dial();
+    return true;
+  },
+
+  // reload_os is about to replace the page: keep the token so the next boot
+  // resumes instead of revoking. Only with a token — a stale flag would
+  // spare the next pairing's real close — and not one another tab took.
+  keepAcrossReload() {
+    if (!remoteToken || this.displaced) return false;
+    try { sessionStorage.setItem(MCP_KEEP_KEY, '1'); } catch (e) { console.warn('RemoteBridge: could not flag the reload; the pairing will be revoked: ' + e.message); return false; }
     return true;
   },
 
@@ -1191,12 +1947,13 @@ const RemoteBridge = {
   },
 
   dial() {
+    this.displaced = false;
     this.socket = new RemoteSocket(this.relayUrl(), {
       hello: () => ({ hello: 'tab', token: remoteToken }),
       onOpen: () => {
         // Unsolicited, for an agent already waiting; the package also asks on
         // every connect of its own, and `want` is answered every time.
-        this.socket.send(JSON.stringify({ tools: TOOL_SCHEMAS }));
+        this.socket.send(JSON.stringify(this.toolsFrame()));
         this.set('waiting');
       },
       onFrame: raw => this.handle(raw),
@@ -1204,8 +1961,8 @@ const RemoteBridge = {
       onEnd: ({ code, reason, gaveUp }) => {
         this.socket = null;
         this.stopKeepalive();
-        if (code === 4003) { remoteToken = null; this.set('off'); return; }
-        if (code === 4001) { this.set('error', 'another tab paired with this token and took its place; revoke here, or pair again there'); return; }
+        if (code === 4003) { setRemoteToken(null); this.set('off'); return; }
+        if (code === 4001) { this.displaced = true; this.set('error', 'another tab paired with this token and took its place; revoke here, or pair again there'); return; }
         const what = 'the relay ended the socket on a code it does not mean: ' + code + (gaveUp ? ' (gave up)' : '');
         this.set('error', what);
         throw new Error('RemoteSocket: ' + what);
@@ -1273,16 +2030,84 @@ const RemoteBridge = {
     }
     if ('paired' in msg) { if (msg.paired) this.connected(); else this.set('waiting'); return; }
     if (msg.want === 'tools') {
+      let sampling = msg.sampling;
+      if (typeof sampling !== 'boolean') { console.error('RemoteBridge: the want frame\'s sampling is not a boolean (' + JSON.stringify(sampling) + '); reading it as false — vibeos-mcp 0.1.16+ sends one'); sampling = false; }
+      const changed = sampling !== this.sampling;
+      this.sampling = sampling;
       this.connected(typeof msg.agent === 'string' ? msg.agent.slice(0, 80) : '');
-      this.socket.send(JSON.stringify({ tools: TOOL_SCHEMAS }));
+      // `set` dedups an unchanged state: the panes and the cap watchers
+      // must still hear that sampling flipped. A flip to false with an ask
+      // in flight: the client that would answer it is gone (a new client
+      // behind the same package), so the ask fails now, not in 125 s.
+      if (changed && !sampling) this.failAsks('the agent\'s client no longer samples');
+      if (changed) this.emit();
+      this.socket.send(JSON.stringify(this.toolsFrame()));
       return;
     }
     if (msg.error && msg.code === 4002) { this.set('waiting'); return; }
     if (msg.id != null && typeof msg.tool === 'string') { this.call(msg); return; }
+    if (msg.ask != null && !('ai' in msg)) { this.answered(msg); return; }
+  },
+
+  // An app's api.ai call through the connected agent's model (Gen.askAgent):
+  // {ask: N, ai} out, {ask: N, result} | {ask: N, error} back. Refused, not
+  // queued, without a connected agent; every picture is re-encoded as a
+  // jpeg (Desktop.jpeg: quality stepping down, then the longest side
+  // 1024 → 768 → 512) with an equal share of the frame — a refusal names
+  // the picture and the share — and the whole frame is measured against the
+  // relay's 128 KB before it goes. The package waits 120 s on its client
+  // (a person may approve each); the tab waits a little longer and names
+  // the ask, so a lost answer is a message and never a hung app.
+  ASK_MS: 125000,
+  askSeq: 0,
+  asks: new Map(),
+  askFrame(n, ai) { return JSON.stringify({ ask: n, ai }); },
+  async ask(ai) {
+    if (this.state !== 'connected' || !this.socket || !this.socket.open) throw new Error('no agent connected');
+    if (!this.sampling) throw new Error(samplingRefusal(this.agentName));
+    const images = Array.isArray(ai.images) ? ai.images : [];
+    const n = ++this.askSeq;
+    const text = new TextEncoder().encode(this.askFrame(n, Object.assign({}, ai, { images: [] }))).length;
+    // The pictures share what the text leaves, each under the screen's cap;
+    // a base64 picture is `data` plus the ~40 bytes of its own object.
+    const share = images.length ? Math.floor((MCP_FRAME_MAX - text - 64 * images.length) / images.length) : 0;
+    if (images.length && share < 1024) throw new Error('the ask is ' + Math.round(text / 1024) + ' KB of text with ' + images.length + ' pictures; the relay carries ' + (MCP_FRAME_MAX / 1024) + ' KB a frame');
+    const pictures = [];
+    const cap = Math.min(share, Desktop.IMAGE_B64_MAX);
+    for (const [i, img] of images.entries()) {
+      if (!img || typeof img.mime !== 'string' || typeof img.base64 !== 'string') throw new Error('ask: image ' + (i + 1) + ' of ' + images.length + ' must be { mime, base64 }');
+      let j;
+      try { j = await Desktop.jpeg('data:' + img.mime + ';base64,' + img.base64, cap); }
+      catch (e) { throw new Error('picture ' + (i + 1) + ' of ' + images.length + ' in the ask: ' + e.message + (images.length > 1 ? ' — ' + images.length + ' pictures share the frame, ' + Math.round(cap / 1024) + ' KB each' : '')); }
+      pictures.push({ mime: j.mimeType, base64: j.data });
+    }
+    const wire = this.askFrame(n, Object.assign({}, ai, { images: pictures }));
+    const bytes = new TextEncoder().encode(wire).length;
+    if (bytes > MCP_FRAME_MAX) throw new Error('the ask is ' + Math.round(bytes / 1024) + ' KB; the relay carries ' + (MCP_FRAME_MAX / 1024) + ' KB a frame');
+    if (this.state !== 'connected' || !this.socket || !this.socket.open) throw new Error('no agent connected');
+    const answer = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.asks.delete(n); reject(new Error('ask ' + n + ' to ' + (this.agentName || 'the agent') + ' was not answered in ' + Math.round(this.ASK_MS / 1000) + ' s')); }, this.ASK_MS);
+      this.asks.set(n, { resolve, reject, timer });
+    });
+    this.socket.send(wire);
+    try { const r = await answer; track('mcp_ask', { ok: true }); return r; }
+    catch (e) { track('mcp_ask', { ok: false }); throw e; }
+  },
+  answered(msg) {
+    const pending = this.asks.get(msg.ask);
+    if (!pending) { console.warn('RemoteBridge: an answer to ask ' + JSON.stringify(msg.ask) + ' nobody is waiting for (late, never asked, or not the number the tab sent — a string "7" is not ask 7)'); return; }
+    this.asks.delete(msg.ask); clearTimeout(pending.timer);
+    if (typeof msg.error === 'string') pending.reject(new Error(msg.error.slice(0, 2000)));
+    else if (typeof msg.result === 'string') pending.resolve(msg.result);
+    else pending.reject(new Error('the agent answered ask ' + msg.ask + ' with neither a result string nor an error'));
+  },
+  failAsks(why) {
+    for (const [n, pending] of this.asks) { clearTimeout(pending.timer); pending.reject(new Error('ask ' + n + ' failed: ' + why)); }
+    this.asks.clear();
   },
 
   connected(name = '') {
-    if (name) this.agentName = name;
+    if (name) { this.agentName = name; try { localStorage.setItem(MCP_AGENT_KEY, name); } catch {} }
     const label = this.agentName || 'an agent';
     if (this.state !== 'connected') track('mcp_paired');
     this.set('connected', label);
@@ -1334,7 +2159,7 @@ const RemoteBridge = {
     const s = this.socket;
     this.socket = null;
     this.stopKeepalive();
-    remoteToken = null;
+    setRemoteToken(null);
     this.agentName = '';
     // On an open socket the relay ends it (bye 4003, then the close); the
     // socket is released to take that on its own, 5 s at most.
@@ -1354,28 +2179,145 @@ const RemoteBridge = {
     ws.addEventListener('error', () => console.error('RemoteBridge: the relay did not take the revoke; the token is forgotten here, and the package will read peer not connected until the relay function ends'));
   },
 
-  // The token dies with the tab, so the pairing must too: without this a
-  // closed or reloaded tab (reload_os included) left the agent side attached
-  // and the package answering "peer not connected" for good, with no way
-  // back but a new token pasted into its config.
-  unload() {
-    if (!remoteToken) return;
-    const s = this.socket;
-    if (s && s.open) s.send(mcpRevokeFrame(remoteToken));
-    else this.deliverRevoke(remoteToken);
-    this.socket = null;
-    this.stopKeepalive();
-    remoteToken = null;
-    this.agentName = '';
-    this.set('off');
-  },
+  // pagehide: nothing to do any more. The pairing is remembered for seven
+  // days, so a closed tab keeps it (the agent reads "peer not connected"
+  // until a tab is back; vibeos-mcp rides that gap); reload_os keeps it by
+  // the same token; Forget this agent is the explicit end.
+  unload() {},
 };
 window.addEventListener('pagehide', () => RemoteBridge.unload());
+// Loud, never fatal: a bad stored token must not take the kernel down with it.
+try { RemoteBridge.resume(); } catch (e) { console.error('RemoteBridge.resume failed: ' + e.message); }
+
+/* What this session has already read, so the next turn does not read it again.
+
+   Every turn used to start blind: read_file system/ui/chat.js, edit_file, and
+   the NEXT turn read the same file before touching it — two of eight steps
+   spent re-reading what the session had already seen, which is part of why
+   turns hit the step cap. Per file the turn actually read, one entry
+   { path, from, to, hash }; the next turn's first user message carries the
+   list with a rule the model can act on.
+
+   The hash is over the WHOLE file, not the slice the model was handed:
+   read_file numbers every line, so an insert above the range shifts every
+   number the model remembers while the slice itself still matches. A memory
+   that says "you have this" about a file that moved under it is worse than no
+   memory at all, so a hash mismatch is reported as changed and the entry is
+   dropped. FNV-1a, the same cheap hash index.html uses for fork versioning —
+   no dependency, and nothing here is a security claim.
+
+   Session state, not the OS source and not the log: it lives in memory beside
+   Chat and dies with the page, which is the honest lifetime — after a
+   reload_os the model's context is gone too, so re-reading is right then. */
+const Reads = {
+  MAX: 20,
+  entries: [],   // newest last: { path, from, to, hash, kind }
+
+  hash(text) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(16).padStart(8, '0');
+  },
+
+  // kind 'read' is a range the model saw in full; 'search' is matching lines
+  // only, and the block says so — telling a model it has "read" lines it only
+  // ever saw as scattered hits is the same lie as a stale hash.
+  // One key per file however the tool spelled it: Workspace strips a leading
+  // slash, so read_file 'data/x' and edit_file '/data/x' are one file, and a
+  // forget keyed on the raw string missed the write that invalidated it.
+  key(path) { return String(path).replace(/^\/+/, ''); },
+
+  note(rawPath, from, to, text, kind = 'read') {
+    if (typeof rawPath !== 'string' || !rawPath) throw new Error('Reads.note: path must be a non-empty string, got ' + JSON.stringify(rawPath));
+    if (typeof text !== 'string') throw new Error('Reads.note: text must be a string for ' + rawPath);
+    const path = this.key(rawPath);
+    // A range that delivered nothing (past EOF, or one line already over the
+    // reply cap) is not a read: remembering it told the model not to read a
+    // file it never saw, under a backwards "lines 100-3".
+    if (!(to >= from)) return null;
+    const entry = { path, from, to, hash: this.hash(text), kind };
+    this.entries = this.entries.filter(e => !(e.path === path && e.from === from && e.to === to && e.kind === kind));
+    this.entries.push(entry);
+    if (this.entries.length > this.MAX) this.entries = this.entries.slice(-this.MAX);
+    return entry;
+  },
+
+  // At the moment of the write, not at the next turn's re-hash: an edit_file
+  // followed by another edit_file in the same turn must not read a memory the
+  // first write invalidated. Registered on Workspace.onWrite below, so every
+  // path that reaches the disk — edit_file, write_file, create_app through
+  // Apps.save, the chat log's own files — invalidates in one place; the tools
+  // do not each have to remember to call it.
+  forget(path) { const key = this.key(path); this.entries = this.entries.filter(e => e.path !== key); },
+
+  clear() { this.entries = []; },
+
+  /* The block for the next request. Every remembered path is re-hashed
+     against what is on disk NOW — the guest, another turn or a remote agent
+     may have rewritten it — and an entry that no longer matches is reported
+     as changed and dropped; one whose file has gone is dropped silently
+     (there is nothing to re-read). A read that throws for any other reason is
+     dropped too: a memory is a convenience, never a reason to fail a turn. */
+  async block() {
+    if (!this.entries.length) return '';
+    const kept = [], changed = [];
+    for (const e of this.entries.slice()) {
+      let text = null;
+      try { text = await Workspace.readPath(e.path); }
+      catch { text = null; }
+      if (text === null) { this.forgetEntry(e); continue; }
+      if (this.hash(text) !== e.hash) { this.forgetEntry(e); changed.push(e); continue; }
+      kept.push(e);
+    }
+    if (!kept.length && !changed.length) return '';
+    const range = e => `lines ${e.from}-${e.to}` + (e.kind === 'search' ? ' (matching lines only, from search_file)' : '');
+    return [
+      'Files you have already read in this session. Do not read them again unless you need a different range, or a line here says the file changed:',
+      // "unchanged when this turn started", not "still as you read it": the
+      // block is built once and rides the whole turn, and the guest or another
+      // agent can rewrite the file inside it. edit_file's stale-anchor refusal
+      // is the backstop; the line must not claim more than it checked.
+      ...kept.map(e => `- ${e.path} ${range(e)} — unchanged when this turn started`),
+      ...changed.map(e => `- ${e.path} ${range(e)} — has changed since you read it; read it again before you edit it`),
+    ].join('\n');
+  },
+
+  forgetEntry(e) { this.entries = this.entries.filter(x => x !== e); },
+};
+Workspace.onWrite.push(path => Reads.forget(path));
 
 const Agent = {
   // 5 was one read, one search, one edit, one reload and nothing left over for
   // a refusal; every guard below hands the model an error it should act on.
-  MAX_STEPS: 8,
+  // 8 was still too low for real work (aleks, 2026-09-07): a turn that reads a
+  // kernel file, searches it, edits two places and reloads has spent half its
+  // budget before it has answered anything. A turn only costs what it uses —
+  // the loop returns the moment the model stops calling tools — so the ceiling
+  // is a cap on the worst case, not a price paid per turn. What makes a high
+  // ceiling safe is the note below: the model is told where it is and lands
+  // what it has, instead of being cut off mid-edit.
+  MAX_STEPS: 16,
+
+  /* A turn that ran out of steps used to just stop, on whatever text the last
+     step happened to produce: a half-finished job and no word about why. From
+     NOTE_FROM on, every request carries the count and an instruction to land
+     what it has — an instruction about wrapping up, not a threat: a model told
+     only that it is about to be cut off abandons the edit it was mid-way
+     through. The person sees the same thing in the status line, and when the
+     loop does fall out of its last step the chat says so (Chat.runTurn reads
+     `capped`). */
+  // The last three steps, derived: a second magic number would drift from
+  // MAX_STEPS the first time one of them changed.
+  get NOTE_FROM() { return this.MAX_STEPS - 2; },
+  stepNote(step) {
+    const n = step + 1;
+    if (n < this.NOTE_FROM) return '';
+    const left = this.MAX_STEPS - n;
+    return `You are on tool step ${n} of ${this.MAX_STEPS} for this turn. `
+      + (left ? `Only ${left} more request${left === 1 ? '' : 's'} will be sent after this one. ` : 'This is the last one: nothing after it will be sent. ')
+      + 'Finish what you can with the steps you have and tell the person plainly what is still undone, rather than starting anything new.';
+  },
+  stepStatus(step) { return `step ${step + 1} of ${this.MAX_STEPS} — wrapping up`; },
 
   /* One user turn, in the dialect of whichever transport carries it. Three
      transports, three shapes for the same picture: chat completions wants
@@ -1388,6 +2330,7 @@ const Agent = {
     if (!images || !images.length) return text;
     const textPart = text ? [{ type: 'text', text }] : [];
     if (shape === 'openai')    return [...textPart, ...images.map(i => ({ type: 'image_url', image_url: { url: i.dataUrl } }))];
+    if (shape === 'responses') return [...(text ? [{ type: 'input_text', text }] : []), ...images.map(i => ({ type: 'input_image', image_url: i.dataUrl }))];
     if (shape === 'anthropic') return [...images.map(i => ({ type: 'image', source: { type: 'base64', media_type: i.mediaType, data: i.data } })), ...textPart];
     if (shape === 'sdk')       return [...textPart, ...images.map(i => ({ type: 'image', image: i.dataUrl }))];
     throw new Error('unknown message shape: ' + shape);
@@ -1409,9 +2352,9 @@ const Agent = {
 
   // The composed prompt, from the server, so the browser holds no fourth copy.
   async systemPrompt() {
-    const key = (VM.bootedImage || VM.image) + '|' + Theme.id;
+    const key = VM.bootedImage || VM.image;
     if (this._promptKey === key && this._prompt) return this._prompt;
-    const r = await fetch(`/api/agent/prompt?image=${encodeURIComponent(VM.bootedImage || VM.image)}&theme=${encodeURIComponent(Theme.id)}`);
+    const r = await fetch(`/api/agent/prompt?image=${encodeURIComponent(key)}`);
     const j = await r.json();
     if (!r.ok || !j.prompt) throw new Error(j.error || 'could not load the agent prompt');
     this._prompt = j.prompt; this._promptKey = key;
@@ -1423,7 +2366,34 @@ const Agent = {
      write a window, but could not look at the workspace, run anything in the
      VM, or restyle the desktop — which made "bring your own key" a visibly
      lesser product than signing in, for no reason anyone chose. */
-  async runWithKey(prompt, history, onStatus, images) {
+  /* Whatever was typed while this turn ran, as messages for the next step.
+     `steer` is Chat.drain: it empties the queue, turns each entry into a real
+     user turn in the log, and hands the entries back here — so "no, use the
+     other file" reaches the model between two tool calls instead of waiting
+     for the turn to end. The entries go in after the tool results, in the
+     order they were typed, with their pictures in this transport's shape. */
+  steerMessages(shape, taken) {
+    return taken.map(s => ({ role: 'user', content: this.userContent(shape, s.text, s.images) }));
+  },
+
+  /* Anthropic's shape, folded into the tool_result message rather than sent
+     behind it: /v1/messages documents one user turn per assistant turn, and
+     two user messages in a row is a shape the API is free to refuse. The
+     blocks go after the tool results, in the order they were typed. */
+  steerBlocks(taken) {
+    return taken.flatMap(s => {
+      const content = this.userContent('anthropic', s.text, s.images);
+      return typeof content === 'string' ? [{ type: 'text', text: content }] : content;
+    });
+  },
+
+  // Anthropic again: rather than a second user message in a row, the block
+  // goes in front of the turn's own text, in the same message.
+  foldMemo(memo, content) {
+    return typeof content === 'string' ? memo + '\n\n' + content : [{ type: 'text', text: memo }, ...content];
+  },
+
+  async runWithKey(prompt, history, onStatus, images, steer) {
     let system;
     try { system = await this.systemPrompt(); }
     catch (e) {
@@ -1438,66 +2408,94 @@ const Agent = {
     }
     const anthropic = Gen.provider === 'anthropic';
     const created = [];
+    // The first user message of the turn, never the system prompt: that
+    // constant is pinned byte-equal to lib/system-prompt.ts, and a block that
+    // changes every turn cannot live in a pinned string. Uncached, honest.
+    const memo = await Reads.block();
     let msgs = [
       ...historyWindow(history).map(h => ({ role: h.role, content: h.content })),
-      { role: 'user', content: this.userContent(anthropic ? 'anthropic' : 'openai', prompt, images) },
+      ...(memo && !anthropic ? [{ role: 'user', content: memo }] : []),
+      { role: 'user', content: memo && anthropic
+        ? this.foldMemo(memo, this.userContent('anthropic', prompt, images))
+        : this.userContent(anthropic ? 'anthropic' : 'responses', prompt, images) },
     ];
     let lastText = '';
 
     for (let step = 0; step < this.MAX_STEPS; step++) {
-      const res = anthropic ? await this.stepAnthropic(system, msgs) : await this.stepOpenAI(system, msgs);
+      // The note rides this request only, never `msgs`: it would otherwise
+      // stack one copy per step in the thread the next request carries.
+      // Anthropic takes it on the system string — a second user message behind
+      // the tool_result one is a shape /v1/messages is free to refuse.
+      const note = this.stepNote(step);
+      if (note) onStatus?.(this.stepStatus(step));
+      const res = anthropic
+        ? await this.stepAnthropic(note ? system + '\n\n' + note : system, msgs)
+        : await this.stepOpenAI(system, note ? [...msgs, { role: 'system', content: note }] : msgs);
       lastText = res.text || lastText;
       if (!res.calls.length) return { text: lastText, created, steps: step + 1 };
 
       const results = [];
       for (const call of res.calls) {
-        const output = await this.executeTool(call, onStatus);
+        const output = await this.executeTool(call, onStatus, true);
         if (call.toolName === 'create_app') created.push(output);
         results.push({ id: call.id, output });
       }
+      // Only when another request will actually carry it. On the last allowed
+      // step the loop falls out and `msgs` is discarded, so a drain there
+      // consumed the queue, painted the steer as a real turn and answered it
+      // with a reply that could not have accounted for it — delivered with no
+      // answer, which is worse than late. Left queued, `finish()` flushes it
+      // into the next turn.
+      const more = step + 1 < this.MAX_STEPS;
+      const taken = steer && more ? steer() : [];
       msgs = anthropic
         ? [...msgs, { role: 'assistant', content: res.raw },
-           { role: 'user', content: results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: JSON.stringify(r.output).slice(0, 4000) })) }]
-        : [...msgs, res.raw,
-           ...results.map(r => ({ role: 'tool', tool_call_id: r.id, content: JSON.stringify(r.output).slice(0, 4000) }))];
+           { role: 'user', content: [...results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: toolResultText(r.output) })),
+                                     ...this.steerBlocks(taken)] }]
+        : [...msgs, ...res.raw,
+           ...results.map(r => ({ type: 'function_call_output', call_id: r.id, output: toolResultText(r.output) })),
+           ...this.steerMessages('responses', taken)];
     }
-    return { text: lastText, created, steps: this.MAX_STEPS };
+    return { text: lastText, created, steps: this.MAX_STEPS, capped: true };
   },
 
+  // /v1/responses, not /v1/chat/completions: on chat completions gpt-5.6
+  // takes function tools only with reasoning_effort 'none', and gpt-6-astra
+  // refuses 'none' outright and refuses tools with any other value — so the
+  // "switch this agent to gpt-6-astra" edit left a chat that answered only
+  // the provider's 400. Responses answers function calls for both (curl,
+  // 2026-09-05). store:false keeps the turn off the provider's disk; the
+  // reasoning items come back encrypted and go back verbatim with the tool
+  // outputs so a multi-step turn keeps its thread.
   async stepOpenAI(system, msgs) {
-    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    const r = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + Gen.key },
       body: JSON.stringify({
-        model: Gen.model, max_completion_tokens: 16000,
-        messages: [{ role: 'system', content: system }, ...msgs],
-        tools: TOOL_SCHEMAS.map(t => ({ type: 'function', function: t })),
-        // Required, not optional: gpt-5.6 refuses function tools on
-        // /v1/chat/completions unless reasoning is off — "use /v1/responses or
-        // set reasoning_effort to 'none'". The Codex path goes through the
-        // Responses API and keeps its reasoning; this one trades it for tools,
-        // which is the better half of that trade for an agent that mostly acts.
-        reasoning_effort: 'none',
+        model: Gen.model, max_output_tokens: 16000, store: false,
+        include: ['reasoning.encrypted_content'],
+        instructions: system,
+        input: msgs,
+        tools: TOOL_SCHEMAS.map(t => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters })),
       }),
     });
     const j = await jsonOf(r, 'openai');
     if (!r.ok) throw new Error(j.error?.message || ('openai returned ' + r.status));
-    const choice = j.choices?.[0] || {};
-    const m = choice.message || {};
     // A reply cut at the token limit used to arrive here as a tool call whose
     // arguments were half a JSON object; the parse failed silently to {} and
     // create_app then wrote an empty module that failed at import with
     // "Unexpected end of input" — a window with an error in it and nothing
     // to say why. The cause has a name; say it.
-    if (choice.finish_reason === 'length') throw new Error(CUT_OFF);
+    if (j.status === 'incomplete' && j.incomplete_details?.reason === 'max_output_tokens') throw new Error(CUT_OFF);
+    if (!Array.isArray(j.output)) throw new Error('openai answered with no output items (status ' + j.status + ')');
     return {
-      text: m.content || '',
-      raw: m,
-      calls: (m.tool_calls || []).map(c => {
+      text: j.output.filter(o => o.type === 'message').flatMap(o => o.content || []).filter(c => c.type === 'output_text').map(c => c.text).join('').trim(),
+      raw: j.output,
+      calls: j.output.filter(o => o.type === 'function_call').map(c => {
         let input;
-        try { input = JSON.parse(c.function.arguments || '{}'); }
-        catch (e) { throw new Error(`the model's ${c.function.name} call carried arguments that are not JSON (${e.message})`); }
-        return { id: c.id, toolName: c.function.name, input };
+        try { input = JSON.parse(c.arguments || '{}'); }
+        catch (e) { throw new Error(`the model's ${c.name} call carried arguments that are not JSON (${e.message})`); }
+        return { id: c.call_id, toolName: c.name, input };
       }),
     };
   },
@@ -1523,7 +2521,12 @@ const Agent = {
     };
   },
 
-  async executeTool(call, onStatus) {
+  /* `remember` is the built-in tool loop's own flag, not a default: the same
+     executeTool is the gate for the guest CLI and for a remote agent through
+     bridgeCall, and a file THEY read was recorded as the chat model's own —
+     the next turn was told it had already read a file it had never seen, and
+     told not to read it. Only Chat's own loops pass it. */
+  async executeTool(call, onStatus, remember = false) {
     const { toolName, input } = call;
     if (toolName === 'create_app') {
       const title = input.title || 'app';
@@ -1536,9 +2539,11 @@ const Agent = {
         if (VM.state === 'ready') {
           try { await VM.writeText(file, source); installed = true; } catch {}
         }
-        return { ok: true, kind: 'vm', title, file, installed, source };
+        return { ok: true, kind: 'vm', title, file: '/mnt/' + file, installed, source };
       }
       const requires = parseRequires(source);
+      try { parseGeometry(source); }
+      catch (e) { track('lint_reject', { rule: 'geometry' }); return { ok: false, kind: 'window', title, error: e.message }; }
       const lint = lintApp(`${title} ${parseTitle(source) || ''}`, requires, source);
       if (lint) {
         track('lint_reject', { rule: lint.rule });
@@ -1554,13 +2559,16 @@ const Agent = {
         return { ok: false, kind: 'window', title, error: 'the module does not parse: ' + syntax };
       }
       const saved = await Apps.save(title, source).catch(e => ({ error: e.message }));
+      if (saved.error) return { ok: false, kind: 'window', title, error: 'the app was not saved: ' + saved.error };
       paintDock();
       // Launch what was written, not what was passed: they differ when the
       // header had to be added, and the window must match the file.
       const written = saved.source || source;
-      launchApp({ title, source: written, requires: parseRequires(written) });
+      launchApp({ title, name: saved.file, source: written, requires: parseRequires(written) });
       const { source: _written, ...report } = saved;
-      return { ok: true, kind: 'window', title, saved: report,
+      // The dock shows the header's title, not input.title: they differ
+      // when the source carried its own // @title line.
+      return { ok: true, kind: 'window', title, dockTitle: parseTitle(written), file: 'apps/' + saved.file, saved: report,
                ...(saved.headerAdded?.length ? { note: `the source had no ${saved.headerAdded.map(t => '// @' + t).join(', ')} line; it was prepended so the file is a dock app and not unlisted` } : {}) };
     }
     if (toolName === 'vm_exec') {
@@ -1586,16 +2594,6 @@ const Agent = {
           ? '. For an install or a build pass timeout_s (up to 600), or background it: cmd > /mnt/job.log 2>&1 & then tail the log.' : '') };
       }
     }
-    if (toolName === 'set_theme') {
-      onStatus?.('restyling the desktop…');
-      try {
-        const applied = Theme.set(input.theme, input.tokens);
-        track('set_theme', { to: applied.theme });
-        return { ok: true, ...applied, note: 'The desktop is restyled. Open apps using var(--token) followed automatically.' };
-      } catch (e) {
-        return { ok: false, error: e.message, available: Object.keys(VibeOSSkills.THEMES) };
-      }
-    }
     if (toolName === 'web_fetch') {
       const url = String(input.url || '');
       onStatus?.('reading ' + WebTools.hostOf(url) + '…');
@@ -1606,6 +2604,19 @@ const Agent = {
       onStatus?.('searching the web…');
       track('web_search');
       return WebTools.search(String(input.query || ''));
+    }
+    if (toolName === 'read_desktop') {
+      onStatus?.('reading the desktop…');
+      try { return await Desktop.read(input); }
+      catch (e) { return { ok: false, error: e.message }; }
+    }
+    if (toolName === 'list_files') {
+      onStatus?.('listing ' + (input.path || 'the workspace') + '…');
+      try {
+        const rel = Files.norm(input.path);
+        const entries = await Files.entries(rel);
+        return { ok: true, path: rel, entries, ...(rel === '' ? { note: 'apps/ holds the dock apps (a .js with a // @title header), data/ what the machine sees at /mnt, system/ the OS; list system/kernel or system/ui for the files that boot' } : {}) };
+      } catch (e) { return { ok: false, error: e.message }; }
     }
     if (toolName === 'list_apps') {
       onStatus?.('listing apps…');
@@ -1620,21 +2631,55 @@ const Agent = {
     if (toolName === 'read_file') {
       onStatus?.('reading ' + input.path + '…');
       try {
-        const text = await Workspace.readPath(input.path);
+        Files.refusePrivate(input.path);
+        let text;
+        try { text = await Workspace.readPath(input.path); }
+        catch (e) {
+          // A miss names what exists, like list_files and search_file do: the
+          // feedback that asked for this named read_file first.
+          if (/^not found:/.test(e.message)) throw new Error(await Files.missing(input.path));
+          throw e;
+        }
         const lines = text.split('\n');
-        const from = Math.max(1, input.from || 1), to = Math.min(lines.length, input.to || lines.length);
-        const slice = lines.slice(from - 1, to).map((l, i) => `${from + i}: ${l}`).join('\n');
-        return { ok: true, path: input.path, lines: lines.length, from, to, text: slice.slice(0, 60000), truncated: slice.length > 60000 };
+        const from = Math.max(1, input.from || 1), asked = Math.min(lines.length, input.to || lines.length);
+        // Past the end is an error, not an empty ok: the reply used to say
+        // "from 100, to 3" with no text, and the read memory below then told
+        // the model not to read a file it had never seen.
+        if (from > lines.length) throw new Error(input.path + ' has ' + lines.length + ' lines; from ' + from + ' is past the end');
+        // The cap is on what is DELIVERED, and `to` is the last line that
+        // actually went out — a whole-file read of kernel/agent.js hands over
+        // about a third of it, and remembering the asked-for range as read was
+        // a memory that lied about exactly the files this feature is for.
+        const CAP = 60000;
+        const out = [];
+        let used = 0, to = from - 1;
+        for (let i = from; i <= asked; i++) {
+          const line = `${i}: ${lines[i - 1]}`;
+          const cost = line.length + (out.length ? 1 : 0);
+          if (used + cost > CAP) break;
+          used += cost; out.push(line); to = i;
+        }
+        const truncated = to < asked;
+        if (remember) Reads.note(input.path, from, to, text);
+        return Object.assign({ ok: true, path: input.path, lines: lines.length, from, to, text: out.join('\n'), truncated },
+          truncated ? { note: `cut at ${CAP / 1000} kB: lines ${to + 1}-${asked} were not sent, read from ${to + 1} for the rest` } : {});
       } catch (e) { return { ok: false, error: e.message }; }
     }
     if (toolName === 'search_file') {
       onStatus?.('searching ' + input.path + '…');
       try {
-        const re = new RegExp(input.pattern, 'i');
-        const hits = [];
-        (await Workspace.readPath(input.path)).split('\n').forEach((l, i) => { if (re.test(l) && hits.length < 60) hits.push({ line: i + 1, text: l.slice(0, 200) }); });
-        return { ok: true, path: input.path, hits };
-      } catch (e) { return { ok: false, error: e.message }; }
+        const out = await Files.search(input.path, input.pattern);
+        // A search that returned a file's lines is a partial read of it: the
+        // model saw those lines and nothing between them, so it is remembered
+        // as matching lines only.
+        for (const path of new Set((out.hits || []).map(h => h.path))) {
+          const lines = (out.hits || []).filter(h => h.path === path).map(h => h.line);
+          if (!remember) continue;
+          try { Reads.note(path, Math.min(...lines), Math.max(...lines), await Workspace.readPath(path), 'search'); } catch {}
+        }
+        return out;
+      }
+      catch (e) { return { ok: false, error: e.message }; }
     }
     if (toolName === 'edit_file') {
       onStatus?.('editing ' + input.path + '…');
@@ -1693,13 +2738,18 @@ const Agent = {
       try { localStorage.setItem(RELOAD_NOTE, JSON.stringify({ note, files: forked, at: Date.now() })); } catch {}
       onStatus?.('reloading the desktop…');
       window.__vibeosIntentionalUnload = true;   // our own reload must not trip the leave-page guard
+      // The page is going away and the queue is memory only: say what was
+      // dropped, so the person retypes it instead of waiting for an answer
+      // to a message no boot will ever carry.
+      Chat.dropQueue('the desktop is reloading ' + forked.join(' and '));
+      const pairing = RemoteBridge.keepAcrossReload();
       setTimeout(() => location.reload(), 400);
-      return { ok: true, note: 'reloading ' + forked.join(' and ') + ' — this turn ends here; the chat shows your note after boot', reloading: forked };
+      return { ok: true, note: 'reloading ' + forked.join(' and ') + ' — this turn ends here; the chat shows your note after boot' + (pairing ? '; the vibeos-mcp pairing resumes after boot, so call again once the page is back' : ''), reloading: forked, pairing: pairing ? 'kept' : 'none' };
     }
     throw new Error('unknown tool: ' + toolName);
   },
 
-  async run(prompt, history, onStatus, images) {
+  async run(prompt, history, onStatus, images, steer) {
     // Sent as messages from the first step, not {prompt, history}: the server
     // builds the same array from those two, but only a string prompt fits
     // through them, and an image needs the SDK's content-part shape.
@@ -1708,15 +2758,23 @@ const Agent = {
     // a model that called list_files first still has to see the screenshot to
     // build what it shows. Attachments caps what one turn can carry, so five
     // steps of it stay under the body limit.
+    const memo = await Reads.block();
     let messages = [
       ...historyWindow(history).map(h => ({ role: h.role, content: h.content })),
+      ...(memo ? [{ role: 'user', content: memo }] : []),
       { role: 'user', content: this.userContent('sdk', prompt, images) },
     ];
     const created = [];
     let lastText = '';
 
     for (let step = 0; step < this.MAX_STEPS; step++) {
-      const body = Object.assign({ image: VM.bootedImage || VM.image, theme: Theme.id, messages },
+      const note = this.stepNote(step);
+      if (note) onStatus?.(this.stepStatus(step));
+      // As `note`, not a system message inside `messages`: the AI SDK takes
+      // one there but warns about it on every request ("Use the system option
+      // instead"), and the route already has a system string to append to.
+      const body = Object.assign({ image: VM.bootedImage || VM.image, messages },
+        note ? { note } : {},
         Gen.codexModel ? { model: Gen.codexModel } : {});
       const j = await this.callServer(body);
       lastText = j.text || '';
@@ -1727,7 +2785,7 @@ const Agent = {
 
       const toolResults = [];
       for (const call of j.toolCalls) {
-        const output = await this.executeTool(call, onStatus);
+        const output = await this.executeTool(call, onStatus, true);
         if (call.toolName === 'create_app') created.push(output);
         toolResults.push({
           type: 'tool-result',
@@ -1741,10 +2799,11 @@ const Agent = {
         return { text: lastText, created, steps: step + 1 };
       }
 
-      messages = [...messages, ...(j.responseMessages || []), { role: 'tool', content: toolResults }];
+      messages = [...messages, ...(j.responseMessages || []), { role: 'tool', content: toolResults },
+                  ...this.steerMessages('sdk', steer && step + 1 < this.MAX_STEPS ? steer() : [])];
     }
 
-    return { text: lastText, created, steps: this.MAX_STEPS };
+    return { text: lastText, created, steps: this.MAX_STEPS, capped: true };
   },
 };
 
@@ -1824,11 +2883,40 @@ function pickCanned(p) {
    `source` and a user turn's `shots` are in-memory only (`src`, `shots`), dropped on save.
    -------------------------------------------------------------------- */
 
+// What the desktop can do, offered as chips under the chat intro while the
+// log is empty (ui/chat.js paints them, and drops them after the first turn).
+// Data in the kernel, not the ui: a forked chat.js offers the same three and
+// scripts/e2e/example-prompts.mjs sends each through the chat and asserts the
+// outcome on the desktop. A fourth, "Switch to use gpt-6-astra inside this
+// agent by default", was dropped: the id is not one a Codex login can reach,
+// so the chip left a ChatGPT desktop answering only the provider's 400.
+const EXAMPLE_PROMPTS = [
+  'Create an app to track my calories from webcam photos',
+  'Update all UI to match Windows Vista',
+  'Create app that is a Clippy in the corner of the screen',
+];
+
+// Vercel's analytics API exposes event counts but not event properties, so
+// the error on gen_failed is unreadable from outside the dashboard. A coarse
+// bucket as its own event name is countable: 9 failures in a day could be
+// one expired key or a broken deploy, and those need different fixes.
+function trackFailure(failure) {
+  track('gen_failed', { error: String(failure).slice(0, 80) });
+  const msg = String(failure).toLowerCase();
+  const bucket = /api key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
+    : /timed out|timeout|failed to fetch|network|econn/.test(msg) ? 'network'
+    : /not supported|model|400|bad request/.test(msg) ? 'model'
+    : /429|rate limit|quota|insufficient/.test(msg) ? 'quota'
+    : 'other';
+  track('gen_failed_' + bucket);
+}
+
 const Chat = {
   turns: [],        // the log, as system/chat.json holds it, plus in-memory extras
   history: [],      // what the model is sent: the text of each turn
   pending: [],      // pictures attached and not yet sent
   running: null,    // { me, reply, status } while a turn is in flight
+  starting: false,  // a turn was accepted and is reading the log; not running yet
   restored: 0,      // how many turns the load restored; the chat says so after them
   loadError: '',    // why the log could not be read
   note: null,       // a reload note with no turn to land in
@@ -1874,6 +2962,12 @@ const Chat = {
     catch (e) { this.loadError = 'could not restore ' + ChatLog.PATH + ': ' + e.message; }
     const note = this.reloadNote();
     if (restored) this.turns = restored;
+    // A line that landed before the log was read (Theme.verify's lost id or
+    // parse error runs beside this read) was recorded at 0 and painted
+    // between the intro and the first restored turn — the top of a long log,
+    // out of sight. No turn can run before ready, so every note here is
+    // early: it lands after the restored turns, where the person looks.
+    for (const n of this.notes) n.at = this.turns.length;
     if (restored && restored.length) {
       const last = restored[restored.length - 1];
       if (note && last && last.role === 'assistant' && !last.text) {
@@ -1922,16 +3016,153 @@ const Chat = {
   },
   detach(i) { this.pending.splice(i, 1); this.emit('chips'); },
 
-  async send(text) {
+  /* ---- steering: what the person types while a turn is running ---------
+
+     send used to answer a send during a turn with a line and a bare return,
+     and the composer had already emptied the box — the typed text was gone.
+     It never refuses silently now, and never eats the text: it says at once
+     what happened to it, and the composer clears only when it was taken.
+
+       { started: <promise of the turn> }  this text is the turn now running
+       { queued: entry }                   a turn was running; it waits here
+       null                                refused — the line says why and the
+                                           text stays the caller's
+
+     The queue is drained by the tool loop between steps (drain, handed in as
+     `steer`), so a correction reaches the model mid-work. It is memory only,
+     never system/chat.json: a queued message without the turn it was meant to
+     steer arrives with no context, and the turn itself does not survive a
+     reload. A drained entry is an ordinary user turn in the log from that
+     moment, saved like every other.  */
+  QUEUE_MAX: 5,
+  queue: [],
+  // Every picture that will ride in the SAME request body: the running turn's
+  // own, plus each one drained into it. The per-turn cap is a cap on one body
+  // (Attachments.MAX_COUNT / MAX_BYTES), and a drain appends every queued
+  // entry to one request — three steers of two images each sailed past four
+  // images and 3 MB with no refusal, straight into a provider 413. Kept here
+  // so a steer is measured against what the turn already carries.
+  turnImages: [],
+
+  send(text) {
     text = String(text || '').trim();
-    if (!text && !this.pending.length) return;
+    if (!text && !this.pending.length) return null;
     // Pictures put back after a failure can stack past the cap; refuse here
-    // rather than let the body grow past what the server will take.
+    // rather than let the body grow past what the server will take — at queue
+    // time too, so a steer carrying too many is refused as it is typed.
     try { Attachments.check(this.pending); }
-    catch (e) { this.line(e.message, true); return; }
-    if (this.running) { this.line('a turn is still running; wait for its reply before sending another', true); return; }
+    catch (e) { this.line(e.message, true); return null; }
+    // `starting` is the window between a send and the turn it starts: the log
+    // is read first (await), and a second send in that gap used to start a
+    // second turn beside the first. It is a turn in flight as far as the
+    // composer is concerned, so the text is steered into it.
+    if (this.running || this.starting) return this.steer(text);
     const images = this.pending.splice(0);
     this.emit('chips');
+    this.starting = true;
+    this.turnImages = images.slice();
+    return { started: this.turnGuarded(text, images) };
+  },
+
+  // Nobody awaits a turn — the composer wants its answer now, not in a
+  // minute — so a throw that escapes one is said in the log rather than left
+  // as an unhandled rejection on the console.
+  turnGuarded(text, images) {
+    return this.runTurn(text, images).catch(e => {
+      this.running = null; this.starting = false;
+      this.turnImages = [];
+      this.line('the turn ended badly: ' + e.message, true);
+      this.emit('done', { reply: null, failure: e.message });
+      // A turn can throw outside finish() — runTurn awaits the log and opens
+      // the chat window before any try — and a message queued against that
+      // turn was stranded: painted as waiting, with nothing running, delivered
+      // only on the next unrelated send and out of order. It is the next turn
+      // now, the way a steer that lands after the last step is.
+      this.flushQueue();
+    });
+  },
+
+  // A message typed while a turn runs: painted at once as a pending user
+  // line, handed to the model at the turn's next step.
+  steer(text) {
+    if (this.queue.length >= this.QUEUE_MAX) {
+      this.line(`${this.QUEUE_MAX} messages are already waiting for the agent — it takes them at its next step`, true);
+      return null;
+    }
+    // The cap is per request body, and this entry's pictures will be appended
+    // to the running turn's request, not sent on their own.
+    try { Attachments.check([...this.turnImages, ...this.queue.flatMap(e => e.images), ...this.pending]); }
+    catch (e) { this.line(e.message + ' — the pictures already in this turn count', true); return null; }
+    const entry = { text, images: this.pending.splice(0) };
+    this.queue.push(entry);
+    this.emit('chips');
+    this.emit('queued', { entry });
+    return { queued: entry };
+  },
+
+  /* The loop's drain, between two steps. Every queued entry becomes a real
+     user turn in the log — inserted before the reply still in flight, so the
+     log reads in the order it happened and still ends on the assistant — and
+     is handed back for this request's messages. */
+  drain() {
+    if (!this.queue.length) return [];
+    const taken = this.queue.splice(0);
+    const reply = this.running && this.running.reply;
+    const at = reply ? this.turns.indexOf(reply) : -1;
+    const start = at < 0 ? this.turns.length : at;
+    let i = start;
+    for (const e of taken) {
+      e.me = { role: 'user', text: e.text, images: e.images.length, shots: e.images.map(im => im.dataUrl) };
+      this.turns.splice(i++, 0, e.me);
+    }
+    // A note is an index into turns, and these splices move every turn from
+    // `start` on — a line recorded during this turn (it points at the reply)
+    // otherwise painted above the steered bubble instead of above the reply.
+    for (const n of this.notes) if (n.at >= start) n.at += taken.length;
+    // Those pictures are in this turn's request from here on.
+    this.turnImages.push(...taken.flatMap(e => e.images));
+    this.persist();
+    this.emit('queued', { drained: taken.length });
+    return taken;
+  },
+
+  // Taking a queued message back before a step drains it. By identity, not
+  // by index: a drain can land between the paint that drew the control and
+  // the click on it, and an index would then pull the wrong message — or one
+  // already on its way. Returns what it removed, so the composer can put the
+  // text back with its pictures; nothing to remove is not an error, the drain
+  // simply won.
+  unqueue(entry) {
+    const i = this.queue.indexOf(entry);
+    if (i < 0) return null;
+    this.queue.splice(i, 1);
+    this.emit('queued', { unqueued: 1 });
+    return entry;
+  },
+
+  // A queue no turn can take any more (reload_os ends the page). Loud: the
+  // person is waiting for an answer that will never come.
+  dropQueue(why) {
+    const n = this.queue.splice(0).length;
+    if (!n) return 0;
+    this.line(`${n} queued message${n === 1 ? '' : 's'} dropped — ${why}; type ${n === 1 ? 'it' : 'them'} again`, true);
+    this.emit('queued', { dropped: n });
+    return n;
+  },
+
+  // A steer that landed after the model's last step has no step left to join,
+  // so it becomes the next turn by itself, with no click. Anything queued
+  // behind it steers that turn the way any message does.
+  flushQueue() {
+    if (this.running || this.starting || !this.queue.length) return;
+    const next = this.queue.shift();
+    this.emit('queued', { flushed: 1 });
+    this.starting = true;
+    this.turnImages = next.images.slice();
+    this.turnGuarded(next.text, next.images);
+  },
+
+  async runTurn(text, images) {
     // A send before the log is read used to write this pair over the whole
     // history, then paint the history under it. The read is awaited before
     // anything is painted or written; a log that could not be read was
@@ -1955,6 +3186,7 @@ const Chat = {
     const reply = { role: 'assistant', text: '', cards: [] };
     this.turns.push(me, reply);
     this.running = { me, reply, status: 'thinking…' };
+    this.starting = false;
     this.offer = null;
     this.persist();
     this.emit('turn', { me, reply });
@@ -1963,22 +3195,30 @@ const Chat = {
       this.running.status = String(status);
       this.emit('status', { text: this.running.status });
     };
+    // What the loop took from the queue mid-turn, in the order it took it:
+    // the entries are already user turns in the log, and history has to end
+    // up reading first message, each correction, then the one reply.
+    const steered = [];
+    const steer = () => { const taken = this.drain(); steered.push(...taken); return taken; };
     const remember = (sent, said) => {
       me.images = sent ? images.length : 0;
       reply.text = said.slice(0, 1200);
       if (failure) reply.failure = failure;
       this.persist();
       // An image-only turn has no text to lead with; do not remember a bare newline.
-      const turn = ChatLog.content(me);
-      if (!turn) return;
-      this.history.push({ role: 'user', content: turn }, { role: 'assistant', content: reply.text });
+      const users = [ChatLog.content(me), ...steered.map(s => ChatLog.content(s.me))].filter(Boolean);
+      if (!users.length) return;
+      for (const content of users) this.history.push({ role: 'user', content });
+      this.history.push({ role: 'assistant', content: reply.text });
     };
     // A picture that did not go through returns to the chip row, so the next
     // try — "Add a key", or just pressing Send again — carries it. Before this
     // the chips were cleared before the request, and the retry sent text that
     // talked about a screenshot it no longer had.
     const giveBack = () => { this.pending.unshift(...images); this.emit('chips'); };
-    const finish = () => { this.running = null; this.emit('done', { reply, failure }); };
+    // A steer that arrived too late for this turn's last step goes out as the
+    // next one, at once and with no click.
+    const finish = () => { this.running = null; this.turnImages = []; this.emit('done', { reply, failure }); this.flushQueue(); };
 
     // Both paths are the agent now. Signing in with ChatGPT proxies through
     // vibeos.sh; a pasted key talks to the provider from this page. Same
@@ -1986,8 +3226,8 @@ const Chat = {
     if (Gen.available && (Gen.oauth || Gen.key)) {
       try {
         const result = Gen.oauth
-          ? await Gen.generate(text, prior, onStatus, images)
-          : await Agent.runWithKey(text, prior, onStatus, images);
+          ? await Gen.generate(text, prior, onStatus, images, steer)
+          : await Agent.runWithKey(text, prior, onStatus, images, steer);
         live = true;
         // What history remembers of the turn: the reply, else what was
         // built. A refused create_app built nothing, so a turn that only
@@ -2011,13 +3251,18 @@ const Chat = {
             this.card({ kind: 'window', title: item.title, where: where ? 'saved to ' + where + headed : 'opened on the desktop' });
           }
         }
+        // The loop fell out of its last step: say so rather than ending on
+        // half a job with no explanation.
+        if (result.capped) {
+          this.line(`the agent stopped at its step budget: ${result.steps} of ${Agent.MAX_STEPS} tool steps used — `
+            + (built ? 'created ' + built : 'nothing was created')
+            + '; send another message to carry on with what is left');
+        }
         finish();
       } catch (e) {
         failure = e.message;
         giveBack();
-        const source = CANNED[pickCanned(text)];
-        remember(false, source);
-        await this.openFromSource(source, text, false, failure);
+        this.failed(failure, remember);
         finish();
       }
       return;
@@ -2030,6 +3275,11 @@ const Chat = {
     } catch (e) {
       failure = e.message;
       giveBack();
+      // A model that answered with an error is an error on screen and
+      // nothing on the desktop (this.failed). No model at all is the one
+      // case a stock module stands in, on purpose: the demo a desktop with
+      // no key gives, with the "Add a key" offer under it.
+      if (failure !== 'no model configured') { this.failed(failure, remember); finish(); return; }
       source = CANNED[pickCanned(text)];
     }
     remember(live, source);
@@ -2043,6 +3293,41 @@ const Chat = {
     finish();
   },
 
+  // A model reply that failed. It used to open a stock module — a Clock
+  // for "build me a dashboard" — and say "fell back" under it, so a bad
+  // model id or a dead key looked like a desktop that half-worked. Now the
+  // turn is the provider's words as an error line, history remembers the
+  // turn failed, nothing is created, and the chat offers the reset below.
+  failed(failure, remember) {
+    remember(false, 'the request failed: ' + failure);
+    trackFailure(failure);
+  },
+
+  // The model the next request goes out as when the override is cleared:
+  // the Codex default for a ChatGPT login, the kernel's own line for a
+  // pasted key (Gen.codexModel never applied there). Empty with no model.
+  defaultModel() {
+    if (!Gen.available) return '';
+    return Gen.provider === 'openai-codex' ? VibeOSOAuth.CODEX_MODEL : Gen.model;
+  },
+  // The button on a failed turn: clear Settings › Model (vibeos-codex-model)
+  // through the setter, so Gen.model is the default, and send the same
+  // prompt again — the pictures went back to the chip row when it failed.
+  async resetModelAndRetry(text) {
+    if (typeof text !== 'string') throw new Error('resetModelAndRetry: the prompt to resend must be a string');
+    const to = this.defaultModel();
+    if (!to) throw new Error('no model to reset to: none is connected');
+    track('model_reset', { to });
+    Gen.saveCodexModel('');
+    if (Gen.model !== to) throw new Error('the model override was cleared but Gen.model is ' + Gen.model + ', not ' + to);
+    this.line('model reset to ' + to);
+    // send answers with what became of the text, not with the turn: wait for
+    // the turn itself when there is one, so a caller that awaits this still
+    // returns once the retry is done.
+    const out = this.send(text);
+    if (out && out.started) await out.started;
+  },
+
   // Retry the same request, now for real. The pictures are already back in
   // the chip row (giveBack), so they go with it this time.
   async retryWithKey() {
@@ -2054,7 +3339,8 @@ const Chat = {
     track('key_offer_added');
     this.offer = null;
     this.emit('offer');
-    await this.send(offer.text);
+    const out = this.send(offer.text);
+    if (out && out.started) await out.started;
   },
 
   async openFromSource(source, text, live, failure) {
@@ -2062,20 +3348,7 @@ const Chat = {
     const title = parseTitle(source) || text.slice(0, 30);
     if (live) track('app_generated', { target });
     else if (failure === 'no model configured') track('app_stock', { target });
-    else {
-      track('gen_failed', { target, error: String(failure).slice(0, 80) });
-      // Vercel's analytics API exposes event counts but not event properties,
-      // so the error above is unreadable from outside the dashboard. A coarse
-      // bucket as its own event name is countable: 9 failures in a day could
-      // be one expired key or a broken deploy, and those need different fixes.
-      const msg = String(failure).toLowerCase();
-      const bucket = /api key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
-        : /timed out|timeout|failed to fetch|network|econn/.test(msg) ? 'network'
-        : /not supported|model|400|bad request/.test(msg) ? 'model'
-        : /429|rate limit|quota|insufficient/.test(msg) ? 'quota'
-        : 'other';
-      track('gen_failed_' + bucket, { target });
-    }
+    else throw new Error('openFromSource with a failed model reply: ' + failure + ' (Chat.failed is the path for that)');
 
     if (target === 'vm') {
       const file = parseFile(source) || 'script.sh';
