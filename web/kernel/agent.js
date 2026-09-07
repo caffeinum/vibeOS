@@ -2935,6 +2935,20 @@ const Chat = {
     return taken;
   },
 
+  // Taking a queued message back before a step drains it. By identity, not
+  // by index: a drain can land between the paint that drew the control and
+  // the click on it, and an index would then pull the wrong message — or one
+  // already on its way. Returns what it removed, so the composer can put the
+  // text back with its pictures; nothing to remove is not an error, the drain
+  // simply won.
+  unqueue(entry) {
+    const i = this.queue.indexOf(entry);
+    if (i < 0) return null;
+    this.queue.splice(i, 1);
+    this.emit('queued', { unqueued: 1 });
+    return entry;
+  },
+
   // A queue no turn can take any more (reload_os ends the page). Loud: the
   // person is waiting for an answer that will never come.
   dropQueue(why) {

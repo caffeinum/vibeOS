@@ -251,12 +251,24 @@ export function ChatApp(body, win) {
   // A message typed while a turn runs: sent as far as the person is
   // concerned, waiting for the agent's next step. Its own class, its text
   // and its pictures through textContent like any user turn.
+  // A waiting message can be taken back until a step drains it: steering is
+  // for the moment you realise the agent is doing the wrong thing, and half
+  // that moment is realising your correction was wrong too. The text goes
+  // back to the composer with its pictures, so it can be fixed and sent
+  // again rather than retyped.
   const paintQueued = (e) => {
-    const b = bubble('you', '<span id="t"></span><span class="tiny" id="q"></span>');
+    const b = bubble('you', '<span id="t"></span><span class="tiny" id="q"></span><button class="x" id="unq" title="Take it back"></button>');
     b.className = 'queued';
     b.style.opacity = '.72';
     b.querySelector('#t').textContent = e.text;
     b.querySelector('#q').textContent = ' · waiting for the agent';
+    b.querySelector('#unq').textContent = '\u00d7';
+    b.querySelector('#unq').onclick = () => {
+      if (!Chat.unqueue(e)) return;              // a drain won the race; it is on its way
+      input.value = input.value ? e.text + '\n' + input.value : e.text;
+      if (e.images && e.images.length) { Chat.pending.unshift(...e.images); Chat.emit('chips'); }
+      input.focus();
+    };
     for (const img of e.images || []) { const el = document.createElement('img'); el.className = 'shot'; el.alt = ''; el.src = img.dataUrl; b.appendChild(el); }
   };
 
