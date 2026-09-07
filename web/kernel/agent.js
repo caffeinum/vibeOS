@@ -2292,7 +2292,14 @@ const Agent = {
         if (call.toolName === 'create_app') created.push(output);
         results.push({ id: call.id, output });
       }
-      const taken = steer ? steer() : [];
+      // Only when another request will actually carry it. On the last allowed
+      // step the loop falls out and `msgs` is discarded, so a drain there
+      // consumed the queue, painted the steer as a real turn and answered it
+      // with a reply that could not have accounted for it — delivered with no
+      // answer, which is worse than late. Left queued, `finish()` flushes it
+      // into the next turn.
+      const more = step + 1 < this.MAX_STEPS;
+      const taken = steer && more ? steer() : [];
       msgs = anthropic
         ? [...msgs, { role: 'assistant', content: res.raw },
            { role: 'user', content: [...results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: toolResultText(r.output) })),
@@ -2602,7 +2609,7 @@ const Agent = {
       }
 
       messages = [...messages, ...(j.responseMessages || []), { role: 'tool', content: toolResults },
-                  ...this.steerMessages('sdk', steer ? steer() : [])];
+                  ...this.steerMessages('sdk', steer && step + 1 < this.MAX_STEPS ? steer() : [])];
     }
 
     return { text: lastText, created, steps: this.MAX_STEPS };
