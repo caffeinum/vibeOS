@@ -1,11 +1,21 @@
+  /* A theme is a block in this file. The default palette is :root; every
+     other theme is a [data-theme="<id>"] block on <html> with the same token
+     names, and the comment on the line before it — @theme <id>: <Title> —
+     <summary> — is what Settings > Design lists: the parser (Theme.list in
+     kernel/agent.js) refuses a header without a block and a block without a
+     header, naming the line. The default's header sits on :root itself.
+     Selecting a theme sets data-theme on <html> and stores the id in this
+     browser; the agent adds a theme by adding a block. */
+  /* @theme vibeos-dark: vibeOS dark — The desktop’s own palette, inherited as CSS custom properties. */
   :root {
+    color-scheme: dark;
     --bg: #0a0a0c; --panel: #101219; --panel2: #0c0e14; --line: #23262f;
     --line2: #2a3244; --text: #f2f3f5; --dim: #8e93a0; --dimmer: #6b7181;
     --accent: #9db4ff; --ok: #4ade80; --warn: #fbbf24; --no: #f87171;
     --desk1: #c9b7d8; --desk2: #e8b9a8; --desk3: #d99f8e;
     /* chrome tokens — these were hardcoded hexes until light mode needed them */
     --bar: #161a23; --barline: #262b38; --btn: #161922; --btntext: #c9d3e6;
-    --focus: #3a4560; --sel: #1d2536; --hover: #171b26;
+    --focus: #3a4560; --sel: #1d2536; --seltext: #ffffff; --hover: #171b26;
     --title1: #2b3146; --title2: #171b26; --titletext: #e8eaf0;
     --pbtn: #f2f3f5; --pbtntext: #0a0a0c;
     --winbg: rgba(16,18,25,.97); --scroll: rgba(255,255,255,.14);
@@ -18,6 +28,102 @@
     --font-ui: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
     --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   }
+  /* @theme vibeos-light: vibeOS light — The same desktop, inverted. Same token names, so nothing needs rewriting. */
+  [data-theme="vibeos-light"] {
+    color-scheme: light;
+    --bg: #eef0f4;
+    --desk1: #c9b7d8; --desk2: #e8b9a8; --desk3: #d99f8e;
+    --panel: #ffffff; --panel2: #f5f6fa;
+    --line: #e2e5ec; --line2: #ccd2de;
+    --text: #12151c; --dim: #5b6273; --dimmer: #868d9d;
+    --accent: #3355dd; --ok: #15803d; --warn: #a16207; --no: #dc2626;
+    --bar: #ffffff; --barline: #e2e5ec;
+    --btn: #ffffff; --btntext: #12151c; --focus: #9aa6c4;
+    --sel: #e4e9f7; --seltext: #12151c; --hover: #f0f2f7;
+    --title1: #f7f8fb; --title2: #eef0f5; --titletext: #12151c;
+    --pbtn: #1f2937; --pbtntext: #ffffff;
+    --winbg: rgba(255,255,255,.97); --scroll: rgba(0,0,0,.20);
+    --warnline: #e7cfa1; --up1: #eef2ff; --up2: #ffffff; --upline: #c7d2fe;
+    --radius-win: 12px; --radius-ctl: 8px; --radius-sm: 5px; --radius-pill: 999px;
+    --shadow-win: 0 30px 70px -20px rgba(0,0,0,.75);
+    --border-w: 1px; --blur: 12px;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  /* Proof the shape tokens are enough for a look, not just a palette. */
+  /* @theme win95: Windows 95 — Square corners, bevelled grey, teal desktop. No shadows, no blur. */
+  [data-theme="win95"] {
+    --bg: #008080; --desk1: #008080; --desk2: #008080; --desk3: #008080;
+    --panel: #c0c0c0; --panel2: #ffffff;
+    --line: #808080; --line2: #404040;
+    --text: #000000; --dim: #404040; --dimmer: #808080;
+    --accent: #000080; --ok: #008000; --warn: #808000; --no: #800000;
+    --bar: #c0c0c0; --barline: #808080;
+    --btn: #c0c0c0; --btntext: #000000; --focus: #000080;
+    --sel: #000080; --seltext: #ffffff; --hover: #d4d0c8;
+    --title1: #000080; --title2: #1084d0; --titletext: #ffffff;
+    --pbtn: #c0c0c0; --pbtntext: #000000;
+    --winbg: #c0c0c0; --scroll: #808080;
+    --warnline: #808000; --up1: #c0c0c0; --up2: #c0c0c0; --upline: #808080;
+    --radius-win: 0px; --radius-ctl: 0px; --radius-sm: 0px; --radius-pill: 0px;
+    --shadow-win: 2px 2px 0 #000000;
+    --border-w: 2px; --blur: 0px;
+    --font-ui: "MS Sans Serif", "Pixelated MS Sans Serif", Tahoma, Arial, sans-serif;
+    --font-mono: "Fixedsys", "Lucida Console", monospace;
+  }
+  /* @theme winxp: Windows XP — Luna blue, Bliss desktop, Tahoma. The look the first vibeOS demo wore. */
+  [data-theme="winxp"] {
+    --bg: #235cc4; --desk1: #4a8fd8; --desk2: #6fb0e0; --desk3: #7ab648;
+    --panel: #ece9d8; --panel2: #ffffff;
+    --line: #aca899; --line2: #0046d5;
+    --text: #000000; --dim: #3f3f3f; --dimmer: #7a7a70;
+    --accent: #0058ee; --ok: #2f8a2f; --warn: #d08b00; --no: #c02a2a;
+    --bar: #0058ee; --barline: #0046d5;
+    --btn: #ece9d8; --btntext: #000000; --focus: #ff9c00;
+    --sel: #316ac5; --seltext: #ffffff; --hover: #3f8cf3;
+    --title1: #0058ee; --title2: #3f8cf3; --titletext: #ffffff;
+    --pbtn: #ece9d8; --pbtntext: #000000;
+    --winbg: #ece9d8; --scroll: #b6c9e4;
+    --warnline: #d08b00; --up1: #eef3fb; --up2: #dce7f7; --upline: #9db8e0;
+    --radius-win: 8px; --radius-ctl: 3px; --radius-sm: 3px; --radius-pill: 999px;
+    --shadow-win: 0 10px 24px rgba(0, 0, 0, .35);
+    --border-w: 1px; --blur: 0px;
+    --font-ui: Tahoma, "Segoe UI", "DejaVu Sans", Verdana, sans-serif;
+    --font-mono: "Lucida Console", Consolas, "Courier New", monospace;
+  }
+  /* What the tokens cannot say. A compound selector is a theme's rules, not a
+     theme block: no @theme header goes on these, and parseThemes skips them.
+     Luna's title bar is a four-stop vertical gradient, not one colour, and its
+     bottom corners are square while the top two are round — a single
+     --radius-win cannot express that. */
+  [data-theme="winxp"] .titlebar {
+    background: linear-gradient(to bottom, #0058ee 0%, #3f8cf3 9%, #1c6fee 18%, #0058ee 82%, #0046d5 100%);
+    border-bottom: 0; padding: 5px 8px;
+  }
+  [data-theme="winxp"] .title { color: var(--titletext); text-shadow: 1px 1px 1px rgba(0, 0, 0, .35); font-weight: 700; }
+  [data-theme="winxp"] .win { border-top-left-radius: 8px; border-top-right-radius: 8px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+  /* XP's buttons are square-ish and sit at the right; the desktop keeps them
+     where they are, so only the shape changes. */
+  [data-theme="winxp"] .tl { border-radius: 3px; width: 16px; height: 14px; border: 1px solid rgba(255, 255, 255, .55); }
+  [data-theme="winxp"] .tl.r { background: #e04343; }
+  [data-theme="winxp"] .tl.y { background: #f0a830; }
+  [data-theme="winxp"] .tl.g { background: #4aa832; }
+  /* The base #desktop rule washes the palette with purple-to-pink so the web
+     and docker builds read as one product; on Luna that fights the sky, so
+     this theme paints Bliss itself — sky down to a green hill — instead of
+     tinting the tokens. */
+  [data-theme="winxp"] #desktop {
+    background:
+      linear-gradient(to bottom, #4a8fd8 0%, #79b4e8 42%, #b9d9ef 58%, #79a83c 63%, #5f8f2f 100%);
+  }
+  /* XP puts the window buttons at the right of the title bar. Order only —
+     the desktop keeps the same three elements and the same handlers, so a
+     theme cannot break closing a window. */
+  [data-theme="winxp"] .titlebar .tl { order: 2; }
+  [data-theme="winxp"] .titlebar .title { order: 1; margin-right: auto; }
+  [data-theme="winxp"] .titlebar .badge { order: 3; }
+  [data-theme="winxp"] #dock { background: linear-gradient(to bottom, #3f8cf3 0%, #245edb 10%, #245edb 100%); border-top: 1px solid #5b9bf5; }
+  [data-theme="winxp"] #menubar { background: linear-gradient(to bottom, #3f8cf3, #245edb 12%, #245edb); color: #ffffff; }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
@@ -41,18 +147,29 @@
     background-size: cover;
     background-position: center;
   }
+  /* Four pills and a clock do not fit a phone: the row is never allowed to
+     overflow (a menubar that scrolls sideways pushes the clock off the edge
+     and cannot be reached), so every pill shrinks and its text ellipsises,
+     and the clock and the brand keep their width. Add to Home Screen made
+     the phone the device this lands on. */
   #menubar {
     position: relative; z-index: 500; display: flex; align-items: center; gap: 14px;
     padding: 5px 12px; font-size: 12.5px; font-weight: 600; color: #2b2733;
     background: rgba(255,255,255,.34); backdrop-filter: blur(var(--blur));
+    overflow: hidden;
   }
-  #menubar .sp { flex: 1; }
+  #menubar .sp { flex: 1 1 0; min-width: 0; }
+  #menubar > strong, #menubar > #clock, #menubar > img { flex: 0 0 auto; }
   .pill {
     display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px;
     border-radius: var(--radius-pill); background: rgba(0,0,0,.16); font-size: 11px;
+    flex: 0 1 auto; min-width: 0; overflow: hidden;
   }
-  #wsPill { cursor: pointer; border: 0; color: inherit; font-weight: 600; }
-  #wsPill:hover { background: rgba(0,0,0,.28); }
+  .pill > span:not(.dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 700px) { #menubar { gap: 8px; } }
+  @media (max-width: 480px) { #menubar > strong { display: none; } }
+  #wsPill, #loginPill { cursor: pointer; border: 0; color: inherit; font-weight: 600; }
+  #wsPill:hover, #loginPill:hover { background: rgba(0,0,0,.28); }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
   .dot.warn { background: var(--warn); } .dot.off { background: var(--no); }
 
