@@ -3051,6 +3051,15 @@ const Chat = {
   send(text) {
     text = String(text || '').trim();
     if (!text && !this.pending.length) return null;
+    // Once per page: how long the person sat before asking for anything, and
+    // whether the machine had arrived by then. Bucketed, never the text — what
+    // they typed is theirs.
+    if (!this.asked) {
+      this.asked = true;
+      const s = Math.round(performance.now() / 1000);
+      track('first_prompt', { after: s < 5 ? '0-5s' : s < 15 ? '5-15s' : s < 30 ? '15-30s' : s < 60 ? '30-60s' : '60s+',
+        vm: VM.state, model: Gen.available ? 'yes' : 'no' });
+    }
     // Pictures put back after a failure can stack past the cap; refuse here
     // rather than let the body grow past what the server will take — at queue
     // time too, so a steer carrying too many is refused as it is typed.

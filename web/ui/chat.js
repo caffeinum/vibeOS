@@ -289,7 +289,7 @@ export function ChatApp(body, win) {
       chip.className = 'btn sm example';
       chip.type = 'button';
       chip.textContent = text;
-      chip.onclick = () => { input.value = text; send(); };
+      chip.onclick = () => { track('chip_click', { i: EXAMPLE_PROMPTS.indexOf(text), model: Gen.available ? 'yes' : 'no' }); input.value = text; send(); };
       row.appendChild(chip);
     }
     log.appendChild(row);

@@ -376,6 +376,15 @@ window.addEventListener('beforeunload', (e) => {
     await UI.load({ stock: true });
     await UI.open();
   }
+  // The funnel had a 21-second hole in it: `to_web_app` (the landing click)
+  // and then nothing until `vm_ready`, which is a CDN boot away. 62% of /app
+  // visits never reached a machine and there was no way to tell whether they
+  // left at two seconds having seen nothing or at fifteen having waited — a
+  // leak nobody can locate is not one you can fix. These three say when the
+  // desktop was usable, when the person first asked it for something, and how
+  // long they waited to do it.
+  track('app_open', { ms: Math.round(performance.now()) });
+
   // The machine's ready handler, registered after the ui is up and run at
   // once if the machine got there first: it ends in a dock repaint, and a boot
   // that reached 'ready' behind the modal used to find no dock to paint. On
@@ -397,6 +406,13 @@ window.addEventListener('beforeunload', (e) => {
   };
   VM.on((s, transition) => { if (s === 'ready' && transition) onReady(); });
   if (VM.state === 'ready') onReady();
+  // A model connected or forgotten changes what an app on // @requires ai
+  // can do: the dock greys or ungreys it, the way the machine's 'ready' does
+  // for shell.
+  Gen.on(() => { Promise.resolve().then(paintDock).catch(e => console.warn('dock repaint after a model change failed:', e)); });
+  // The same for an agent through vibeos-mcp: one whose client samples is a
+  // model for apps the moment it pairs, and none when it leaves.
+  RemoteBridge.on(() => { Promise.resolve().then(paintDock).catch(e => console.warn('dock repaint after an agent change failed:', e)); });
   // Ask once, while the machine boots behind it. Declining is fine — the
   // desktop still works, prompts just fall back to stock modules.
   if (!Gen.available) {
