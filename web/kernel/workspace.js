@@ -137,6 +137,9 @@ const Workspace = {
     const file = name.replace(/[^a-z0-9-_]+/gi, '-').toLowerCase().slice(0, 40) || 'app';
     const fh = await this.apps.getFileHandle(file + '.js', { create: true });
     const w = await fh.createWritable(); await w.write(source); await w.close();
+    // create_app lands here, not in writePath: without this an app the agent
+    // read and then rewrote stayed in its read memory as unchanged.
+    this.noteWrite('apps/' + file + '.js');
     return file + '.js';
   },
 
@@ -266,8 +269,18 @@ const Workspace = {
     if (forking) await this.recordFork(file);
     const fh = await dir.getFileHandle(name, { create: true });
     const w = await fh.createWritable(); await w.write(text); await w.close();
+    this.noteWrite(path);
     if (file) await SystemMirror.refresh(file);
   },
+  noteWrite(path) {
+    for (const fn of this.onWrite) { try { fn(path); } catch (e) { console.warn('workspace write hook failed for ' + path, e); } }
+  },
+  // Every path that reaches the disk, at the moment it lands: the agent's
+  // read memory (Reads, kernel/agent.js) invalidates from here, so a write
+  // through create_app or any other caller cannot leave a memory claiming
+  // the file is still as the model read it. A hook that throws is a warning,
+  // never a failed write — the bytes are already on disk.
+  onWrite: [],
   // First write of a loaded file: pin the version it came from in
   // system/os.version.json, one entry per file since they fork on different
   // days. Written before the fork itself, so a fork with no record
@@ -371,6 +384,28 @@ function parseTitle(src) {
   return m ? m[1].trim() : null;
 }
 
+// Where a window opens: `// @geometry <corner> [WxH]`, `// @geometry
+// x,y,w,h` or `// @geometry WxH` (a size, cascaded like any window — the
+// shape the model wrote first, twice in two runs), in px. null without the
+// header; a header that is none of those throws naming them — create_app
+// refuses the source rather than open the window somewhere else and say it
+// did what was asked.
+const GEOMETRY_CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+function parseGeometry(src) {
+  const m = /^\s*\/\/\s*@geometry\s+(.+)$/m.exec(src);
+  if (!m) return null;
+  const line = m[1].trim();
+  const nums = line.match(/^(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)$/);
+  if (nums) return { x: +nums[1], y: +nums[2], w: +nums[3], h: +nums[4] };
+  const size = line.match(/^(\d+)\s*[x×]\s*(\d+)$/i);
+  if (size) return { w: +size[1], h: +size[2] };
+  const corner = line.match(/^([a-z]+-[a-z]+)(?:\s+(\d+)\s*[x×]\s*(\d+))?$/i);
+  if (corner && GEOMETRY_CORNERS.includes(corner[1].toLowerCase())) {
+    return { corner: corner[1].toLowerCase(), w: corner[2] ? +corner[2] : 430, h: corner[3] ? +corner[3] : 320 };
+  }
+  throw new Error('// @geometry must be one of ' + GEOMETRY_CORNERS.join(', ') + ' with an optional <w>x<h>, or <x>,<y>,<w>,<h>, or <w>x<h> alone, in px — got: ' + line.slice(0, 60));
+}
+
 // A .js file is a dock app only if it carries the header the agent always
 // writes. Before this gate, any .js that reached /mnt or apps/ by any route —
 // curl, apt, an unpacked archive — was listed in the dock under its filename
@@ -397,6 +432,10 @@ function classifyApp(name, { source, error }) {
   const title = parseTitle(source);
   if (!title) return { name, reason: NOT_AN_APP.header };
   if (parseTarget(source) === 'vm') return { name, reason: NOT_AN_APP.vm };
+  // A header create_app would refuse, in a file that reached the folder or
+  // /mnt some other way: unlisted with that reason, or the dock listed it and
+  // a click on it threw in launchApp with nothing on screen.
+  try { parseGeometry(source); } catch (e) { return { name, reason: e.message }; }
   return { name, source, title, requires: parseRequires(source) };
 }
 
@@ -425,7 +464,25 @@ const missingCaps = reqs => reqs.filter(r => !CAP.supports[r]);
 // message because the model reads it as the tool result and tries again.
 // A "Console log viewer" with @requires none is the accepted false positive:
 // it is refused too, and the message says what to change.
+// 60 lines was the ceiling from the first tool-using agent, when an app was a
+// one-shot clock with no api and nothing enforced it either. Apps have had
+// api.ai, api.tty, api.net, api.shell and @geometry since, and the model was
+// visibly working around the number (aleks, 2026-09-09: "1000 limit, 200
+// target"). The target lives in the contract; this is the ceiling, and it is
+// enforced because a rule nobody checks is advice — at five times the target a
+// long app is a runaway, not a thorough one.
+const APP_MAX_LINES = 1000;
+
 function lintApp(title, requires, source) {
+  const lines = source.split('\n').length;
+  if (lines > APP_MAX_LINES) {
+    return { rule: 'too_long', error: `${lines} lines; the ceiling is ${APP_MAX_LINES} and the target is about 200. Cut it to the app the person asked for, or build it as a few smaller apps.` };
+  }
+  // An app that declares ai and never asks the model is the manual logger
+  // the calorie chip used to produce, with a connect prompt in front of it.
+  if (requires.includes('ai') && !/api\.ai\b/.test(source)) {
+    return { rule: 'unused_ai', error: 'declares // @requires ai but never calls api.ai.generate(). Ask the model through api.ai.generate({ prompt, images, json }) or drop the requirement.' };
+  }
   if (/api\.(shell|tty)\s*\(/.test(source)) return null;
   const machine = `The machine is ${VM.state}.`;
   if (/\b(terminal|term|shell|console)\b/i.test(title)) {
