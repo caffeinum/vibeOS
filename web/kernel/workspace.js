@@ -464,20 +464,12 @@ const missingCaps = reqs => reqs.filter(r => !CAP.supports[r]);
 // message because the model reads it as the tool result and tries again.
 // A "Console log viewer" with @requires none is the accepted false positive:
 // it is refused too, and the message says what to change.
-// 60 lines was the ceiling from the first tool-using agent, when an app was a
-// one-shot clock with no api and nothing enforced it either. Apps have had
-// api.ai, api.tty, api.net, api.shell and @geometry since, and the model was
-// visibly working around the number (aleks, 2026-09-09: "1000 limit, 200
-// target"). The target lives in the contract; this is the ceiling, and it is
-// enforced because a rule nobody checks is advice — at five times the target a
-// long app is a runaway, not a thorough one.
-const APP_MAX_LINES = 1000;
-
+// Length is guidance in the contract (about 200 lines, under 1000), NOT a
+// rule here: a ceiling was enforced for twenty minutes on 2026-09-09 and
+// aleks reversed it — a long app that works is the person's business, and
+// refusing one throws away work the model already did. The lint refuses only
+// what is provably broken.
 function lintApp(title, requires, source) {
-  const lines = source.split('\n').length;
-  if (lines > APP_MAX_LINES) {
-    return { rule: 'too_long', error: `${lines} lines; the ceiling is ${APP_MAX_LINES} and the target is about 200. Cut it to the app the person asked for, or build it as a few smaller apps.` };
-  }
   // An app that declares ai and never asks the model is the manual logger
   // the calorie chip used to produce, with a connect prompt in front of it.
   if (requires.includes('ai') && !/api\.ai\b/.test(source)) {
