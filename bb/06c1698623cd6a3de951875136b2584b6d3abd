@@ -1,0 +1,35 @@
+web/image-bases.js
+  s_eacdf770d99162::t_ec5ed9b6a527ba 16-52
+web/kernel/agent.js
+  s_eacdf770d99162::t_587baf5a5b9b66 648,949-951,1596-1598,1640-1697,1894-1902,1907-1935,1937-1955,1964,2001,2034,2040-2105,2165-2173,2306-2309,2311-2326,2402-2485,2487-2595,2600-2628,2698-2703,2719-2722,2725-2728,2733-2745,2751,2771,2836-2841,2956-2977,2982-2993,3073,3076,3083-3087,3089,3100,3118,3362-3370,3575-3581
+web/kernel/boot.js
+  s_eacdf770d99162::t_814b05924ca2de 379-387
+web/kernel/machine.js
+  s_eacdf770d99162::t_7d3e587a8aa0d9 16-24,662-684,688-689,691-697
+web/kernel/workspace.js
+  s_eacdf770d99162::t_46b2e4e60b07a3 140-142,272,275-283,467-471
+web/os.css
+  s_eacdf770d99162::t_e8d85850f342a8 74-126
+web/ui/chat.js
+  s_eacdf770d99162::t_5d252fd37ef251 187-188,192,196-205,208-211,302
+web/ui/settings.js
+  s_eacdf770d99162::t_6dda305823cef5 578,734-741,747-751
+web/ui/windows.js
+  s_eacdf770d99162::t_a1ebaeed20b092 184-204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bb06c1698623cd6a3de951875136b2584b6d3abd",
+  "prompts": {},
+  "sessions": {
+    "s_eacdf770d99162": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37e46d39-19cd-49f9-831e-7abcb9428a8d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
