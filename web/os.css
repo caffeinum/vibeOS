@@ -71,6 +71,59 @@
     --font-ui: "MS Sans Serif", "Pixelated MS Sans Serif", Tahoma, Arial, sans-serif;
     --font-mono: "Fixedsys", "Lucida Console", monospace;
   }
+  /* @theme winxp: Windows XP — Luna blue, Bliss desktop, Tahoma. The look the first vibeOS demo wore. */
+  [data-theme="winxp"] {
+    --bg: #235cc4; --desk1: #4a8fd8; --desk2: #6fb0e0; --desk3: #7ab648;
+    --panel: #ece9d8; --panel2: #ffffff;
+    --line: #aca899; --line2: #0046d5;
+    --text: #000000; --dim: #3f3f3f; --dimmer: #7a7a70;
+    --accent: #0058ee; --ok: #2f8a2f; --warn: #d08b00; --no: #c02a2a;
+    --bar: #0058ee; --barline: #0046d5;
+    --btn: #ece9d8; --btntext: #000000; --focus: #ff9c00;
+    --sel: #316ac5; --seltext: #ffffff; --hover: #3f8cf3;
+    --title1: #0058ee; --title2: #3f8cf3; --titletext: #ffffff;
+    --pbtn: #ece9d8; --pbtntext: #000000;
+    --winbg: #ece9d8; --scroll: #b6c9e4;
+    --warnline: #d08b00; --up1: #eef3fb; --up2: #dce7f7; --upline: #9db8e0;
+    --radius-win: 8px; --radius-ctl: 3px; --radius-sm: 3px; --radius-pill: 999px;
+    --shadow-win: 0 10px 24px rgba(0, 0, 0, .35);
+    --border-w: 1px; --blur: 0px;
+    --font-ui: Tahoma, "Segoe UI", "DejaVu Sans", Verdana, sans-serif;
+    --font-mono: "Lucida Console", Consolas, "Courier New", monospace;
+  }
+  /* What the tokens cannot say. A compound selector is a theme's rules, not a
+     theme block: no @theme header goes on these, and parseThemes skips them.
+     Luna's title bar is a four-stop vertical gradient, not one colour, and its
+     bottom corners are square while the top two are round — a single
+     --radius-win cannot express that. */
+  [data-theme="winxp"] .titlebar {
+    background: linear-gradient(to bottom, #0058ee 0%, #3f8cf3 9%, #1c6fee 18%, #0058ee 82%, #0046d5 100%);
+    border-bottom: 0; padding: 5px 8px;
+  }
+  [data-theme="winxp"] .title { color: var(--titletext); text-shadow: 1px 1px 1px rgba(0, 0, 0, .35); font-weight: 700; }
+  [data-theme="winxp"] .win { border-top-left-radius: 8px; border-top-right-radius: 8px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+  /* XP's buttons are square-ish and sit at the right; the desktop keeps them
+     where they are, so only the shape changes. */
+  [data-theme="winxp"] .tl { border-radius: 3px; width: 16px; height: 14px; border: 1px solid rgba(255, 255, 255, .55); }
+  [data-theme="winxp"] .tl.r { background: #e04343; }
+  [data-theme="winxp"] .tl.y { background: #f0a830; }
+  [data-theme="winxp"] .tl.g { background: #4aa832; }
+  /* The base #desktop rule washes the palette with purple-to-pink so the web
+     and docker builds read as one product; on Luna that fights the sky, so
+     this theme paints Bliss itself — sky down to a green hill — instead of
+     tinting the tokens. */
+  [data-theme="winxp"] #desktop {
+    background:
+      linear-gradient(to bottom, #4a8fd8 0%, #79b4e8 42%, #b9d9ef 58%, #79a83c 63%, #5f8f2f 100%);
+  }
+  /* XP puts the window buttons at the right of the title bar. Order only —
+     the desktop keeps the same three elements and the same handlers, so a
+     theme cannot break closing a window. */
+  [data-theme="winxp"] .titlebar .tl { order: 2; }
+  [data-theme="winxp"] .titlebar .title { order: 1; margin-right: auto; }
+  [data-theme="winxp"] .titlebar .badge { order: 3; }
+  [data-theme="winxp"] #dock { background: linear-gradient(to bottom, #3f8cf3 0%, #245edb 10%, #245edb 100%); border-top: 1px solid #5b9bf5; }
+  [data-theme="winxp"] #menubar { background: linear-gradient(to bottom, #3f8cf3, #245edb 12%, #245edb); color: #ffffff; }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {

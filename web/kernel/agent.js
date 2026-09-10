@@ -645,7 +645,7 @@ Layout rules (required):
 - If a region scrolls, use an inner child with overflow:auto and scrollbar-width:thin (or class app-scroll) — never scroll mount itself.
 - Respond to resize: use flex/%/min-height:0 throughout, or api.onResize to reflow.
 
-Plain JavaScript only, no JSX, no imports, no external URLs. Under 60 lines and it must work.`;
+Plain JavaScript, no JSX, no external URLs. ONE import resolves and nothing else does: import { html, render } from 'lit' (lit-html 3, vendored with the desktop — no build step, no network). Its interpolations escape by default, so render(html\`<p>\${name}</p>\`, mount) is safe where innerHTML is not: reach for it instead of building markup by hand, and re-render the whole view on change rather than patching nodes. Plain DOM is fine for something small. Any other import, or any URL, fails at runtime. Aim for about 200 lines and stay under 1000. It must work.`;
 
 const CREATE_APP_LEAD = 'Create a vibeOS desktop window app (// @target browser, the contract below) or install a VM script (// @title, // @target vm, // @file <name.sh>, then a shell script for the Linux the prompt names). Pass complete source with the headers; the reply names the dock entry and the file. A window app is held to this contract:';
 const CREATE_APP_DESCRIPTION = CREATE_APP_LEAD + '\n' + APP_CONTRACT;
@@ -946,7 +946,9 @@ async function bridgeCall(call, event) {
   if (!GUEST_TOOLS.has(call.tool)) return { ok: false, error: 'unknown tool: ' + call.tool, available: [...GUEST_TOOLS, 'js'] };
   track(event, { tool: call.tool });
   let result;
-  try { result = await Agent.executeTool({ toolName: call.tool, input: call.input || {} }); }
+  // remember: false, spelled out — a read made by the guest CLI or a remote
+  // agent is not the chat model's own, and must never reach its read memory.
+  try { result = await Agent.executeTool({ toolName: call.tool, input: call.input || {} }, null, false); }
   catch (e) { result = { ok: false, error: e.message }; }
   if (event === 'guest_rpc') guestSystemNote(call, result);
   return result;
@@ -1591,6 +1593,9 @@ let remoteToken = null;
 // ask.
 const MCP_TOKEN_KEY = 'vibeos-mcp-token', MCP_AGENT_KEY = 'vibeos-mcp-agent', MCP_KEEP_KEY = 'vibeos-mcp-keep', MCP_EXPIRES_KEY = 'vibeos-mcp-expires';
 const MCP_REMEMBER_MS = 7 * 24 * 3600 * 1000;
+// How long the link's chat line waits for the agent to name itself: the
+// relay's {paired} lands first and the package's want frame follows in ms.
+const LINK_ANNOUNCE_MS = 1500;
 function setRemoteToken(token) {
   remoteToken = token;
   try {
@@ -1631,6 +1636,64 @@ const MCP_TOKEN_RE = /^[0-9a-f]{64}$/;
 // machine.js; the same-origin /api/mcp/relay is the fallback when this one
 // cannot be dialed, and `vibeos-mcp-relay` in localStorage overrides both.
 const MCP_RELAY_URL = 'wss://2yetm9bvy2.execute-api.us-east-1.amazonaws.com/prod';
+
+/* A pairing link: vibeos.sh/app#pair=<64 hex>[&relay=<encoded wss url>]
+
+   The other direction of "bring your own agent": the package mints the token
+   on the person's own machine and prints a link, so `claude mcp add vibeos --
+   npx vibeos-mcp` is the whole setup and the desktop is what opens second.
+   The pane's Pair button still mints in the tab; this is the same pairing
+   reached from the other end.
+
+   The fragment is read and REMOVED at kernel load, synchronously, before the
+   bridge exists and before anything can await: a token in the address bar is
+   root on this desktop sitting in the URL the person will copy, bookmark, or
+   screenshot, and a fragment survives a copy-paste of the location. It never
+   reaches the network on its own (a fragment is not sent), which is why the
+   package puts it there rather than in the query — but it does reach every
+   later reader of location.href, so the window between load and replaceState
+   is the whole exposure and it is closed here, not in the boot.
+   history.replaceState keeps the entry: pushState would leave the token one
+   Back away.
+
+   Parsed as key=value pairs split on &, not as a bare token: the package
+   appends &relay=<encoded> when it runs off a non-default relay, and a bare
+   read would take `<hex>&relay=...` as the token and fail the hex test with
+   the link looking broken. An unknown key is ignored rather than refused —
+   the package may add one before this file is updated.
+
+   Accepting is NOT automatic. The link is a capability: whoever holds it is
+   root on this desktop for seven days. The boot asks first (linkModal), and
+   a refusal drops it. */
+let pendingLink = (() => {
+  let raw = '';
+  try { raw = location.hash || ''; } catch { return null; }
+  if (!raw || raw.indexOf('pair=') === -1) return null;
+  const params = new URLSearchParams(raw.replace(/^#/, ''));
+  const token = params.get('pair');
+  // Strip the fragment whatever we make of it: a malformed pair= is still a
+  // secret someone typed, and leaving it in the bar helps nobody.
+  try { history.replaceState(null, '', location.pathname + location.search); }
+  catch (e) { console.warn('vibeOS: could not remove the pairing token from the address bar: ' + e.message); }
+  if (!token || !MCP_TOKEN_RE.test(token)) {
+    if (token) console.error('vibeOS: the pairing link carried a token that is not 64 hex; ignored');
+    return null;
+  }
+  let relay = params.get('relay') || '';
+  // Only ws/wss, and only a URL that parses: the relay carries every frame of
+  // the session, so a link that names one is naming where this desktop's
+  // traffic goes. It is shown in the warning for that reason.
+  if (relay) {
+    let u = null;
+    try { u = new URL(relay); } catch { u = null; }
+    if (!u || (u.protocol !== 'wss:' && u.protocol !== 'ws:')) {
+      console.error('vibeOS: the pairing link named a relay that is not a ws/wss URL; ignored');
+      relay = '';
+    }
+  }
+  return { token, relay };
+})();
+
 
 // A WebSocket that redials in place, the shape of RelaySocket without the
 // WISP stream bookkeeping: the relay is a serverless function that ends at
@@ -1828,13 +1891,68 @@ const RemoteBridge = {
     try { return localStorage.getItem(this.RELAY_KEY) || null; } catch { return null; }
   },
   originUrl() { return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/mcp/relay'; },
-  // override | aws | origin — which relay the next dial goes to.
-  get relay() { return this.override() ? 'override' : this.fellBack ? 'origin' : 'aws'; },
+  // container | broken | override | aws | origin — which relay the next dial
+  // goes to. A container's declaration outranks a stored override: the override
+  // is a value a PREVIOUS session left in this profile, and a container exists
+  // so that a pairing does not leave the box. Letting stale localStorage move a
+  // self-hosted pairing onto someone else's relay is a migration nobody chose.
+  get relay() {
+    if (this.containerDeclared()) return this.containerRelay() ? 'container' : 'broken';
+    return this.override() ? 'override' : this.fellBack ? 'origin' : 'aws';
+  },
   toolsFrame() {
     return { tools: TOOL_SCHEMAS, instructions: MCP_INSTRUCTIONS_LEAD + '\n\n' + APP_CONTRACT };
   },
 
+  // What the container (image-bases.js) declared, if anything. A string only;
+  // anything else is a broken build and is refused loudly rather than dialed.
+  //
+  // An origin-relative path is the form the IMAGE writes, and it has to be:
+  // the build cannot know the host and port the container will be published
+  // on. `docker run -p 8080:3000`, a LAN address, or a TLS reverse proxy all
+  // change it, and a baked absolute URL is then wrong in the worst way — the
+  // tab dials a port on WHOEVER IS LOOKING while the pane says "this
+  // container's own relay". Measured: a default of ws://localhost:5210 on a
+  // container published to 5314 dials 5210 and reports itself as 'container'.
+  // So a leading "/" is resolved against location, exactly as originUrl()
+  // does. An absolute ws/wss URL is still accepted, for an operator who is
+  // terminating TLS somewhere this page cannot infer.
+  // Whether a container declared a relay AT ALL, valid or not. The difference
+  // matters: an absent declaration is the hosted page, and a present but
+  // unusable one is a broken image, which must fail closed rather than quietly
+  // behave like the hosted page and dial our AWS.
+  containerDeclared() {
+    return typeof window !== 'undefined' && typeof window.__vibeosRelayDefault === 'string'
+      && window.__vibeosRelayDefault !== '';
+  },
+  containerRelay() {
+    const v = typeof window !== 'undefined' ? window.__vibeosRelayDefault : '';
+    if (!v) return '';
+    if (typeof v !== 'string') { console.error('vibeOS: __vibeosRelayDefault is not a string (' + JSON.stringify(v) + '); ignoring it'); return ''; }
+    if (v.startsWith('/')) return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + v;
+    if (!/^wss?:\/\//.test(v)) { console.error('vibeOS: __vibeosRelayDefault is neither a ws/wss URL nor an origin-relative path (' + JSON.stringify(v) + '); ignoring it'); return ''; }
+    return v;
+  },
   relayUrl() {
+    // A self-contained container names its own relay and NEVER falls back to
+    // ours: the image exists so that nothing leaves the box, and a fallback
+    // would send a local agent's frames to our AWS on the day the local relay
+    // hiccups. The hosted page declares none and behaves as before.
+    //
+    // Checked FIRST, ahead of the stored override, and on every path that
+    // reaches here — pair, resume, reconnect. The override is whatever some
+    // earlier session wrote into this profile; deferring to it would let a
+    // stale value walk a self-hosted pairing onto a third party without anyone
+    // choosing that. The owner of the page can still change policy on purpose;
+    // this only stops it happening by accident.
+    if (this.containerDeclared()) {
+      const container = this.containerRelay();
+      // Declared and unusable: fail closed. Falling through would mean a
+      // container with a broken build silently dialing our AWS, which is the
+      // one outcome this whole mechanism exists to prevent.
+      if (!container) throw new Error('this container declared a relay that is not usable, and will not fall back to a public one');
+      return container;
+    }
     const override = this.override();
     if (override) return override;
     return this.fellBack ? this.originUrl() : this.awsUrl;
@@ -1843,6 +1961,7 @@ const RemoteBridge = {
   relayLabel() {
     const where = this.relay === 'aws' ? 'the durable relay (aws)'
       : this.relay === 'origin' ? 'this origin (the durable relay could not be reached)'
+      : this.relay === 'container' ? 'this container\u2019s own relay \u2014 nothing is sent to vibeos.sh'
       : 'the relay at ' + this.relayUrl();
     return where + (this.instance ? ', instance ' + this.instance : '');
   },
@@ -1879,6 +1998,7 @@ const RemoteBridge = {
     if (!probe.ok) { this.set('error', probe.reason); return false; }
     setRemoteToken(this.mint());
     this.agentName = '';
+    this.pairedHow = 'pane';
     this.set('pairing', 'dialing the relay');
     this.dial();
     return true;
@@ -1911,11 +2031,78 @@ const RemoteBridge = {
     remoteToken = stored;
     this.agentName = name.slice(0, 80);
     this.resumed = true;
+    this.pairedHow = keep ? 'reload' : 'remembered';
     track('mcp_resumed', { how: keep ? 'reload_os' : 'remembered' });
     this.set('pairing', keep ? 'resuming the pairing after a reload' : 'resuming the remembered pairing');
     this.dial();
     return true;
   },
+  // A link the person opened is a pairing offer, not a pairing: whoever holds
+  // that token is root on this desktop for seven days — it can edit the OS's
+  // own source and run commands in its machine. So the boot asks, in those
+  // words, and nothing is stored and nothing is dialed until Accept.
+  get pendingLink() { return pendingLink; },
+  // A link names the relay the AGENT is on — explicitly with &relay=, or by
+  // its absence, which vibeos-mcp defines as a positive statement that the
+  // agent is on the public default (the package omits &relay= only when it
+  // dials that one). So absence is "apigw", never "unknown".
+  //
+  // A desktop that has its own relay (a container) therefore cannot accept a
+  // link that disagrees with it: following the link would move a self-hosted
+  // pairing onto our infrastructure, and ignoring the link would leave the tab
+  // somewhere the agent is not. Both fail as "it just doesn't pair", so the
+  // refusal is loud and carries the command that fixes it. A public tab has no
+  // relay of its own and still follows a link — a self-hosted relay with the
+  // hosted app is a real setup.
+  linkRelayMismatch(link) {
+    // A declared-but-unusable container relay refuses every link too. Returning
+    // '' here would mean "no container policy", so a broken build would accept
+    // a link naming our AWS — the same fail-open relayUrl() closes.
+    if (this.containerDeclared() && !this.containerRelay()) {
+      return 'This container declared a relay that is not usable, so it cannot pair through any relay. '
+           + 'That is a fault in the image rather than in your link.';
+    }
+    const container = this.containerRelay();
+    if (!container) return '';
+    const wanted = link.relay || this.awsUrl;
+    if (wanted === container) return '';
+    const host = u => { try { return new URL(u).host; } catch { return u; } };
+    return 'This desktop pairs through its own relay (' + host(container) + '), but the link you opened expects '
+      + host(wanted) + '. Start the agent with --relay ' + container + ' (or VIBEOS_RELAY=' + container
+      + ') and open the new link it prints.';
+  },
+
+  // Accept: store exactly as pair() does (7 days, the same take-over rules)
+  // and dial. The relay override is written first so the dial uses it.
+  acceptLink() {
+    const link = pendingLink;
+    if (!link) return false;
+    pendingLink = null;
+    const refusal = this.refusal();
+    if (refusal) { this.set('error', refusal); return false; }
+    if (link.relay) {
+      try { localStorage.setItem(this.RELAY_KEY, link.relay); }
+      catch (e) { console.warn('RemoteBridge: could not store the link relay; dialing the default: ' + e.message); }
+      this.probe = null;
+    }
+    setRemoteToken(link.token);
+    this.agentName = '';
+    this.fromLink = true;
+    this.pairedHow = 'link';
+    track('mcp_link_accepted', { relay: link.relay ? 'named' : 'default' });
+    this.set('pairing', 'dialing the relay');
+    this.dial();
+    return true;
+  },
+  // Refuse: the token is dropped and never stored. The fragment is already
+  // off the address bar, so there is nothing left to accept by accident.
+  refuseLink() {
+    if (!pendingLink) return false;
+    pendingLink = null;
+    track('mcp_link_refused');
+    return true;
+  },
+
   takeOver() {
     if (!remoteToken) return false;
     this.heldElsewhere = false;
@@ -1975,6 +2162,15 @@ const RemoteBridge = {
   // Only a failed FIRST dial, never a timeout on a call — a drop after an
   // open is the 2 h cut or an outage, and RemoteSocket redials in place.
   async fallBack() {
+    // A container named its own relay: there is nothing to fall back TO. Ours
+    // is not a safety net for a self-hosted box — reaching it would be the
+    // failure, not the recovery — so this says so and stops.
+    if (this.containerRelay()) {
+      this.socket = null;
+      this.stopKeepalive();
+      this.set('error', 'this container\u2019s relay (' + this.containerRelay() + ') could not be reached. vibeOS does not fall back to the hosted relay here: pairing stays inside this container.');
+      return;
+    }
     this.socket = null;
     this.stopKeepalive();
     this.fellBack = true;
@@ -2107,8 +2303,27 @@ const RemoteBridge = {
   connected(name = '') {
     if (name) { this.agentName = name; try { localStorage.setItem(MCP_AGENT_KEY, name); } catch {} }
     const label = this.agentName || 'an agent';
-    if (this.state !== 'connected') track('mcp_paired');
+    // WHICH path produced this pairing. Without it the link experiment reads
+    // as a number that cannot be attributed: a rise in mcp_paired could be new
+    // people the link reached, or the same people who would have used the pane.
+    if (this.state !== 'connected') track('mcp_paired', { how: this.pairedHow || 'unknown' });
     this.set('connected', label);
+    // A link pairing lands with no pane open: the person accepted a dialog,
+    // it closed, and nothing on screen said the handover happened (the pane
+    // that would say it is behind Settings, which the link path never opens).
+    // So the chat says it once, and names the agent — which is why it waits:
+    // the relay's {paired} frame arrives before the package's want frame, so
+    // the name is a beat late and announcing at the first `connected` would
+    // say "an agent" for a client that does identify itself.
+    if (this.fromLink && !this.announcedLink) {
+      this.announcedLink = true;
+      setTimeout(() => {
+        this.fromLink = false;
+        if (this.state !== 'connected') return;
+        try { Chat.line('Paired with ' + (this.agentName || 'an agent') + ' through the link you opened. It can edit this desktop\u2019s own source and run commands in its Linux machine; Settings \u203a Capabilities ends it.'); }
+        catch (e) { console.warn('RemoteBridge: could not announce the link pairing: ' + e.message); }
+      }, LINK_ANNOUNCE_MS);
+    }
   },
 
   // What the connected agent did, newest last, capped; the chat paints it as
@@ -2184,13 +2399,233 @@ const RemoteBridge = {
   unload() {},
 };
 window.addEventListener('pagehide', () => RemoteBridge.unload());
+
+/* The pairing-link consent gate.
+
+   Every string that can come from the link is textContent — the relay host
+   above all, which is attacker-chosen in the case this dialog exists to
+   catch. The token itself is NEVER shown: it is a secret, the person has no
+   decision to make about its digits, and a dialog that prints it puts it back
+   on the screen the replaceState just cleared it from.
+
+   Accept is not the default action: Escape and the backdrop refuse, and the
+   refusing button is the one focused. A dialog whose easiest exit grants root
+   is not a consent dialog. */
+function linkModal(link) {
+  const overlay = document.createElement('div');
+  overlay.className = 'key-modal-overlay';
+  overlay.innerHTML = `
+    <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="linkModalTitle">
+      <h2 id="linkModalTitle">You are handing this agent your desktop.</h2>
+      <p class="small" style="margin:0">You opened a pairing link. Accepting gives the agent that made it <strong>root on this desktop for seven days</strong>: it can read and edit vibeOS's own source, run commands in its Linux machine, and read the files in your workspace.</p>
+      <p class="tiny dimmer" style="margin:0">Accept only if you just started an agent yourself and expected to be sent here. You can end it any time in Settings &rsaquo; Capabilities.</p>
+      <p class="tiny dimmer" id="linkRelay" hidden style="margin:0"></p>
+      <div class="key-modal-actions col">
+        <button type="button" class="btn" id="linkRefuseBtn">Not now</button>
+        <button type="button" class="btn p" id="linkAcceptBtn">Accept &mdash; pair this desktop</button>
+      </div>
+    </div>`;
+  // Not innerHTML: the host comes from the link.
+  if (link.relay) {
+    let host = link.relay;
+    try { host = new URL(link.relay).host; } catch {}
+    const line = overlay.querySelector('#linkRelay');
+    line.textContent = 'This link routes the session through ' + host + ', not the usual vibeOS relay.';
+    line.hidden = false;
+  }
+  document.body.appendChild(overlay);
+  let offFocus = null;
+  const finish = () => { document.removeEventListener('keydown', onKey); if (offFocus) offFocus(); overlay.remove(); };
+  const refuse = () => { RemoteBridge.refuseLink(); finish(); Chat.line('The pairing link was not accepted. Nothing was connected.'); };
+  const onKey = e => { if (e.key === 'Escape') refuse(); };
+  document.addEventListener('keydown', onKey);
+  overlay.onclick = e => { if (e.target === overlay) refuse(); };
+  overlay.querySelector('#linkRefuseBtn').onclick = refuse;
+  overlay.querySelector('#linkAcceptBtn').onclick = () => { finish(); RemoteBridge.acceptLink(); };
+  // The dialog is painted at kernel load and the ui is imported after it, so
+  // the chat composer's autofocus lands AFTER this and takes the keyboard:
+  // measured, focus was on #msg with the overlay covering it, which means
+  // typing went to the chat behind a dialog that grants root, and Escape was
+  // the chat's. Focus is taken back whenever it leaves the dialog, for as
+  // long as the dialog is up.
+  const keepFocus = e => { if (!overlay.contains(e.target)) overlay.querySelector('#linkRefuseBtn').focus(); };
+  document.addEventListener('focusin', keepFocus);
+  offFocus = () => document.removeEventListener('focusin', keepFocus);
+  overlay.querySelector('#linkRefuseBtn').focus();
+}
+
+// A link this desktop cannot use. Not a choice — an explanation with the
+// command that fixes it. Every host and url is textContent: they come from
+// the link and from the container's own build.
+function linkRefusedModal(message) {
+  const overlay = document.createElement('div');
+  overlay.className = 'key-modal-overlay';
+  overlay.innerHTML = `
+    <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="linkBadTitle">
+      <h2 id="linkBadTitle">That pairing link is for a different relay.</h2>
+      <p class="small" id="linkBadWhy" style="margin:0"></p>
+      <p class="tiny dimmer" style="margin:0">Nothing was paired and nothing was stored.</p>
+      <div class="key-modal-actions col"><button type="button" class="btn p" id="linkBadOk">OK</button></div>
+    </div>`;
+  overlay.querySelector('#linkBadWhy').textContent = message;
+  document.body.appendChild(overlay);
+  let offFocus = null;
+  const finish = () => { document.removeEventListener('keydown', onKey); if (offFocus) offFocus(); overlay.remove(); };
+  const onKey = e => { if (e.key === 'Escape') finish(); };
+  document.addEventListener('keydown', onKey);
+  overlay.onclick = e => { if (e.target === overlay) finish(); };
+  overlay.querySelector('#linkBadOk').onclick = () => { finish(); try { Chat.line(message); } catch {} };
+  const keepFocus = e => { if (!overlay.contains(e.target)) overlay.querySelector('#linkBadOk').focus(); };
+  document.addEventListener('focusin', keepFocus);
+  offFocus = () => document.removeEventListener('focusin', keepFocus);
+  overlay.querySelector('#linkBadOk').focus();
+}
+
+// A link beats a remembered pairing: the person just asked for this one, and
+// resume() would otherwise dial yesterday's token and leave the link unused.
 // Loud, never fatal: a bad stored token must not take the kernel down with it.
-try { RemoteBridge.resume(); } catch (e) { console.error('RemoteBridge.resume failed: ' + e.message); }
+try {
+  const link = RemoteBridge.pendingLink;
+  if (link) {
+    track('mcp_link_opened');
+    const mismatch = RemoteBridge.linkRelayMismatch(link);
+    // Refused before the dialog: there is no decision to offer. Accepting
+    // could only pair with a relay the agent is not on, or move this desktop
+    // onto ours.
+    if (mismatch) { RemoteBridge.refuseLink(); track('mcp_link_relay_mismatch'); linkRefusedModal(mismatch); }
+    else linkModal(link);
+  } else RemoteBridge.resume();
+} catch (e) { console.error('RemoteBridge link/resume failed: ' + e.message); }
+
+/* What this session has already read, so the next turn does not read it again.
+
+   Every turn used to start blind: read_file system/ui/chat.js, edit_file, and
+   the NEXT turn read the same file before touching it — two of eight steps
+   spent re-reading what the session had already seen, which is part of why
+   turns hit the step cap. Per file the turn actually read, one entry
+   { path, from, to, hash }; the next turn's first user message carries the
+   list with a rule the model can act on.
+
+   The hash is over the WHOLE file, not the slice the model was handed:
+   read_file numbers every line, so an insert above the range shifts every
+   number the model remembers while the slice itself still matches. A memory
+   that says "you have this" about a file that moved under it is worse than no
+   memory at all, so a hash mismatch is reported as changed and the entry is
+   dropped. FNV-1a, the same cheap hash index.html uses for fork versioning —
+   no dependency, and nothing here is a security claim.
+
+   Session state, not the OS source and not the log: it lives in memory beside
+   Chat and dies with the page, which is the honest lifetime — after a
+   reload_os the model's context is gone too, so re-reading is right then. */
+const Reads = {
+  MAX: 20,
+  entries: [],   // newest last: { path, from, to, hash, kind }
+
+  hash(text) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(16).padStart(8, '0');
+  },
+
+  // kind 'read' is a range the model saw in full; 'search' is matching lines
+  // only, and the block says so — telling a model it has "read" lines it only
+  // ever saw as scattered hits is the same lie as a stale hash.
+  // One key per file however the tool spelled it: Workspace strips a leading
+  // slash, so read_file 'data/x' and edit_file '/data/x' are one file, and a
+  // forget keyed on the raw string missed the write that invalidated it.
+  key(path) { return String(path).replace(/^\/+/, ''); },
+
+  note(rawPath, from, to, text, kind = 'read') {
+    if (typeof rawPath !== 'string' || !rawPath) throw new Error('Reads.note: path must be a non-empty string, got ' + JSON.stringify(rawPath));
+    if (typeof text !== 'string') throw new Error('Reads.note: text must be a string for ' + rawPath);
+    const path = this.key(rawPath);
+    // A range that delivered nothing (past EOF, or one line already over the
+    // reply cap) is not a read: remembering it told the model not to read a
+    // file it never saw, under a backwards "lines 100-3".
+    if (!(to >= from)) return null;
+    const entry = { path, from, to, hash: this.hash(text), kind };
+    this.entries = this.entries.filter(e => !(e.path === path && e.from === from && e.to === to && e.kind === kind));
+    this.entries.push(entry);
+    if (this.entries.length > this.MAX) this.entries = this.entries.slice(-this.MAX);
+    return entry;
+  },
+
+  // At the moment of the write, not at the next turn's re-hash: an edit_file
+  // followed by another edit_file in the same turn must not read a memory the
+  // first write invalidated. Registered on Workspace.onWrite below, so every
+  // path that reaches the disk — edit_file, write_file, create_app through
+  // Apps.save, the chat log's own files — invalidates in one place; the tools
+  // do not each have to remember to call it.
+  forget(path) { const key = this.key(path); this.entries = this.entries.filter(e => e.path !== key); },
+
+  clear() { this.entries = []; },
+
+  /* The block for the next request. Every remembered path is re-hashed
+     against what is on disk NOW — the guest, another turn or a remote agent
+     may have rewritten it — and an entry that no longer matches is reported
+     as changed and dropped; one whose file has gone is dropped silently
+     (there is nothing to re-read). A read that throws for any other reason is
+     dropped too: a memory is a convenience, never a reason to fail a turn. */
+  async block() {
+    if (!this.entries.length) return '';
+    const kept = [], changed = [];
+    for (const e of this.entries.slice()) {
+      let text = null;
+      try { text = await Workspace.readPath(e.path); }
+      catch { text = null; }
+      if (text === null) { this.forgetEntry(e); continue; }
+      if (this.hash(text) !== e.hash) { this.forgetEntry(e); changed.push(e); continue; }
+      kept.push(e);
+    }
+    if (!kept.length && !changed.length) return '';
+    const range = e => `lines ${e.from}-${e.to}` + (e.kind === 'search' ? ' (matching lines only, from search_file)' : '');
+    return [
+      'Files you have already read in this session. Do not read them again unless you need a different range, or a line here says the file changed:',
+      // "unchanged when this turn started", not "still as you read it": the
+      // block is built once and rides the whole turn, and the guest or another
+      // agent can rewrite the file inside it. edit_file's stale-anchor refusal
+      // is the backstop; the line must not claim more than it checked.
+      ...kept.map(e => `- ${e.path} ${range(e)} — unchanged when this turn started`),
+      ...changed.map(e => `- ${e.path} ${range(e)} — has changed since you read it; read it again before you edit it`),
+    ].join('\n');
+  },
+
+  forgetEntry(e) { this.entries = this.entries.filter(x => x !== e); },
+};
+Workspace.onWrite.push(path => Reads.forget(path));
 
 const Agent = {
   // 5 was one read, one search, one edit, one reload and nothing left over for
   // a refusal; every guard below hands the model an error it should act on.
-  MAX_STEPS: 8,
+  // 8 was still too low for real work (aleks, 2026-09-07): a turn that reads a
+  // kernel file, searches it, edits two places and reloads has spent half its
+  // budget before it has answered anything. A turn only costs what it uses —
+  // the loop returns the moment the model stops calling tools — so the ceiling
+  // is a cap on the worst case, not a price paid per turn. What makes a high
+  // ceiling safe is the note below: the model is told where it is and lands
+  // what it has, instead of being cut off mid-edit.
+  MAX_STEPS: 16,
+
+  /* A turn that ran out of steps used to just stop, on whatever text the last
+     step happened to produce: a half-finished job and no word about why. From
+     NOTE_FROM on, every request carries the count and an instruction to land
+     what it has — an instruction about wrapping up, not a threat: a model told
+     only that it is about to be cut off abandons the edit it was mid-way
+     through. The person sees the same thing in the status line, and when the
+     loop does fall out of its last step the chat says so (Chat.runTurn reads
+     `capped`). */
+  // The last three steps, derived: a second magic number would drift from
+  // MAX_STEPS the first time one of them changed.
+  get NOTE_FROM() { return this.MAX_STEPS - 2; },
+  stepNote(step) {
+    const n = step + 1;
+    if (n < this.NOTE_FROM) return '';
+    const left = this.MAX_STEPS - n;
+    return `You are on tool step ${n} of ${this.MAX_STEPS} for this turn. `
+      + (left ? `Only ${left} more request${left === 1 ? '' : 's'} will be sent after this one. ` : 'This is the last one: nothing after it will be sent. ')
+      + 'Finish what you can with the steps you have and tell the person plainly what is still undone, rather than starting anything new.';
+  },
+  stepStatus(step) { return `step ${step + 1} of ${this.MAX_STEPS} — wrapping up`; },
 
   /* One user turn, in the dialect of whichever transport carries it. Three
      transports, three shapes for the same picture: chat completions wants
@@ -2260,6 +2695,12 @@ const Agent = {
     });
   },
 
+  // Anthropic again: rather than a second user message in a row, the block
+  // goes in front of the turn's own text, in the same message.
+  foldMemo(memo, content) {
+    return typeof content === 'string' ? memo + '\n\n' + content : [{ type: 'text', text: memo }, ...content];
+  },
+
   async runWithKey(prompt, history, onStatus, images, steer) {
     let system;
     try { system = await this.systemPrompt(); }
@@ -2275,20 +2716,39 @@ const Agent = {
     }
     const anthropic = Gen.provider === 'anthropic';
     const created = [];
+    // The first user message of the turn, never the system prompt: that
+    // constant is pinned byte-equal to lib/system-prompt.ts, and a block that
+    // changes every turn cannot live in a pinned string. Uncached, honest.
+    const memo = await Reads.block();
     let msgs = [
       ...historyWindow(history).map(h => ({ role: h.role, content: h.content })),
-      { role: 'user', content: this.userContent(anthropic ? 'anthropic' : 'responses', prompt, images) },
+      ...(memo && !anthropic ? [{ role: 'user', content: memo }] : []),
+      { role: 'user', content: memo && anthropic
+        ? this.foldMemo(memo, this.userContent('anthropic', prompt, images))
+        : this.userContent(anthropic ? 'anthropic' : 'responses', prompt, images) },
     ];
     let lastText = '';
 
     for (let step = 0; step < this.MAX_STEPS; step++) {
-      const res = anthropic ? await this.stepAnthropic(system, msgs) : await this.stepOpenAI(system, msgs);
+      // The note rides this request only, never `msgs`: it would otherwise
+      // stack one copy per step in the thread the next request carries.
+      // Last, never on the system string: both providers cache the longest
+      // stable PREFIX of a request (system + tools), so a note there is a
+      // cache miss on the biggest part of the request, on exactly the steps
+      // where the thread is longest. Behind the thread it changes nothing
+      // before it. Marked as vibeOS's, not the person's, since it rides as a
+      // user turn — the same shape steering uses.
+      const note = this.stepNote(step);
+      if (note) onStatus?.(this.stepStatus(step));
+      const res = anthropic
+        ? await this.stepAnthropic(system, note ? [...msgs, { role: 'user', content: `(note from vibeOS, not the person: ${note})` }] : msgs)
+        : await this.stepOpenAI(system, note ? [...msgs, { role: 'system', content: note }] : msgs);
       lastText = res.text || lastText;
       if (!res.calls.length) return { text: lastText, created, steps: step + 1 };
 
       const results = [];
       for (const call of res.calls) {
-        const output = await this.executeTool(call, onStatus);
+        const output = await this.executeTool(call, onStatus, true);
         if (call.toolName === 'create_app') created.push(output);
         results.push({ id: call.id, output });
       }
@@ -2308,7 +2768,7 @@ const Agent = {
            ...results.map(r => ({ type: 'function_call_output', call_id: r.id, output: toolResultText(r.output) })),
            ...this.steerMessages('responses', taken)];
     }
-    return { text: lastText, created, steps: this.MAX_STEPS };
+    return { text: lastText, created, steps: this.MAX_STEPS, capped: true };
   },
 
   // /v1/responses, not /v1/chat/completions: on chat completions gpt-5.6
@@ -2373,7 +2833,12 @@ const Agent = {
     };
   },
 
-  async executeTool(call, onStatus) {
+  /* `remember` is the built-in tool loop's own flag, not a default: the same
+     executeTool is the gate for the guest CLI and for a remote agent through
+     bridgeCall, and a file THEY read was recorded as the chat model's own —
+     the next turn was told it had already read a file it had never seen, and
+     told not to read it. Only Chat's own loops pass it. */
+  async executeTool(call, onStatus, remember = false) {
     const { toolName, input } = call;
     if (toolName === 'create_app') {
       const title = input.title || 'app';
@@ -2488,14 +2953,44 @@ const Agent = {
           throw e;
         }
         const lines = text.split('\n');
-        const from = Math.max(1, input.from || 1), to = Math.min(lines.length, input.to || lines.length);
-        const slice = lines.slice(from - 1, to).map((l, i) => `${from + i}: ${l}`).join('\n');
-        return { ok: true, path: input.path, lines: lines.length, from, to, text: slice.slice(0, 60000), truncated: slice.length > 60000 };
+        const from = Math.max(1, input.from || 1), asked = Math.min(lines.length, input.to || lines.length);
+        // Past the end is an error, not an empty ok: the reply used to say
+        // "from 100, to 3" with no text, and the read memory below then told
+        // the model not to read a file it had never seen.
+        if (from > lines.length) throw new Error(input.path + ' has ' + lines.length + ' lines; from ' + from + ' is past the end');
+        // The cap is on what is DELIVERED, and `to` is the last line that
+        // actually went out — a whole-file read of kernel/agent.js hands over
+        // about a third of it, and remembering the asked-for range as read was
+        // a memory that lied about exactly the files this feature is for.
+        const CAP = 60000;
+        const out = [];
+        let used = 0, to = from - 1;
+        for (let i = from; i <= asked; i++) {
+          const line = `${i}: ${lines[i - 1]}`;
+          const cost = line.length + (out.length ? 1 : 0);
+          if (used + cost > CAP) break;
+          used += cost; out.push(line); to = i;
+        }
+        const truncated = to < asked;
+        if (remember) Reads.note(input.path, from, to, text);
+        return Object.assign({ ok: true, path: input.path, lines: lines.length, from, to, text: out.join('\n'), truncated },
+          truncated ? { note: `cut at ${CAP / 1000} kB: lines ${to + 1}-${asked} were not sent, read from ${to + 1} for the rest` } : {});
       } catch (e) { return { ok: false, error: e.message }; }
     }
     if (toolName === 'search_file') {
       onStatus?.('searching ' + input.path + '…');
-      try { return await Files.search(input.path, input.pattern); }
+      try {
+        const out = await Files.search(input.path, input.pattern);
+        // A search that returned a file's lines is a partial read of it: the
+        // model saw those lines and nothing between them, so it is remembered
+        // as matching lines only.
+        for (const path of new Set((out.hits || []).map(h => h.path))) {
+          const lines = (out.hits || []).filter(h => h.path === path).map(h => h.line);
+          if (!remember) continue;
+          try { Reads.note(path, Math.min(...lines), Math.max(...lines), await Workspace.readPath(path), 'search'); } catch {}
+        }
+        return out;
+      }
       catch (e) { return { ok: false, error: e.message }; }
     }
     if (toolName === 'edit_file') {
@@ -2575,15 +3070,23 @@ const Agent = {
     // a model that called list_files first still has to see the screenshot to
     // build what it shows. Attachments caps what one turn can carry, so five
     // steps of it stay under the body limit.
+    const memo = await Reads.block();
     let messages = [
       ...historyWindow(history).map(h => ({ role: h.role, content: h.content })),
+      ...(memo ? [{ role: 'user', content: memo }] : []),
       { role: 'user', content: this.userContent('sdk', prompt, images) },
     ];
     const created = [];
     let lastText = '';
 
     for (let step = 0; step < this.MAX_STEPS; step++) {
+      const note = this.stepNote(step);
+      if (note) onStatus?.(this.stepStatus(step));
+      // As `note`, not a system message inside `messages`: the AI SDK takes
+      // one there but warns about it on every request ("Use the system option
+      // instead"), and the route already has a system string to append to.
       const body = Object.assign({ image: VM.bootedImage || VM.image, messages },
+        note ? { note } : {},
         Gen.codexModel ? { model: Gen.codexModel } : {});
       const j = await this.callServer(body);
       lastText = j.text || '';
@@ -2594,7 +3097,7 @@ const Agent = {
 
       const toolResults = [];
       for (const call of j.toolCalls) {
-        const output = await this.executeTool(call, onStatus);
+        const output = await this.executeTool(call, onStatus, true);
         if (call.toolName === 'create_app') created.push(output);
         toolResults.push({
           type: 'tool-result',
@@ -2612,7 +3115,7 @@ const Agent = {
                   ...this.steerMessages('sdk', steer && step + 1 < this.MAX_STEPS ? steer() : [])];
     }
 
-    return { text: lastText, created, steps: this.MAX_STEPS };
+    return { text: lastText, created, steps: this.MAX_STEPS, capped: true };
   },
 };
 
@@ -2856,6 +3359,15 @@ const Chat = {
   send(text) {
     text = String(text || '').trim();
     if (!text && !this.pending.length) return null;
+    // Once per page: how long the person sat before asking for anything, and
+    // whether the machine had arrived by then. Bucketed, never the text — what
+    // they typed is theirs.
+    if (!this.asked) {
+      this.asked = true;
+      const s = Math.round(performance.now() / 1000);
+      track('first_prompt', { after: s < 5 ? '0-5s' : s < 15 ? '5-15s' : s < 30 ? '15-30s' : s < 60 ? '30-60s' : '60s+',
+        vm: VM.state, model: Gen.available ? 'yes' : 'no' });
+    }
     // Pictures put back after a failure can stack past the cap; refuse here
     // rather than let the body grow past what the server will take — at queue
     // time too, so a steer carrying too many is refused as it is typed.
@@ -3059,6 +3571,13 @@ const Chat = {
             const headed = item.saved && item.saved.headerAdded && item.saved.headerAdded.length ? ' (header added)' : '';
             this.card({ kind: 'window', title: item.title, where: where ? 'saved to ' + where + headed : 'opened on the desktop' });
           }
+        }
+        // The loop fell out of its last step: say so rather than ending on
+        // half a job with no explanation.
+        if (result.capped) {
+          this.line(`the agent stopped at its step budget: ${result.steps} of ${Agent.MAX_STEPS} tool steps used — `
+            + (built ? 'created ' + built : 'nothing was created')
+            + '; send another message to carry on with what is left');
         }
         finish();
       } catch (e) {

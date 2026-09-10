@@ -181,6 +181,27 @@ export function focusOrOpen(spec) {
   Windows.raise(open);
   return open;
 }
+// The chat card's Open and Settings › Workspace. A window is usually already
+// open for the app the card is about, and a second copy is two apps on one
+// file — aleks, 2026-09-07, with two Clippys on screen, one from the dock and
+// one from the card. Raising the open one and stopping there would be wrong
+// the other way: the agent may have rewritten the app since that window
+// started, and a raised stale window hides the very change it was asked for
+// (that is why Open launched fresh in the first place). So the open window is
+// reused AND rerun from the source as it is now: same window, current code.
+export function openOrRerun(app) {
+  const open = app && app.name ? openWindowFor('apps/' + app.name) : null;
+  if (!open) return launchApp(app);
+  // paint() reads rec.SPEC.opts — a record carries both and only the spec's
+  // reaches the renderer, so setting rec.opts here reran the old source with
+  // no error at all (measured: the window stayed on v1 while the file was v2).
+  if (!open.rec || !open.rec.spec) throw new Error('the window for ' + app.name + ' has no record to rerun');
+  open.rec.spec.opts = { ...(open.rec.spec.opts || {}), app };
+  open.classList.remove('min');
+  Windows.raise(open);
+  return Promise.resolve(repaint(open.rec)).then(() => open);
+}
+
 export function focusOrLaunch(app) {
   const open = app && app.name ? openWindowFor('apps/' + app.name) : null;
   if (!open) return launchApp(app);

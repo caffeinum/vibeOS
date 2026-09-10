@@ -13,6 +13,15 @@
 
 // Product events, so "46 people opened /app" can become "and this is what
 // happened next". Deliberately coarse: no prompt text, no URLs, no key state.
+//
+// In the self-hosted image every one of these is dropped, and it is the
+// DELETION that does it, not this guard: the build strips the insights tag
+// from index.html (scripts/image/localize-index.mjs), so window.va is never
+// defined. Restore that tag and every call site here starts sending events out
+// of a container whose whole claim is that nothing leaves the box — and
+// selfcontained.mjs would catch it, which is the only reason this is a
+// tripwire and not a landmine. Adding a track() call is free; making window.va
+// exist in the image is not.
 function track(name, data) {
   try {
     const evt = { name };
@@ -650,10 +659,42 @@ const VM = {
   // Networking is on by default now. An absent setting means "use the default
   // relay"; the explicit string 'off' is how someone turns it off, so that is
   // distinguishable from never having chosen.
+  // What a self-contained container declared for the GUEST's network
+  // (image-bases.js, written by the Dockerfile). Origin-relative so it follows
+  // the published port; an absolute wisp/wisps URL is accepted for an operator
+  // terminating TLS somewhere the page cannot infer.
+  //
+  // Returns '' for "nothing declared" and null for "declared but unusable" —
+  // the caller must tell those apart, because a broken declaration in a
+  // container must FAIL CLOSED (no network) rather than quietly behave like
+  // the hosted page and send the guest's traffic to vibeos.sh, which is the
+  // one thing running the image is meant to prevent.
+  containerNet() {
+    const v = typeof window !== 'undefined' ? window.__vibeosNetDefault : '';
+    if (!v) return '';
+    if (typeof v !== 'string') { console.error('vibeOS: __vibeosNetDefault is not a string (' + JSON.stringify(v) + '); refusing to fall back to the hosted relay'); return null; }
+    if (v.startsWith('/')) {
+      // v86 selects the WISP adapter (with DHCP) by scheme and rewrites it to
+      // ws/wss itself. Measured in the vendored libv86.js, not assumed.
+      return (location.protocol === 'https:' ? 'wisps://' : 'wisp://') + location.host + v;
+    }
+    if (/^wisps?:\/\//.test(v)) return v;
+    console.error('vibeOS: __vibeosNetDefault is neither an origin-relative path nor a wisp/wisps URL (' + JSON.stringify(v) + '); refusing to fall back to the hosted relay');
+    return null;
+  },
   get relay() {
     let stored = null;
     try { stored = localStorage.getItem('vibeos-net'); } catch {}
+    // 'off' is a person deliberately switching networking off, and outranks
+    // everything: a container declaration must not switch it back on.
     if (stored === 'off') return '';
+    // A container's declaration outranks a STORED url. The stored value is
+    // something a previous session left in this profile, and a self-hosted box
+    // exists so the guest's traffic does not leave it — letting stale
+    // localStorage route it through vibeos.sh is a migration nobody chose.
+    const container = this.containerNet();
+    if (container === null) return '';   // declared and broken: no network, never ours
+    if (container) return container;
     return stored || NET_DEFAULT;
   },
   setRelay(url) {

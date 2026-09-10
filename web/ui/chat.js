@@ -184,19 +184,31 @@ export function ChatApp(body, win) {
     } else {
       act.textContent = 'Open';
       act.onclick = async () => {
+        // A stock module has no file, so it has no identity to reuse; a saved
+        // app does, and Open must not open a second window on it.
         if (c.src) return launchApp({ title: c.title, source: c.src, requires: parseRequires(c.src) });
         const app = (await Apps.list()).apps.find(a => a.title === c.title);
         if (!app) return show('no app titled "' + c.title + '" in the workspace or the VM now');
-        launchApp(app);
+        (UI.live().openOrRerun || launchApp)(app);
       };
     }
   };
+  // E3 (2026-09-10). This is the moment of highest intent in the whole
+  // product — someone asked for something real and got a canned module — and
+  // the only thing offered was "Add a key", which names the MOST expensive
+  // door. The modal it opens actually LEADS with "Connect your agent": no key,
+  // no signup, using a Claude Code / Cursor / Codex subscription the person
+  // already pays for. So the button was advertising a price the product does
+  // not charge, at the exact instant someone had shown they wanted it.
+  // Measured leak: 207 desktops reached a machine last week, 33 connected a
+  // model — 84% lost — while 77 stock modules were handed out.
+  // The id stays `addKeyNow`: the paint hook scrolls it into view by that name.
   const paintOffer = () => {
     const b = bubble('vibeos', `
-      <span class="part">That was a stock module — no model is configured yet.</span>
-      <p class="tiny dimmer" style="margin:6px 0 8px">Add a key and I'll build this for real.</p>
-      <button class="btn p sm" id="addKeyNow">Add a key</button>`);
-    b.querySelector('#addKeyNow').onclick = () => Chat.retryWithKey();
+      <span class="part">That was a stock module — no model is connected yet.</span>
+      <p class="tiny dimmer" style="margin:6px 0 8px">Connect one and I'll build this for real. An agent you already pay for works — Claude Code, Cursor or Codex — with no API key.</p>
+      <button class="btn p sm" id="addKeyNow">Connect a model</button>`);
+    b.querySelector('#addKeyNow').onclick = () => { track('offer_connect_click'); Chat.retryWithKey(); };
     return b;
   };
   // A model reply that failed: the provider's words (a slice of a proxy's
@@ -287,7 +299,7 @@ export function ChatApp(body, win) {
       chip.className = 'btn sm example';
       chip.type = 'button';
       chip.textContent = text;
-      chip.onclick = () => { input.value = text; send(); };
+      chip.onclick = () => { track('chip_click', { i: EXAMPLE_PROMPTS.indexOf(text), model: Gen.available ? 'yes' : 'no' }); input.value = text; send(); };
       row.appendChild(chip);
     }
     log.appendChild(row);

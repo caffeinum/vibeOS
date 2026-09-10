@@ -137,6 +137,9 @@ const Workspace = {
     const file = name.replace(/[^a-z0-9-_]+/gi, '-').toLowerCase().slice(0, 40) || 'app';
     const fh = await this.apps.getFileHandle(file + '.js', { create: true });
     const w = await fh.createWritable(); await w.write(source); await w.close();
+    // create_app lands here, not in writePath: without this an app the agent
+    // read and then rewrote stayed in its read memory as unchanged.
+    this.noteWrite('apps/' + file + '.js');
     return file + '.js';
   },
 
@@ -266,8 +269,18 @@ const Workspace = {
     if (forking) await this.recordFork(file);
     const fh = await dir.getFileHandle(name, { create: true });
     const w = await fh.createWritable(); await w.write(text); await w.close();
+    this.noteWrite(path);
     if (file) await SystemMirror.refresh(file);
   },
+  noteWrite(path) {
+    for (const fn of this.onWrite) { try { fn(path); } catch (e) { console.warn('workspace write hook failed for ' + path, e); } }
+  },
+  // Every path that reaches the disk, at the moment it lands: the agent's
+  // read memory (Reads, kernel/agent.js) invalidates from here, so a write
+  // through create_app or any other caller cannot leave a memory claiming
+  // the file is still as the model read it. A hook that throws is a warning,
+  // never a failed write — the bytes are already on disk.
+  onWrite: [],
   // First write of a loaded file: pin the version it came from in
   // system/os.version.json, one entry per file since they fork on different
   // days. Written before the fork itself, so a fork with no record
@@ -451,6 +464,11 @@ const missingCaps = reqs => reqs.filter(r => !CAP.supports[r]);
 // message because the model reads it as the tool result and tries again.
 // A "Console log viewer" with @requires none is the accepted false positive:
 // it is refused too, and the message says what to change.
+// Length is guidance in the contract (about 200 lines, under 1000), NOT a
+// rule here: a ceiling was enforced for twenty minutes on 2026-09-09 and
+// aleks reversed it — a long app that works is the person's business, and
+// refusing one throws away work the model already did. The lint refuses only
+// what is provably broken.
 function lintApp(title, requires, source) {
   // An app that declares ai and never asks the model is the manual logger
   // the calorie chip used to produce, with a connect prompt in front of it.
