@@ -731,14 +731,24 @@ function mcpPane(body, win) {
     takeOver.hidden = !RemoteBridge.heldElsewhere;
     retry.hidden = !(st === 'error' && hasToken && !RemoteBridge.socket);
   };
-  pair.onclick = async () => { pair.disabled = true; await RemoteBridge.pair(); paint(); };
+  // The pane's half of the pairing funnel. The link path (kernel/agent.js) is
+  // instrumented end to end; without these the two cannot be compared, and a
+  // rise in mcp_paired after the link shipped could equally be new people or
+  // the same people arriving another way. `mcp_pane_opened` carries whether
+  // this desktop was already paired, so "opened the pane" is not confused with
+  // "came to look at a pairing that exists".
+  track('mcp_pane_opened', { paired: RemoteBridge.token ? 'yes' : 'no', refused: refusal ? 'yes' : 'no' });
+  pair.onclick = async () => { pair.disabled = true; track('mcp_pair_click'); await RemoteBridge.pair(); paint(); };
   retry.onclick = () => { RemoteBridge.retry(); paint(); };
   revoke.onclick = () => { RemoteBridge.revoke(); paint(); };
   const takeOver = body.querySelector('#mcpTakeOver');
   takeOver.onclick = () => { RemoteBridge.takeOver(); paint(); };
   copy.onclick = async () => {
-    try { await navigator.clipboard.writeText(RemoteBridge.command()); copy.textContent = 'copied'; }
-    catch (e) { copy.textContent = 'select the line and copy it (' + e.message + ')'; }
+    // Tracked either way: a clipboard that refuses is a real drop-off (the
+    // person must select the line by hand), and counting only the success
+    // would read as "nobody copied" rather than "copying did not work".
+    try { await navigator.clipboard.writeText(RemoteBridge.command()); copy.textContent = 'copied'; track('mcp_command_copied', { ok: 'yes' }); }
+    catch (e) { copy.textContent = 'select the line and copy it (' + e.message + ')'; track('mcp_command_copied', { ok: 'no' }); }
   };
   Windows.onDispose(win, RemoteBridge.on(paint));
   paint();

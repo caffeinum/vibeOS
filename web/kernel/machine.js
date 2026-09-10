@@ -13,6 +13,15 @@
 
 // Product events, so "46 people opened /app" can become "and this is what
 // happened next". Deliberately coarse: no prompt text, no URLs, no key state.
+//
+// In the self-hosted image every one of these is dropped, and it is the
+// DELETION that does it, not this guard: the build strips the insights tag
+// from index.html (scripts/image/localize-index.mjs), so window.va is never
+// defined. Restore that tag and every call site here starts sending events out
+// of a container whose whole claim is that nothing leaves the box — and
+// selfcontained.mjs would catch it, which is the only reason this is a
+// tripwire and not a landmine. Adding a track() call is free; making window.va
+// exist in the image is not.
 function track(name, data) {
   try {
     const evt = { name };
@@ -50,6 +59,7 @@ const BrowserProvider = {
     get tty() { return VM.ttyState === 'ready'; },  // a byte stream on the VM's second serial line
     process:  false,     // host processes; workers are a different thing
     get net() { return Net.available; },  // raw TCP through the relay (kernel/net.js): on whenever the relay is on, off with it
+    get ai() { return Gen.forApps || Gen.viaAgent; },   // a model an app can call (kernel/agent.js Gen.ask): a pasted key, a ChatGPT login, or the connected agent's (MCP sampling)
     usb:      'usb' in navigator,
     serial:   'serial' in navigator,
     hid:      'hid' in navigator,
@@ -76,7 +86,8 @@ const BrowserProvider = {
 const NativeProvider = {
   name: 'native', label: 'Native binary',
   supports: { files:true, disk:true, write:true, shell:true, process:true, net:true, usb:true,
-              serial:true, hid:true, midi:true, camera:true, clipboard:true, codegen:true, tty:false },
+              serial:true, hid:true, midi:true, camera:true, clipboard:true, codegen:true, tty:false,
+              get ai() { return Gen.forApps || Gen.viaAgent; } },
   base: 'http://127.0.0.1:4571',
   // Only when something says a helper is there: the helper's own page sets
   // localStorage vibeos-native, or the url carries ?native=1. A plain visit
@@ -124,10 +135,15 @@ const V86_ASSETS = BASE + 'v86/';
 // services. BusyBox is bundled (7 MB ISO, 5-7 s, no package manager). Debian is
 // the same streaming trick on a 1 GB disk with apt, and takes minutes. Built
 // by scripts/alpine/build.sh and scripts/debian/build.sh.
-const DEBIAN_BASE = 'https://d3je35hqch090t.cloudfront.net/debian-3/';
+// A build in progress boots from public/debian-dev/ (build.sh copies its
+// output there) by pointing this at new URL('../debian-dev/', location.href).href.
+// image-bases.js (loaded by index.html, not an OS file) overrides this when
+// the disks are served locally — the self-contained image. Absent, or absent
+// an entry, this is unchanged.
+const DEBIAN_BASE = window.__vibeosImageBases?.debian ?? 'https://d3je35hqch090t.cloudfront.net/debian-4/';
 // A build in progress boots from public/alpine-dev/ (git-ignored; build.sh
 // copies its output there) by pointing this at new URL('../alpine-dev/', location.href).href.
-const ALPINE_BASE = 'https://d3je35hqch090t.cloudfront.net/alpine-2/';
+const ALPINE_BASE = window.__vibeosImageBases?.alpine ?? 'https://d3je35hqch090t.cloudfront.net/alpine-2/';
 const IMAGES = {
   alpine: {
     id: 'alpine', label: 'Alpine', blurb: 'streamed 91 MB disk, apk works, usually 20-30 s to a shell — longer on a busy machine',
@@ -188,9 +204,10 @@ const IMAGES = {
     shellLine: 'Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.',
   },
   debian: {
-    id: 'debian', label: 'Debian', blurb: 'full: streamed 1 GB disk, apt works, slow — 80 to 120 s to a shell',
+    id: 'debian', label: 'Debian', blurb: 'full: streamed 1 GB disk, apt works, slow — 70 to 90 s to a shell, longer on a busy machine',
     memoryMB: 256, bootTimeoutMs: 360000,
     preflight: DEBIAN_BASE + 'bzImage',
+    warm: DEBIAN_BASE + 'boot.txt',
     config: () => ({
       bzimage: { url: DEBIAN_BASE + 'bzImage' },
       initrd:  { url: DEBIAN_BASE + 'initrd' },
@@ -207,8 +224,11 @@ const IMAGES = {
     dhcp: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); dhclient -1 $IF 2>&1 | tail -1',
     ip: "ip -4 -o addr show $(ls /sys/class/net | grep -v ^lo$ | head -1) | grep -o 'inet [0-9.]*' | cut -d' ' -f2",
     netReset: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); ip link set $IF down; ip link set $IF up',
-    tty: "setsid bash -c 'TERM=xterm exec bash </dev/ttyS1 >/dev/ttyS1 2>&1' & wait $!",
-    shellLine: 'Then a bash script for Debian 12. apt-get works (run apt-get update first; the network is on). Common tools are installed: bash coreutils grep sed awk find curl wget git nano. python3 is NOT installed by default. The workspace is at /mnt. Print results to stdout.',
+    // debian-4 bakes a serial-getty on ttyS1 (scripts/debian/Dockerfile:
+    // autologin root, TERM=xterm), so the line is owned from boot and a
+    // boot-time shell from ttyS0 would be a second reader on it.
+    tty: null,
+    shellLine: 'Then a bash script for Debian 12. apt-get works (run apt-get update first; the network is on). Common tools are installed: bash coreutils grep sed awk find curl wget git nano vi. python3 is NOT installed by default. The workspace is at /mnt. Print results to stdout.',
   },
 };
 
@@ -639,10 +659,42 @@ const VM = {
   // Networking is on by default now. An absent setting means "use the default
   // relay"; the explicit string 'off' is how someone turns it off, so that is
   // distinguishable from never having chosen.
+  // What a self-contained container declared for the GUEST's network
+  // (image-bases.js, written by the Dockerfile). Origin-relative so it follows
+  // the published port; an absolute wisp/wisps URL is accepted for an operator
+  // terminating TLS somewhere the page cannot infer.
+  //
+  // Returns '' for "nothing declared" and null for "declared but unusable" —
+  // the caller must tell those apart, because a broken declaration in a
+  // container must FAIL CLOSED (no network) rather than quietly behave like
+  // the hosted page and send the guest's traffic to vibeos.sh, which is the
+  // one thing running the image is meant to prevent.
+  containerNet() {
+    const v = typeof window !== 'undefined' ? window.__vibeosNetDefault : '';
+    if (!v) return '';
+    if (typeof v !== 'string') { console.error('vibeOS: __vibeosNetDefault is not a string (' + JSON.stringify(v) + '); refusing to fall back to the hosted relay'); return null; }
+    if (v.startsWith('/')) {
+      // v86 selects the WISP adapter (with DHCP) by scheme and rewrites it to
+      // ws/wss itself. Measured in the vendored libv86.js, not assumed.
+      return (location.protocol === 'https:' ? 'wisps://' : 'wisp://') + location.host + v;
+    }
+    if (/^wisps?:\/\//.test(v)) return v;
+    console.error('vibeOS: __vibeosNetDefault is neither an origin-relative path nor a wisp/wisps URL (' + JSON.stringify(v) + '); refusing to fall back to the hosted relay');
+    return null;
+  },
   get relay() {
     let stored = null;
     try { stored = localStorage.getItem('vibeos-net'); } catch {}
+    // 'off' is a person deliberately switching networking off, and outranks
+    // everything: a container declaration must not switch it back on.
     if (stored === 'off') return '';
+    // A container's declaration outranks a STORED url. The stored value is
+    // something a previous session left in this profile, and a self-hosted box
+    // exists so the guest's traffic does not leave it — letting stale
+    // localStorage route it through vibeos.sh is a migration nobody chose.
+    const container = this.containerNet();
+    if (container === null) return '';   // declared and broken: no network, never ours
+    if (container) return container;
     return stored || NET_DEFAULT;
   },
   setRelay(url) {
@@ -828,6 +880,12 @@ const VM = {
   AUTO_SNAPSHOT_MS: 10000,
   _written: new Set(),  // /mnt names the guest, or an app save, wrote this boot
 
+  // The guest keyboard follows the Console screen's focus (see construct).
+  syncKeyboard() {
+    if (!this.emu || !this.emu.keyboard_adapter) return;
+    this.emu.keyboard_set_status(!!this.screen && this.screen === document.activeElement);
+  },
+
   construct(image, autostart) {
     this.emu = new V86({
       wasm_path: V86_ASSETS + 'v86.wasm',
@@ -844,6 +902,18 @@ const VM = {
       disable_speaker: true,
     });
     window.__v86 = this.emu;
+    // v86's keyboard adapter listens on window and preventDefaults every
+    // keydown whose target is not an input or textarea, sending it to the
+    // guest — measured with the machine up: Cmd+C over a selection in the
+    // chat log (focus on body) copied nothing and the keydown came back
+    // defaultPrevented; with libv86 aborted the same copy worked. The guest
+    // keyboard is the Console screen's: on while that screen has focus
+    // (a click focuses it), off everywhere else.
+    // v86 creates the adapter in its async continue_init (after the wasm
+    // loads), so a keyboard_set_status right here finds no adapter and is
+    // a no-op — measured: emu_enabled true after ready. It is applied on
+    // the events that follow that init, and on every focus change.
+    for (const ev of ['emulator-ready', 'emulator-loaded']) this.emu.add_listener(ev, () => this.syncKeyboard());
     this.emu.add_listener('serial0-output-byte', b => {
       this.serial += String.fromCharCode(b);
       // Not while an exec is reading: its `from` is an index into this
@@ -945,6 +1015,8 @@ const VM = {
       this.screen.style.cssText = 'background:#000;height:100%;overflow:auto;outline:none';
       this.screen.innerHTML = `<div style="white-space:pre;font:14px/1.15 'JetBrains Mono',monospace;color:var(--titletext);padding:6px"></div><canvas style="display:none"></canvas>`;
       this.screen.addEventListener('click', () => this.screen.focus());
+      this.screen.addEventListener('focus', () => this.syncKeyboard());
+      this.screen.addEventListener('blur', () => this.syncKeyboard());
 
       const image = IMAGES[id];
       this.bootedRelay = this.relay;
@@ -1295,8 +1367,13 @@ const VM = {
   // leaves `\e[24;1H\e[K\e[?1049l~% `, a prompt at the start of a line the
   // terminal drew, not the bytes — and anything unprintable goes (the first
   // prompt after a cold boot arrives as `\xff~% ` on busybox).
+  // A CSI may carry a private prefix (`<=>?`) and a two-byte escape is a
+  // break too: vim on debian leaves `\e[?1l\e>\e[?1049l…\e[>4;m` right
+  // before bash prints `root@vibeos:~# ` on the same line, and with the
+  // `[0-9;?]` class alone `[>4;m` survived glued to the prompt, so the first
+  // resize after vi queued until the next prompt (measured, tty.mjs).
   _ttyAtPrompt(port) {
-    const flat = this._tty[port].tail.replace(/\x1b\[[0-9;?]*[nm]/g, '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '\n').replace(/[^\x20-\x7e\r\n]/g, '');
+    const flat = this._tty[port].tail.replace(/\x1b\[[0-9;?<=>]*[nm]/g, '').replace(/\x1b\[[0-9;?<=>]*[a-zA-Z]/g, '\n').replace(/\x1b[()][A-Za-z0-9]|\x1b[^\[]/g, '\n').replace(/[^\x20-\x7e\r\n]/g, '');
     return TTY_PROMPT_TAIL.test(flat.slice(-80));
   },
   // A write that is only escape sequences is the terminal answering a query

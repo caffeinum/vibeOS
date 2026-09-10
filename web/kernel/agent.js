@@ -1593,6 +1593,9 @@ let remoteToken = null;
 // ask.
 const MCP_TOKEN_KEY = 'vibeos-mcp-token', MCP_AGENT_KEY = 'vibeos-mcp-agent', MCP_KEEP_KEY = 'vibeos-mcp-keep', MCP_EXPIRES_KEY = 'vibeos-mcp-expires';
 const MCP_REMEMBER_MS = 7 * 24 * 3600 * 1000;
+// How long the link's chat line waits for the agent to name itself: the
+// relay's {paired} lands first and the package's want frame follows in ms.
+const LINK_ANNOUNCE_MS = 1500;
 function setRemoteToken(token) {
   remoteToken = token;
   try {
@@ -1633,6 +1636,64 @@ const MCP_TOKEN_RE = /^[0-9a-f]{64}$/;
 // machine.js; the same-origin /api/mcp/relay is the fallback when this one
 // cannot be dialed, and `vibeos-mcp-relay` in localStorage overrides both.
 const MCP_RELAY_URL = 'wss://2yetm9bvy2.execute-api.us-east-1.amazonaws.com/prod';
+
+/* A pairing link: vibeos.sh/app#pair=<64 hex>[&relay=<encoded wss url>]
+
+   The other direction of "bring your own agent": the package mints the token
+   on the person's own machine and prints a link, so `claude mcp add vibeos --
+   npx vibeos-mcp` is the whole setup and the desktop is what opens second.
+   The pane's Pair button still mints in the tab; this is the same pairing
+   reached from the other end.
+
+   The fragment is read and REMOVED at kernel load, synchronously, before the
+   bridge exists and before anything can await: a token in the address bar is
+   root on this desktop sitting in the URL the person will copy, bookmark, or
+   screenshot, and a fragment survives a copy-paste of the location. It never
+   reaches the network on its own (a fragment is not sent), which is why the
+   package puts it there rather than in the query — but it does reach every
+   later reader of location.href, so the window between load and replaceState
+   is the whole exposure and it is closed here, not in the boot.
+   history.replaceState keeps the entry: pushState would leave the token one
+   Back away.
+
+   Parsed as key=value pairs split on &, not as a bare token: the package
+   appends &relay=<encoded> when it runs off a non-default relay, and a bare
+   read would take `<hex>&relay=...` as the token and fail the hex test with
+   the link looking broken. An unknown key is ignored rather than refused —
+   the package may add one before this file is updated.
+
+   Accepting is NOT automatic. The link is a capability: whoever holds it is
+   root on this desktop for seven days. The boot asks first (linkModal), and
+   a refusal drops it. */
+let pendingLink = (() => {
+  let raw = '';
+  try { raw = location.hash || ''; } catch { return null; }
+  if (!raw || raw.indexOf('pair=') === -1) return null;
+  const params = new URLSearchParams(raw.replace(/^#/, ''));
+  const token = params.get('pair');
+  // Strip the fragment whatever we make of it: a malformed pair= is still a
+  // secret someone typed, and leaving it in the bar helps nobody.
+  try { history.replaceState(null, '', location.pathname + location.search); }
+  catch (e) { console.warn('vibeOS: could not remove the pairing token from the address bar: ' + e.message); }
+  if (!token || !MCP_TOKEN_RE.test(token)) {
+    if (token) console.error('vibeOS: the pairing link carried a token that is not 64 hex; ignored');
+    return null;
+  }
+  let relay = params.get('relay') || '';
+  // Only ws/wss, and only a URL that parses: the relay carries every frame of
+  // the session, so a link that names one is naming where this desktop's
+  // traffic goes. It is shown in the warning for that reason.
+  if (relay) {
+    let u = null;
+    try { u = new URL(relay); } catch { u = null; }
+    if (!u || (u.protocol !== 'wss:' && u.protocol !== 'ws:')) {
+      console.error('vibeOS: the pairing link named a relay that is not a ws/wss URL; ignored');
+      relay = '';
+    }
+  }
+  return { token, relay };
+})();
+
 
 // A WebSocket that redials in place, the shape of RelaySocket without the
 // WISP stream bookkeeping: the relay is a serverless function that ends at
@@ -1830,13 +1891,68 @@ const RemoteBridge = {
     try { return localStorage.getItem(this.RELAY_KEY) || null; } catch { return null; }
   },
   originUrl() { return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/mcp/relay'; },
-  // override | aws | origin — which relay the next dial goes to.
-  get relay() { return this.override() ? 'override' : this.fellBack ? 'origin' : 'aws'; },
+  // container | broken | override | aws | origin — which relay the next dial
+  // goes to. A container's declaration outranks a stored override: the override
+  // is a value a PREVIOUS session left in this profile, and a container exists
+  // so that a pairing does not leave the box. Letting stale localStorage move a
+  // self-hosted pairing onto someone else's relay is a migration nobody chose.
+  get relay() {
+    if (this.containerDeclared()) return this.containerRelay() ? 'container' : 'broken';
+    return this.override() ? 'override' : this.fellBack ? 'origin' : 'aws';
+  },
   toolsFrame() {
     return { tools: TOOL_SCHEMAS, instructions: MCP_INSTRUCTIONS_LEAD + '\n\n' + APP_CONTRACT };
   },
 
+  // What the container (image-bases.js) declared, if anything. A string only;
+  // anything else is a broken build and is refused loudly rather than dialed.
+  //
+  // An origin-relative path is the form the IMAGE writes, and it has to be:
+  // the build cannot know the host and port the container will be published
+  // on. `docker run -p 8080:3000`, a LAN address, or a TLS reverse proxy all
+  // change it, and a baked absolute URL is then wrong in the worst way — the
+  // tab dials a port on WHOEVER IS LOOKING while the pane says "this
+  // container's own relay". Measured: a default of ws://localhost:5210 on a
+  // container published to 5314 dials 5210 and reports itself as 'container'.
+  // So a leading "/" is resolved against location, exactly as originUrl()
+  // does. An absolute ws/wss URL is still accepted, for an operator who is
+  // terminating TLS somewhere this page cannot infer.
+  // Whether a container declared a relay AT ALL, valid or not. The difference
+  // matters: an absent declaration is the hosted page, and a present but
+  // unusable one is a broken image, which must fail closed rather than quietly
+  // behave like the hosted page and dial our AWS.
+  containerDeclared() {
+    return typeof window !== 'undefined' && typeof window.__vibeosRelayDefault === 'string'
+      && window.__vibeosRelayDefault !== '';
+  },
+  containerRelay() {
+    const v = typeof window !== 'undefined' ? window.__vibeosRelayDefault : '';
+    if (!v) return '';
+    if (typeof v !== 'string') { console.error('vibeOS: __vibeosRelayDefault is not a string (' + JSON.stringify(v) + '); ignoring it'); return ''; }
+    if (v.startsWith('/')) return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + v;
+    if (!/^wss?:\/\//.test(v)) { console.error('vibeOS: __vibeosRelayDefault is neither a ws/wss URL nor an origin-relative path (' + JSON.stringify(v) + '); ignoring it'); return ''; }
+    return v;
+  },
   relayUrl() {
+    // A self-contained container names its own relay and NEVER falls back to
+    // ours: the image exists so that nothing leaves the box, and a fallback
+    // would send a local agent's frames to our AWS on the day the local relay
+    // hiccups. The hosted page declares none and behaves as before.
+    //
+    // Checked FIRST, ahead of the stored override, and on every path that
+    // reaches here — pair, resume, reconnect. The override is whatever some
+    // earlier session wrote into this profile; deferring to it would let a
+    // stale value walk a self-hosted pairing onto a third party without anyone
+    // choosing that. The owner of the page can still change policy on purpose;
+    // this only stops it happening by accident.
+    if (this.containerDeclared()) {
+      const container = this.containerRelay();
+      // Declared and unusable: fail closed. Falling through would mean a
+      // container with a broken build silently dialing our AWS, which is the
+      // one outcome this whole mechanism exists to prevent.
+      if (!container) throw new Error('this container declared a relay that is not usable, and will not fall back to a public one');
+      return container;
+    }
     const override = this.override();
     if (override) return override;
     return this.fellBack ? this.originUrl() : this.awsUrl;
@@ -1845,6 +1961,7 @@ const RemoteBridge = {
   relayLabel() {
     const where = this.relay === 'aws' ? 'the durable relay (aws)'
       : this.relay === 'origin' ? 'this origin (the durable relay could not be reached)'
+      : this.relay === 'container' ? 'this container\u2019s own relay \u2014 nothing is sent to vibeos.sh'
       : 'the relay at ' + this.relayUrl();
     return where + (this.instance ? ', instance ' + this.instance : '');
   },
@@ -1881,6 +1998,7 @@ const RemoteBridge = {
     if (!probe.ok) { this.set('error', probe.reason); return false; }
     setRemoteToken(this.mint());
     this.agentName = '';
+    this.pairedHow = 'pane';
     this.set('pairing', 'dialing the relay');
     this.dial();
     return true;
@@ -1913,11 +2031,78 @@ const RemoteBridge = {
     remoteToken = stored;
     this.agentName = name.slice(0, 80);
     this.resumed = true;
+    this.pairedHow = keep ? 'reload' : 'remembered';
     track('mcp_resumed', { how: keep ? 'reload_os' : 'remembered' });
     this.set('pairing', keep ? 'resuming the pairing after a reload' : 'resuming the remembered pairing');
     this.dial();
     return true;
   },
+  // A link the person opened is a pairing offer, not a pairing: whoever holds
+  // that token is root on this desktop for seven days — it can edit the OS's
+  // own source and run commands in its machine. So the boot asks, in those
+  // words, and nothing is stored and nothing is dialed until Accept.
+  get pendingLink() { return pendingLink; },
+  // A link names the relay the AGENT is on — explicitly with &relay=, or by
+  // its absence, which vibeos-mcp defines as a positive statement that the
+  // agent is on the public default (the package omits &relay= only when it
+  // dials that one). So absence is "apigw", never "unknown".
+  //
+  // A desktop that has its own relay (a container) therefore cannot accept a
+  // link that disagrees with it: following the link would move a self-hosted
+  // pairing onto our infrastructure, and ignoring the link would leave the tab
+  // somewhere the agent is not. Both fail as "it just doesn't pair", so the
+  // refusal is loud and carries the command that fixes it. A public tab has no
+  // relay of its own and still follows a link — a self-hosted relay with the
+  // hosted app is a real setup.
+  linkRelayMismatch(link) {
+    // A declared-but-unusable container relay refuses every link too. Returning
+    // '' here would mean "no container policy", so a broken build would accept
+    // a link naming our AWS — the same fail-open relayUrl() closes.
+    if (this.containerDeclared() && !this.containerRelay()) {
+      return 'This container declared a relay that is not usable, so it cannot pair through any relay. '
+           + 'That is a fault in the image rather than in your link.';
+    }
+    const container = this.containerRelay();
+    if (!container) return '';
+    const wanted = link.relay || this.awsUrl;
+    if (wanted === container) return '';
+    const host = u => { try { return new URL(u).host; } catch { return u; } };
+    return 'This desktop pairs through its own relay (' + host(container) + '), but the link you opened expects '
+      + host(wanted) + '. Start the agent with --relay ' + container + ' (or VIBEOS_RELAY=' + container
+      + ') and open the new link it prints.';
+  },
+
+  // Accept: store exactly as pair() does (7 days, the same take-over rules)
+  // and dial. The relay override is written first so the dial uses it.
+  acceptLink() {
+    const link = pendingLink;
+    if (!link) return false;
+    pendingLink = null;
+    const refusal = this.refusal();
+    if (refusal) { this.set('error', refusal); return false; }
+    if (link.relay) {
+      try { localStorage.setItem(this.RELAY_KEY, link.relay); }
+      catch (e) { console.warn('RemoteBridge: could not store the link relay; dialing the default: ' + e.message); }
+      this.probe = null;
+    }
+    setRemoteToken(link.token);
+    this.agentName = '';
+    this.fromLink = true;
+    this.pairedHow = 'link';
+    track('mcp_link_accepted', { relay: link.relay ? 'named' : 'default' });
+    this.set('pairing', 'dialing the relay');
+    this.dial();
+    return true;
+  },
+  // Refuse: the token is dropped and never stored. The fragment is already
+  // off the address bar, so there is nothing left to accept by accident.
+  refuseLink() {
+    if (!pendingLink) return false;
+    pendingLink = null;
+    track('mcp_link_refused');
+    return true;
+  },
+
   takeOver() {
     if (!remoteToken) return false;
     this.heldElsewhere = false;
@@ -1977,6 +2162,15 @@ const RemoteBridge = {
   // Only a failed FIRST dial, never a timeout on a call — a drop after an
   // open is the 2 h cut or an outage, and RemoteSocket redials in place.
   async fallBack() {
+    // A container named its own relay: there is nothing to fall back TO. Ours
+    // is not a safety net for a self-hosted box — reaching it would be the
+    // failure, not the recovery — so this says so and stops.
+    if (this.containerRelay()) {
+      this.socket = null;
+      this.stopKeepalive();
+      this.set('error', 'this container\u2019s relay (' + this.containerRelay() + ') could not be reached. vibeOS does not fall back to the hosted relay here: pairing stays inside this container.');
+      return;
+    }
     this.socket = null;
     this.stopKeepalive();
     this.fellBack = true;
@@ -2109,8 +2303,27 @@ const RemoteBridge = {
   connected(name = '') {
     if (name) { this.agentName = name; try { localStorage.setItem(MCP_AGENT_KEY, name); } catch {} }
     const label = this.agentName || 'an agent';
-    if (this.state !== 'connected') track('mcp_paired');
+    // WHICH path produced this pairing. Without it the link experiment reads
+    // as a number that cannot be attributed: a rise in mcp_paired could be new
+    // people the link reached, or the same people who would have used the pane.
+    if (this.state !== 'connected') track('mcp_paired', { how: this.pairedHow || 'unknown' });
     this.set('connected', label);
+    // A link pairing lands with no pane open: the person accepted a dialog,
+    // it closed, and nothing on screen said the handover happened (the pane
+    // that would say it is behind Settings, which the link path never opens).
+    // So the chat says it once, and names the agent — which is why it waits:
+    // the relay's {paired} frame arrives before the package's want frame, so
+    // the name is a beat late and announcing at the first `connected` would
+    // say "an agent" for a client that does identify itself.
+    if (this.fromLink && !this.announcedLink) {
+      this.announcedLink = true;
+      setTimeout(() => {
+        this.fromLink = false;
+        if (this.state !== 'connected') return;
+        try { Chat.line('Paired with ' + (this.agentName || 'an agent') + ' through the link you opened. It can edit this desktop\u2019s own source and run commands in its Linux machine; Settings \u203a Capabilities ends it.'); }
+        catch (e) { console.warn('RemoteBridge: could not announce the link pairing: ' + e.message); }
+      }, LINK_ANNOUNCE_MS);
+    }
   },
 
   // What the connected agent did, newest last, capped; the chat paints it as
@@ -2186,8 +2399,103 @@ const RemoteBridge = {
   unload() {},
 };
 window.addEventListener('pagehide', () => RemoteBridge.unload());
+
+/* The pairing-link consent gate.
+
+   Every string that can come from the link is textContent — the relay host
+   above all, which is attacker-chosen in the case this dialog exists to
+   catch. The token itself is NEVER shown: it is a secret, the person has no
+   decision to make about its digits, and a dialog that prints it puts it back
+   on the screen the replaceState just cleared it from.
+
+   Accept is not the default action: Escape and the backdrop refuse, and the
+   refusing button is the one focused. A dialog whose easiest exit grants root
+   is not a consent dialog. */
+function linkModal(link) {
+  const overlay = document.createElement('div');
+  overlay.className = 'key-modal-overlay';
+  overlay.innerHTML = `
+    <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="linkModalTitle">
+      <h2 id="linkModalTitle">You are handing this agent your desktop.</h2>
+      <p class="small" style="margin:0">You opened a pairing link. Accepting gives the agent that made it <strong>root on this desktop for seven days</strong>: it can read and edit vibeOS's own source, run commands in its Linux machine, and read the files in your workspace.</p>
+      <p class="tiny dimmer" style="margin:0">Accept only if you just started an agent yourself and expected to be sent here. You can end it any time in Settings &rsaquo; Capabilities.</p>
+      <p class="tiny dimmer" id="linkRelay" hidden style="margin:0"></p>
+      <div class="key-modal-actions col">
+        <button type="button" class="btn" id="linkRefuseBtn">Not now</button>
+        <button type="button" class="btn p" id="linkAcceptBtn">Accept &mdash; pair this desktop</button>
+      </div>
+    </div>`;
+  // Not innerHTML: the host comes from the link.
+  if (link.relay) {
+    let host = link.relay;
+    try { host = new URL(link.relay).host; } catch {}
+    const line = overlay.querySelector('#linkRelay');
+    line.textContent = 'This link routes the session through ' + host + ', not the usual vibeOS relay.';
+    line.hidden = false;
+  }
+  document.body.appendChild(overlay);
+  let offFocus = null;
+  const finish = () => { document.removeEventListener('keydown', onKey); if (offFocus) offFocus(); overlay.remove(); };
+  const refuse = () => { RemoteBridge.refuseLink(); finish(); Chat.line('The pairing link was not accepted. Nothing was connected.'); };
+  const onKey = e => { if (e.key === 'Escape') refuse(); };
+  document.addEventListener('keydown', onKey);
+  overlay.onclick = e => { if (e.target === overlay) refuse(); };
+  overlay.querySelector('#linkRefuseBtn').onclick = refuse;
+  overlay.querySelector('#linkAcceptBtn').onclick = () => { finish(); RemoteBridge.acceptLink(); };
+  // The dialog is painted at kernel load and the ui is imported after it, so
+  // the chat composer's autofocus lands AFTER this and takes the keyboard:
+  // measured, focus was on #msg with the overlay covering it, which means
+  // typing went to the chat behind a dialog that grants root, and Escape was
+  // the chat's. Focus is taken back whenever it leaves the dialog, for as
+  // long as the dialog is up.
+  const keepFocus = e => { if (!overlay.contains(e.target)) overlay.querySelector('#linkRefuseBtn').focus(); };
+  document.addEventListener('focusin', keepFocus);
+  offFocus = () => document.removeEventListener('focusin', keepFocus);
+  overlay.querySelector('#linkRefuseBtn').focus();
+}
+
+// A link this desktop cannot use. Not a choice — an explanation with the
+// command that fixes it. Every host and url is textContent: they come from
+// the link and from the container's own build.
+function linkRefusedModal(message) {
+  const overlay = document.createElement('div');
+  overlay.className = 'key-modal-overlay';
+  overlay.innerHTML = `
+    <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="linkBadTitle">
+      <h2 id="linkBadTitle">That pairing link is for a different relay.</h2>
+      <p class="small" id="linkBadWhy" style="margin:0"></p>
+      <p class="tiny dimmer" style="margin:0">Nothing was paired and nothing was stored.</p>
+      <div class="key-modal-actions col"><button type="button" class="btn p" id="linkBadOk">OK</button></div>
+    </div>`;
+  overlay.querySelector('#linkBadWhy').textContent = message;
+  document.body.appendChild(overlay);
+  let offFocus = null;
+  const finish = () => { document.removeEventListener('keydown', onKey); if (offFocus) offFocus(); overlay.remove(); };
+  const onKey = e => { if (e.key === 'Escape') finish(); };
+  document.addEventListener('keydown', onKey);
+  overlay.onclick = e => { if (e.target === overlay) finish(); };
+  overlay.querySelector('#linkBadOk').onclick = () => { finish(); try { Chat.line(message); } catch {} };
+  const keepFocus = e => { if (!overlay.contains(e.target)) overlay.querySelector('#linkBadOk').focus(); };
+  document.addEventListener('focusin', keepFocus);
+  offFocus = () => document.removeEventListener('focusin', keepFocus);
+  overlay.querySelector('#linkBadOk').focus();
+}
+
+// A link beats a remembered pairing: the person just asked for this one, and
+// resume() would otherwise dial yesterday's token and leave the link unused.
 // Loud, never fatal: a bad stored token must not take the kernel down with it.
-try { RemoteBridge.resume(); } catch (e) { console.error('RemoteBridge.resume failed: ' + e.message); }
+try {
+  const link = RemoteBridge.pendingLink;
+  if (link) {
+    track('mcp_link_opened');
+    const mismatch = RemoteBridge.linkRelayMismatch(link);
+    // Refused before the dialog: there is no decision to offer. Accepting
+    // could only pair with a relay the agent is not on, or move this desktop
+    // onto ours.
+    if (mismatch) { RemoteBridge.refuseLink(); track('mcp_link_relay_mismatch'); linkRefusedModal(mismatch); }
+    else linkModal(link);
+  } else RemoteBridge.resume();
+} catch (e) { console.error('RemoteBridge link/resume failed: ' + e.message); }
 
 /* What this session has already read, so the next turn does not read it again.
 

@@ -14,6 +14,7 @@
     <strong>vibeOS</strong>
     <button class="pill" id="wsPill" title="Your workspace folder"><span class="dot off" id="wsDot"></span><span id="wsText">no workspace</span></button>
     <button class="pill" id="lxPill" style="border:0;color:inherit;font-weight:600;cursor:pointer"><span class="dot off" id="lxDot"></span><span id="lxText">vm starting…</span></button>
+    <button class="pill" id="loginPill" style="border:0;color:inherit;font-weight:600;cursor:pointer" title="How the agent is signed in"><span class="dot off" id="loginDot"></span><span id="loginText">no model</span></button>
     <span class="sp"></span>
     <span class="pill" id="modePill"><span class="dot" id="modeDot"></span><span id="modeText">detecting…</span></span>
     <span id="clock" style="font-variant-numeric:tabular-nums"></span>
@@ -29,9 +30,18 @@
   (function () {
     var path = location.pathname;
     var base = path.endsWith('/') ? path : /\.[a-z0-9]+$/i.test(path) ? path.replace(/[^/]*$/, '') : path + '/';
-    ['oauth.js', 'skills.js'].forEach(function (f) {
+    // image-bases.js first: machine.js reads window.__vibeosImageBases when
+    // it builds IMAGES, so it has to exist before the kernel runs.
+    ['image-bases.js', 'oauth.js', 'skills.js'].forEach(function (f) {
       document.write('<script src="' + base + f + '"><\/script>');
     });
+    // Add to Home Screen on an iPhone reads the apple-touch-icon and the
+    // manifest (icon-192/512, standalone, colours from os.css :root); both
+    // are beside this file, so the mirror root works too. icon.png is the
+    // menubar's brand mark, resized.
+    document.write('<link rel="apple-touch-icon" sizes="180x180" href="' + base + 'apple-touch-icon.png">');
+    document.write('<link rel="manifest" href="' + base + 'manifest.webmanifest">');
+    document.write('<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="vibeOS"><meta name="theme-color" content="#101219">');
     // The ui modules run from blob URLs, whose base is opaque: the only way
     // one can import the vendored Lit is a bare name an import map resolves.
     document.write('<script type="importmap">' + JSON.stringify({ imports: { lit: base + 'vendor/lit.js' } }) + '<\/script>');
