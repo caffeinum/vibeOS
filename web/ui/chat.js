@@ -53,17 +53,16 @@ export function ChatApp(body, win) {
   // body sat right under the last bubble while the log was short — "the
   // input glues to the end of content". The input is a two-line textarea:
   // Enter sends, Shift+Enter is a newline.
-  body.style.cssText = 'padding:0;display:flex;flex-direction:column;overflow:hidden';
+  body.className = 'chat-app';
   body.innerHTML = `
-    <div id="log" style="flex:1 1 auto;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px"></div>
-    <div id="composer" style="flex:0 0 auto;border-top:1px solid var(--barline);background:var(--panel)">
-      <div id="chips" class="row" hidden style="flex-wrap:wrap;gap:6px;padding:8px 10px 0"></div>
-      <div class="row" style="gap:6px;padding:8px 10px;align-items:flex-end">
-        <button class="btn sm" id="attach" type="button" title="attach an image" aria-label="attach an image"></button>
+    <div id="log" class="chat-log"></div>
+    <div id="composer" class="chat-composer">
+      <div id="chips" class="chat-chips row" hidden></div>
+      <div class="chat-composer-row row">
+        <button class="btn sm chat-attach" id="attach" type="button" title="attach an image" aria-label="attach an image"></button>
         <input type="file" id="pick" accept="image/*" multiple hidden>
-        <textarea id="msg" rows="2" placeholder="ask for a window, or a script for the VM — attach or paste an image"
-               style="flex:1;border:1px solid var(--line);border-radius:var(--radius-ctl);background:var(--panel2);color:inherit;padding:7px 10px;font:inherit;font-size:13px;line-height:1.35;resize:none;min-height:0"></textarea>
-        <button class="btn p sm" id="send">Send</button>
+        <textarea id="msg" class="chat-input" rows="2" placeholder="ask for a window, or a script for the VM — attach or paste an image"></textarea>
+        <button class="btn p sm chat-send" id="send">Send</button>
       </div>
     </div>`;
   const log = body.querySelector('#log'), input = body.querySelector('#msg'), chips = body.querySelector('#chips');
@@ -79,17 +78,22 @@ export function ChatApp(body, win) {
     if (files.length) Chat.attach(files).then(() => input.focus());
   });
 
-  const bubble = (who, html, before = null) => {
+  const bubble = (who, html, before = null, extraClass = '') => {
     const d = document.createElement('div');
-    d.style.cssText = who === 'you'
-      ? 'align-self:flex-end;max-width:85%;background:var(--sel);color:var(--seltext);border:1px solid var(--line2);border-radius:var(--radius-win) 10px 2px 10px;padding:8px 11px;font-size:13px'
-      : 'align-self:flex-start;max-width:92%;background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius-win) 10px 10px 2px;padding:8px 11px;font-size:13px';
+    d.className = 'chat-bubble ' + (who === 'you' ? 'chat-bubble-you' : 'chat-bubble-vibeos') + (extraClass ? ' ' + extraClass : '');
     d.innerHTML = html;
     log.insertBefore(d, before);
     return d;
   };
-  const line = (text, error = false) => {
-    const d = bubble('vibeos', error ? '<span class="no"></span>' : '<span class="tiny dimmer"></span>');
+  const cardIcon = (src, title) => {
+    const img = document.createElement('img');
+    img.className = 'chat-card-icon';
+    img.src = src || Apps.synthesizeIcon(title);
+    img.alt = '';
+    return img;
+  };
+  const line = (text, error = false, extraClass = '') => {
+    const d = bubble('vibeos', error ? '<span class="no"></span>' : '<span class="tiny dimmer"></span>', null, extraClass + (error ? ' chat-line-error' : ' chat-line-meta'));
     d.firstChild.textContent = text;
     return d;
   };
@@ -106,8 +110,8 @@ export function ChatApp(body, win) {
   const paintIntro = () => {
     const agent = RemoteBridge.state === 'connected';
     const html = Gen.available ? readyLine()
-      : agent ? `<b class="part yes"></b> is connected through vibeos-mcp and drives this desktop — talk to it in its own window.<br>
-         <span class="tiny dimmer">This box can run a second model beside it.</span> <span class="row" style="margin-top:8px"><button class="btn sm" id="chatConnect">Connect a model here too</button></span>`
+      : agent ? `<b class="part yes"></b> is connected through vibeos-mcp and drives this desktop.<br>
+         <span class="tiny dimmer">Type here — your messages reach the agent on its next tool call (get_mailbox). This box can also run a second model beside it.</span> <span class="row" style="margin-top:8px"><button class="btn sm" id="chatConnect">Connect a model here too</button></span>`
       : `<b class="part">No model connected yet.</b> Connect one to generate apps and scripts from the chat.<br>
          <span class="row" style="margin-top:8px"><button class="btn p sm" id="chatConnect">Connect a model</button></span>`;
     if (introEl && introEl.isConnected) { introEl.innerHTML = html; }
@@ -124,8 +128,7 @@ export function ChatApp(body, win) {
   Windows.onDispose(win, RemoteBridge.on(() => { if (introEl) paintIntro(); agentMode(); }));
 
   // With an agent connected and no model here, this window is the activity
-  // view: every tool call the agent makes lands as a card, and the input says
-  // where to talk. MCP is agent→tools; nothing typed here can reach the agent.
+  // view: every tool call lands as a card, and the composer feeds the mailbox.
   const paintActivity = (e) => {
     const d = document.createElement('div');
     d.className = 'agent-act';
@@ -140,11 +143,14 @@ export function ChatApp(body, win) {
   };
   let agentOnly = false;
   const agentMode = () => {
-    const on = RemoteBridge.state === 'connected' && !Gen.available;
-    if (on === agentOnly) return;
-    agentOnly = on;
-    if (on) { input.disabled = true; input.placeholder = `${RemoteBridge.detail || 'your agent'} drives this desktop — talk to it in its own window`; }
-    else if (Chat.ready) { input.disabled = false; hint(); }
+    agentOnly = RemoteBridge.state === 'connected' && !Gen.available;
+    if (!Chat.ready) return;
+    if (RemoteBridge.state === 'connected') {
+      input.disabled = false;
+      input.placeholder = agentOnly
+        ? `message ${RemoteBridge.detail || 'your agent'} — delivered on its next tool call`
+        : placeholder;
+    }
   };
   Windows.onDispose(win, RemoteBridge.onActivity(e => { if (RemoteBridge.state === 'connected') paintActivity(e); }));
 
@@ -163,10 +169,11 @@ export function ChatApp(body, win) {
       b.querySelector('b').textContent = c.title; b.querySelector('.dimmer').textContent = c.error;
       return;
     }
-    const b = bubble('vibeos', `<b></b> <span class="req">${c.kind === 'vm' ? 'vm script' : 'window'}</span><br>
-      <span class="tiny dimmer"></span>
-      <div class="row" style="margin-top:8px"><button class="btn sm" id="act"></button>${c.src ? '<button class="btn sm" id="src">Source</button>' : ''}</div>
-      <pre class="out" id="res" style="display:none;margin-top:8px"></pre>`, before);
+    const b = bubble('vibeos', `<div class="chat-card-head row"><span class="chat-card-icon-wrap"></span><div class="chat-card-titles"><b></b> <span class="req">${c.kind === 'vm' ? 'vm script' : 'window'}</span><br>
+      <span class="tiny dimmer"></span></div></div>
+      <div class="row chat-card-actions"><button class="btn sm" id="act"></button>${c.src ? '<button class="btn sm" id="src">Source</button>' : ''}</div>
+      <pre class="out" id="res" style="display:none;margin-top:8px"></pre>`, before, 'chat-card');
+    b.querySelector('.chat-card-icon-wrap').appendChild(cardIcon(c.icon, c.title));
     b.querySelector('b').textContent = c.title;
     b.querySelector('.dimmer').textContent = c.where;
     const act = b.querySelector('#act'), res = b.querySelector('#res');
@@ -219,7 +226,7 @@ export function ChatApp(body, win) {
   const paintFailure = (t, i) => {
     const last = i === lastFailure() && !Chat.running;
     const to = Chat.defaultModel();
-    const b = bubble('vibeos', '<span class="no" id="failure"></span>' + (last && to ? '<div class="row" style="margin-top:8px"><button class="btn sm" id="resetModel"></button></div>' : ''));
+    const b = bubble('vibeos', '<span class="no" id="failure"></span>' + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : ''), null, 'chat-failure');
     b.querySelector('#failure').textContent = t.failure;
     const btn = b.querySelector('#resetModel');
     if (!btn) return;
@@ -328,7 +335,7 @@ export function ChatApp(body, win) {
     const notesAt = i => Chat.notes.filter(n => n.at === i).forEach(n => line(n.text, n.error));
     for (let i = 0; i <= Chat.turns.length; i++) {
       if (Chat.restored && i === Chat.restored) {
-        line(`restored from ${ChatLog.PATH} · ${Chat.restored} turns`);
+        line(`restored from ${ChatLog.PATH} · ${Chat.restored} turns`, false, 'chat-restore');
         if (Chat.note) paintReload(Chat.note);
       }
       notesAt(i);
@@ -391,8 +398,12 @@ export function ChatApp(body, win) {
   // the turn's next step — and says so. Send stays enabled: nothing about the
   // composer changes but this line.
   const STEERING = 'the agent is working — send anyway and it takes this at its next step';
-  const hint = () => { if (agentOnly || !Chat.ready) return; input.placeholder = (Chat.running || Chat.starting) ? STEERING : placeholder; };
-  const enable = () => { if (agentOnly) return; input.disabled = false; hint(); };
+  const hint = () => {
+    if (!Chat.ready) return;
+    if (RemoteBridge.state === 'connected' && !Gen.available) return agentMode();
+    input.placeholder = (Chat.running || Chat.starting) ? STEERING : placeholder;
+  };
+  const enable = () => { input.disabled = false; hint(); };
   agentMode();
   if (!Chat.ready) { input.disabled = true; input.placeholder = 'loading chat…'; }
   else hint();   // a reload_ui mid-turn opens this window with the turn already running

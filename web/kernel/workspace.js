@@ -143,6 +143,25 @@ const Workspace = {
     return file + '.js';
   },
 
+  async saveAppIcon(stem, dataUrl) {
+    if (!this.open || !dataUrl) return false;
+    const fh = await this.apps.getFileHandle(stem + '.icon', { create: true });
+    const w = await fh.createWritable(); await w.write(dataUrl); await w.close();
+    this.noteWrite('apps/' + stem + '.icon');
+    return true;
+  },
+
+  async readAppIcon(stem) {
+    if (!this.open) return null;
+    try {
+      const fh = await this.apps.getFileHandle(stem + '.icon');
+      const file = await fh.getFile();
+      const text = await file.text();
+      if (!text || !/^data:image\/(svg\+xml|png);/i.test(text.trim())) return null;
+      return text.trim();
+    } catch (e) { if (e.name === 'NotFoundError') return null; throw e; }
+  },
+
   // Path-addressed access for the agent's file tools. Reads of the OS source
   // fall back to the served copy, so the very first edit_file has the real
   // file to edit and writing it is what forks the OS into this workspace.
@@ -382,6 +401,50 @@ function parseRequires(src) {
 function parseTitle(src) {
   const m = /^\s*\/\/\s*@title\s+(.+)$/m.exec(src);
   return m ? m[1].trim() : null;
+}
+
+const ICON_MAX_BYTES = 64 * 1024;
+
+function appIconStem(jsName) {
+  return String(jsName || '').replace(/\.js$/i, '');
+}
+
+function synthesizeIconSvg(title) {
+  const ch = String(title || 'A').trim().charAt(0).toUpperCase() || 'A';
+  const safe = ch.replace(/[<>&"']/g, '');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#5b7cfa"/><text x="16" y="21" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" font-weight="700" fill="#fff">${safe}</text></svg>`;
+  return 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
+
+function bytesToBase64(bytes) {
+  let s = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  return btoa(s);
+}
+
+async function normalizeAppIcon(icon, title) {
+  let raw = typeof icon === 'string' ? icon.trim() : '';
+  if (!raw) return synthesizeIconSvg(title);
+  if (raw.startsWith('data:')) {
+    if (!/^data:image\/(svg\+xml|png);/i.test(raw)) throw new Error('icon must be a data:image/svg+xml or data:image/png URL');
+    if (raw.length > ICON_MAX_BYTES) throw new Error('icon is too large (max 64 KB)');
+    return raw;
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    const r = await fetch(raw);
+    if (!r.ok) throw new Error('icon URL returned HTTP ' + r.status);
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (buf.byteLength > ICON_MAX_BYTES) throw new Error('icon download is too large (max 64 KB)');
+    const mime = ct.includes('svg') ? 'image/svg+xml' : 'image/png';
+    return `data:${mime};base64,` + bytesToBase64(buf);
+  }
+  if (/^\s*<svg[\s>]/i.test(raw)) {
+    if (/<script/i.test(raw)) throw new Error('icon SVG must not contain script');
+    return 'data:image/svg+xml,' + encodeURIComponent(raw.trim());
+  }
+  throw new Error('icon must be inline <svg>…, a data URL, or an http(s) URL to a PNG or SVG');
 }
 
 // Where a window opens: `// @geometry <corner> [WxH]`, `// @geometry
@@ -792,24 +855,42 @@ const Apps = {
     const apps = [], unlisted = [];
     for (const [name, f] of byName) {
       const c = classifyApp(name, f);
+      if (!c.reason) {
+        const stem = appIconStem(name);
+        let icon = null;
+        if (VM.state === 'ready') {
+          try {
+            const vmIcon = await VM.readText(stem + '.icon');
+            if (vmIcon && /^data:image\//i.test(vmIcon.trim())) icon = vmIcon.trim();
+          } catch {}
+        }
+        if (!icon) icon = await Workspace.readAppIcon(stem);
+        c.icon = icon || synthesizeIconSvg(c.title);
+      }
       (c.reason ? unlisted : apps).push(c);
     }
     const byNameAsc = (a, b) => a.name.localeCompare(b.name);
     return { apps: apps.sort(byNameAsc), unlisted: unlisted.sort(byNameAsc) };
   },
 
+  synthesizeIcon(title) { return synthesizeIconSvg(title); },
+
   // Write to the VM first, then mirror to disk. Returns what actually happened
   // rather than a boolean, so the UI can say so instead of implying both —
   // including the source as written, since the header may have been added.
-  async save(title, source) {
+  async save(title, source, icon) {
     const file = (title || 'app').replace(/[^a-z0-9-_]+/gi, '-').toLowerCase().slice(0, 40) + '.js';
     const headed = ensureHeader(title, source);
-    const out = { file, vm: false, folder: false, headerAdded: headed.added, source: headed.source };
+    const stem = appIconStem(file);
+    const iconUrl = await normalizeAppIcon(icon, parseTitle(headed.source) || title);
+    const out = { file, vm: false, folder: false, headerAdded: headed.added, source: headed.source, icon: iconUrl };
     if (VM.state === 'ready') {
       try { await VM.writeText(file, headed.source); out.vm = true; } catch {}
+      if (iconUrl) { try { await VM.writeText(stem + '.icon', iconUrl); } catch {} }
     }
     if (Workspace.open) {
       try { await Workspace.saveApp(title || 'app', headed.source); out.folder = true; } catch {}
+      if (iconUrl) { try { await Workspace.saveAppIcon(stem, iconUrl); } catch {} }
     }
     return out;
   },

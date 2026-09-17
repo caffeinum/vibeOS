@@ -74,24 +74,19 @@ export function paintMode() {
 // The dock lists vibeOS, then the apps it has built, then Settings — the same
 // shape as a real dock, where system panels are one icon and not eight.
 export async function paintDock(dock = document.getElementById('dock')) {
-  const { SHELL, ICONS } = UI.live();
+  const { SHELL, BUILTIN_ICONS, dockButtonContent } = UI.live();
   dock.innerHTML = '';
-  const add = (html, title, onclick, cls) => {
+  const addIcon = (iconSrc, label, title, onclick, cls) => {
     const b = document.createElement('button');
-    b.innerHTML = html; b.title = title; b.onclick = onclick;
+    b.title = title;
+    b.onclick = onclick;
     if (cls) b.className = cls;
     if (cls === 'dock-start') b.id = 'dockStart';
+    b.append(dockButtonContent(iconSrc, label || ''));
     dock.appendChild(b);
     return b;
   };
 
-  // Every entry raises the window that is open for it, restored if it was
-  // minimised, and opens one only when none is — the shell's three and
-  // every generated app alike (focusOrLaunch, by apps/<file>).
-  // focusOrLaunch is new here; a desktop whose agent forked ui/windows.js
-  // before it has no such export, and a dock click on a generated app then
-  // did nothing but a console error. Fall back to the fork's own launchApp,
-  // loudly: focusing is the feature, launching is the old behaviour.
   const ui = UI.live();
   const focusOrOpen = ui.focusOrOpen;
   const openAgent = ui.openAgent || (() => focusOrOpen(SHELL.chat));
@@ -101,11 +96,12 @@ export async function paintDock(dock = document.getElementById('dock')) {
   });
   const win95 = Theme.id === 'win95';
   if (win95) {
-    add('Start', 'Start — open vibeOS agent', () => openAgent(), 'dock-start');
+    addIcon(BUILTIN_ICONS.chat, 'Start', 'Start — open vibeOS agent', () => openAgent(), 'dock-start');
   } else {
-    add(ICONS.vibeos, 'vibeOS — ask for an app', () => focusOrOpen(SHELL.chat));
+    addIcon(BUILTIN_ICONS.vibeos, '', 'vibeOS — ask for an app', () => focusOrOpen(SHELL.chat));
   }
-  add(win95 ? 'Web' : '🌐', 'Browser', () => focusOrOpen(SHELL.browser));
+  addIcon(BUILTIN_ICONS.browser, win95 ? 'Web' : '', 'Browser', () => focusOrOpen(SHELL.browser));
+  addIcon(BUILTIN_ICONS.terminal, win95 ? 'CL' : '', 'Terminal', () => openSettings('terminal'));
 
   const live = dock.isConnected;
   let apps = [];
@@ -113,23 +109,20 @@ export async function paintDock(dock = document.getElementById('dock')) {
   if (live && !dock.isConnected) return;
   if (apps.length) {
     const sep = document.createElement('span');
-    sep.style.cssText = 'width:1px;background:rgba(0,0,0,.18);margin:4px 2px';
+    sep.className = 'dock-sep';
     dock.appendChild(sep);
   }
   apps.slice(0, 8).forEach(a => {
     const missing = missingCaps(a.requires);
-    // The title is a header line in a file the guest can write: text, not html.
-    const b = add('', a.title + (missing.length ? ' (needs ' + missing.join(', ') + ')' : ''), () => focusOrLaunch(a));
-    b.textContent = a.title.slice(0, 2).toUpperCase();
-    b.style.fontSize = '13px';
-    b.style.fontWeight = '700';
+    const short = win95 ? a.title.slice(0, 2) : '';
+    const b = addIcon(a.icon, short, a.title + (missing.length ? ' (needs ' + missing.join(', ') + ')' : ''), () => focusOrLaunch(a));
     if (missing.length) b.style.opacity = '.5';
   });
 
   const sep2 = document.createElement('span');
-  sep2.style.cssText = 'width:1px;background:rgba(0,0,0,.18);margin:4px 2px';
+  sep2.className = 'dock-sep';
   dock.appendChild(sep2);
-  add(win95 ? 'Set' : ICONS.settings, 'Settings', () => focusOrOpen(SHELL.settings));
+  addIcon(BUILTIN_ICONS.settings, win95 ? 'Set' : '', 'Settings', () => focusOrOpen(SHELL.settings));
 }
 
 // Wire the menubar to the kernel's state and paint it now. Returns stop().

@@ -378,6 +378,7 @@ function forkBar(fork) {
     '<span style="flex:1;min-width:200px"><b></b> <span class="d" style="opacity:.8"></span></span>' +
     '<button class="keep" style="' + btn + 'background:transparent;color:#fff;border:1px solid rgba(255,255,255,.5)">Keep mine</button>' +
     '<button class="take" style="' + btn + 'background:#fff;color:#78350f">Take the update</button>' +
+    '<button class="agent" style="' + btn + 'background:#fef3c7;color:#78350f">Let agent update</button>' +
     '<button class="diff" style="' + btn + 'background:transparent;color:#fff;border:1px solid rgba(255,255,255,.5)">Show diff</button>';
   bar.querySelector('b').textContent = fork.error
     ? 'vibeOS could not read the version record of your copy.'
@@ -387,8 +388,15 @@ function forkBar(fork) {
     ? fork.error + '. The served vibeOS is ' + fork.files.map(f => f + '=' + fork.served[f]).join(' ') + '.'
     : movedFiles.map(f => 'Your system/' + f + ' came from ' + fork.base[f] + (fork.at[f] ? ' on ' + fork.at[f].slice(0, 10) : '') +
       '; the served one is now ' + fork.served[f] + '.').join(' ')).slice(0, 260);
+  const agentBtn = bar.querySelector('.agent');
+  agentBtn.disabled = !forkAgentAvailable();
+  agentBtn.title = agentBtn.disabled ? 'Connect a model or pair an agent first' : '';
   bar.querySelector('.keep').onclick = () => window.__vibeosFork.keep();
   bar.querySelector('.take').onclick = () => window.__vibeosFork.take().catch(e => recoveryBar('Could not take the update.', e.message));
+  agentBtn.onclick = () => {
+    if (!forkAgentAvailable()) { recoveryBar('No agent connected.', 'Add a model in Settings › Model or pair an agent in Settings › Capabilities.'); return; }
+    window.__vibeosFork.agent().catch(e => recoveryBar('Could not start the agent merge.', e.message));
+  };
   bar.querySelector('.diff').onclick = () => window.__vibeosFork.diff();
   (document.body || document.documentElement).appendChild(bar);
 }
@@ -475,9 +483,59 @@ function renderDiff(fork, file) {
   return html;
 }
 
-// The three answers to "vibeOS moved since you forked". Settings > Design
-// offers the same three, through these, so there is one implementation.
+// Whether an agent can run a fork merge: the in-chat loop (model key or Codex
+// login) or a connected MCP agent (brief lands in the workspace for it).
+function forkAgentAvailable() {
+  if (typeof Gen !== 'undefined' && Gen.available && (Gen.oauth || Gen.key)) return true;
+  if (typeof RemoteBridge !== 'undefined' && RemoteBridge.state === 'connected') return true;
+  return false;
+}
+
+function forkMergeTargets(fork) {
+  if (!fork) return [];
+  if (fork.base) return fork.files.filter(f => fork.base[f] !== fork.served[f]);
+  return fork.files.slice();
+}
+
+function buildForkMergeBrief(fork, moved) {
+  const lines = [
+    '(note from vibeOS, not the person: fork update merge — started from Settings › Design, "Let agent update")',
+    '',
+    'vibeOS has moved since this workspace forked system/. Merge each listed file: keep intentional local customizations; adopt the stock update everywhere else.',
+    '',
+    'For each path below:',
+    '- read_file system/<path> — your fork (what boots now)',
+    '- read_file system/<path>.vibeos-served — the stock update from vibeos.sh (written beside your fork for this merge)',
+    '- edit_file system/<path> to combine them',
+    '- when every file is merged: reload_ui if you only changed system/ui/*.js; reload_os once, last, if you changed system/kernel/*.js or system/os.css (or both)',
+    '- delete each system/<path>.vibeos-served sidecar and system/fork-merge-brief.txt when done',
+    '- update system/os.version.json so each merged file\'s base is its new served version (see hashes below)',
+    '',
+    'Files to merge:',
+  ];
+  for (const f of moved) {
+    const base = fork.base && fork.base[f] ? fork.base[f] : '(unknown)';
+    const served = fork.served && fork.served[f] ? fork.served[f] : '(unknown)';
+    lines.push(`- system/${f} — forked from ${base}, served is now ${served} → sidecar system/${f}.vibeos-served`);
+  }
+  if (fork.error) lines.push('', 'Version record issue on this boot: ' + fork.error);
+  lines.push('', 'Full brief also saved at system/fork-merge-brief.txt');
+  return lines.join('\n');
+}
+
+function openChatForForkMerge() {
+  try {
+    if (typeof focusOrOpen === 'function' && typeof UI !== 'undefined' && UI.stable) {
+      focusOrOpen(UI.stable().SHELL.chat);
+      return;
+    }
+  } catch {}
+}
+
+// The four answers to "vibeOS moved since you forked". Settings > Design
+// offers the same four, through these, so there is one implementation.
 window.__vibeosFork = {
+  agentAvailable: forkAgentAvailable,
   keep() {
     const fork = window.__vibeosBoot.fork;
     if (!fork) throw new Error('nothing to keep: this boot ran the served OS');
@@ -540,6 +598,51 @@ window.__vibeosFork = {
     panel.querySelector('button').onclick = () => panel.remove();
     panel.appendChild(body);
     (document.body || document.documentElement).appendChild(panel);
+  },
+  // Served snapshots land as system/<file>.vibeos-served so read_file can see
+  // stock while the fork still boots; the in-chat agent gets Chat.send, MCP
+  // gets the same files plus a line to relay the brief.
+  async agent() {
+    const fork = window.__vibeosBoot.fork;
+    if (!fork) throw new Error('nothing to merge: this boot ran the served OS');
+    const moved = forkMergeTargets(fork);
+    if (!moved.length) throw new Error('nothing to merge: your copy already matches the served desktop');
+    if (!forkAgentAvailable()) throw new Error('connect a model in Settings › Model or pair an agent in Settings › Capabilities');
+    if (typeof Workspace === 'undefined' || !Workspace.open) throw new Error('open a workspace folder first');
+    if (Workspace.root.requestPermission && (await Workspace.root.requestPermission({ mode: 'readwrite' })) !== 'granted')
+      throw new Error('write access to the workspace was refused');
+    for (const f of moved) {
+      const served = fork.servedText && fork.servedText[f];
+      if (typeof served !== 'string') throw new Error('served text for system/' + f + ' is not available — reload and try again');
+      await Workspace.writePath('system/' + f + '.vibeos-served', served);
+    }
+    const brief = buildForkMergeBrief(fork, moved);
+    await Workspace.writePath('system/fork-merge-brief.txt', brief);
+    const viaChat = typeof Gen !== 'undefined' && Gen.available && (Gen.oauth || Gen.key);
+    const viaMcp = typeof RemoteBridge !== 'undefined' && RemoteBridge.state === 'connected';
+    try { track('fork_agent_merge', { files: moved.length, via: viaChat ? 'chat' : 'mcp' }); } catch {}
+    if (viaChat) {
+      openChatForForkMerge();
+      if (typeof Chat === 'undefined' || !Chat.send) throw new Error('the chat is not ready yet — try again in a moment');
+      const r = Chat.send(brief);
+      if (!r || !r.started) throw new Error('the agent could not start — wait for the current turn to finish or try again');
+      const bar = document.getElementById('forkBar'); if (bar) bar.remove();
+      return { ok: true, via: 'chat', files: moved };
+    }
+    if (viaMcp) {
+      const who = RemoteBridge.agentName || RemoteBridge.detail || 'your agent';
+      if (typeof Chat !== 'undefined' && Chat.line) {
+        Chat.line('Fork merge ready: read system/fork-merge-brief.txt and each system/*.vibeos-served file, then merge into your forks. Tell ' + who + ' in its window to run that brief.');
+      }
+      try {
+        await navigator.clipboard.writeText(brief);
+        if (typeof Chat !== 'undefined' && Chat.line) Chat.line('Copied the merge brief to the clipboard for ' + who + '.');
+      } catch {}
+      openChatForForkMerge();
+      const bar = document.getElementById('forkBar'); if (bar) bar.remove();
+      return { ok: true, via: 'mcp', files: moved };
+    }
+    throw new Error('connect a model in Settings › Model or pair an agent in Settings › Capabilities');
   },
 };
 

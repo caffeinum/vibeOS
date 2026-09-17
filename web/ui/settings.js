@@ -572,7 +572,10 @@ export function WorkspaceApp(body) {
     apps.forEach(a => {
       const missing = missingCaps(a.requires);
       const card = el('div', 'card' + (missing.length ? ' blocked' : ''));
-      card.append(el('span', '', missing.length ? '🔒' : '📦'), label(a.title, '', a.name, 'tiny dimmer mono'));
+      const icon = el('img', 'app-list-icon');
+      icon.src = a.icon || Apps.synthesizeIcon(a.title);
+      icon.alt = '';
+      card.append(icon, label(a.title, '', a.name, 'tiny dimmer mono'));
       a.requires.forEach(r => card.append(el('span', 'req' + (CAP.supports[r] ? '' : ' miss'), r)));
       const open = el('button', 'btn sm', missing.length ? 'Why?' : 'Open');
       open.onclick = () => (UI.live().openOrRerun || launchApp)(a);
@@ -719,7 +722,7 @@ function mcpPane(body, win) {
       : st === 'off' ? 'No agent paired. Pairing mints a token for this tab.'
       : st === 'pairing' ? 'Pairing — ' + d + '…'
       : st === 'waiting' ? 'Waiting for an agent: paste the command into your MCP client. Talk to your agent in its own window; it drives this desktop, and the built-in chat keeps working alongside it.' + inst()
-      : st === 'connected' ? d + ' is connected and driving this desktop (' + RemoteBridge.calls + ' call' + (RemoteBridge.calls === 1 ? '' : 's') + '). Talk to it in its own window.' + inst()
+      : st === 'connected' ? d + ' is connected and driving this desktop (' + RemoteBridge.calls + ' call' + (RemoteBridge.calls === 1 ? '' : 's') + '). Type in vibeOS chat to reach it (get_mailbox on its next tool call).' + inst()
         + (RemoteBridge.sampling ? ' ' + d + ' can power apps (sampling).' : ' ' + d + ' cannot power apps: its client does not support sampling.')
       : 'Not connected — ' + d;
     const hasToken = !!RemoteBridge.token;
@@ -1079,10 +1082,27 @@ function DesignAppRender(body, rerender) {
   const fv = body.querySelector('#forkVersion');
   if (fv) {
     fv.querySelector('.d').textContent = forkVersionText();
-    const keep = fv.querySelector('#forkKeep'), take = fv.querySelector('#forkTake'), diff = fv.querySelector('#forkDiffBtn');
+    const keep = fv.querySelector('#forkKeep'), take = fv.querySelector('#forkTake'), agent = fv.querySelector('#forkAgent'), diff = fv.querySelector('#forkDiffBtn');
+    const paintAgent = () => {
+      if (!agent) return;
+      const ok = window.__vibeosFork.agentAvailable();
+      agent.disabled = !ok;
+      agent.title = ok ? '' : 'Connect a model in Settings › Model or pair an agent in Settings › Capabilities';
+    };
+    paintAgent();
     if (keep) keep.onclick = () => { window.__vibeosFork.keep(); rerender(); };
     if (take) take.onclick = () => window.__vibeosFork.take().catch(e => recoveryBar('Could not take the update.', e.message));
+    if (agent) agent.onclick = () => {
+      if (!window.__vibeosFork.agentAvailable()) {
+        if (typeof Gen !== 'undefined' && Gen.askForKey) Gen.askForKey();
+        else recoveryBar('No agent connected.', 'Add a model in Settings › Model or pair an agent in Settings › Capabilities.');
+        return;
+      }
+      window.__vibeosFork.agent().catch(e => recoveryBar('Could not start the agent merge.', e.message));
+    };
     if (diff) diff.onclick = () => window.__vibeosFork.diff();
+    if (agent && typeof Gen !== 'undefined') Gen.on(paintAgent);
+    if (agent && typeof RemoteBridge !== 'undefined') RemoteBridge.on(paintAgent);
   }
 }
 
@@ -1114,6 +1134,7 @@ function forkVersionHtml() {
     <div class="row" style="gap:6px;margin:0 0 12px">
       ${moved && fork && !fork.dismissed ? '<button class="btn sm" id="forkKeep">Keep mine</button>' : ''}
       <button class="btn sm${moved ? ' p' : ''}" id="forkTake">Take the update</button>
+      ${moved ? '<button class="btn sm" id="forkAgent">Let agent update</button>' : ''}
       <button class="btn sm" id="forkDiffBtn">Show diff</button>
     </div>`;
 }
@@ -1129,7 +1150,7 @@ function forkVersionText() {
   if (!fork.moved) return 'Forked: ' + from + '. That is still what vibeos.sh serves, so this copy is up to date with it.';
   const now = fork.files.filter(f => fork.base[f] !== fork.served[f]).map(f => f + ' is ' + fork.served[f]).join(', ');
   return 'Forked: ' + from + '. vibeOS has moved since: ' + now + ' now' + (fork.dismissed ? ' (you chose to keep yours for this version)' : '') +
-    '. Keep mine hides the notice until the next served change; Take the update sets each of your copies aside as system/<file>.bak and boots the served ones; Show diff lists what changed between them.';
+    '. Keep mine hides the notice until the next served change; Take the update sets each of your copies aside as system/<file>.bak and boots the served ones; Let agent update gives the connected agent your fork and the served copy to merge; Show diff lists what changed between them.';
 }
 
 export function ModelApp(body) {

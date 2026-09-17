@@ -38,12 +38,13 @@ if (!customElements.get('vibeos-window')) customElements.define('vibeos-window',
 // The template, from the record. Interpolations are text: a title from a
 // generated app's header or the model reaches the title bar as characters.
 function chrome(el) {
-  const { title, badge } = el.rec.spec;
+  const { title, badge, icon } = el.rec.spec;
   return html`
     <div class="titlebar" @mousedown=${e => dragStart(e, el)}>
       <button class="tl r" title="Close" @click=${() => Windows.close(el)}></button>
       <button class="tl y" title="Minimise" @click=${() => el.classList.add('min')}></button>
       <button class="tl g" title="Zoom" @click=${() => zoom(el)}></button>
+      ${icon ? html`<img class="win-icon" src=${icon} alt="">` : nothing}
       <span class="title">${title}</span>
       ${badge ? html`<span class="badge">${badge}</span>` : nothing}
     </div>
@@ -87,7 +88,9 @@ function renderer(spec) {
 }
 
 export function openWindow(spec) {
-  const rec = Windows.track(Object.assign({ id: '', badge: '', w: 560, h: 380, opts: {} }, spec));
+  const merged = Object.assign({ id: '', badge: '', w: 560, h: 380, opts: {} }, spec);
+  if (!merged.icon && merged.id && SHELL[merged.id]) merged.icon = SHELL[merged.id].icon;
+  const rec = Windows.track(merged);
   let el, done;
   try { ({ el, done } = build(rec, null)); }
   catch (e) { Windows.untrack(rec); throw e; }
@@ -342,10 +345,11 @@ export function launchApp(app) {
   if (!app || typeof app.source !== 'string') throw new Error('launchApp: an app needs a source');
   const missing = missingCaps(app.requires);
   const at = parseGeometry(app.source);
+  const icon = app.icon || Apps.synthesizeIcon(app.title);
   return openWindow({
     id: app.name ? 'apps/' + app.name : '',
     title: app.title, badge: missing.length ? 'blocked' : 'app', w: at ? at.w : 430, h: at ? at.h : 320,
-    render: 'AppWindow', opts: { app }, at,
+    render: 'AppWindow', opts: { app: Object.assign({}, app, { icon }) }, icon, at,
   });
 }
 
@@ -486,16 +490,45 @@ function renderUpsell(mount, missing) {
   mount.querySelector('b').textContent = nativeOnly.join(', ');
 }
 
-export const ICONS = {
-  vibeos: `<img src="${BASE}icon.png" alt=""" style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-win)" onerror="this.replaceWith(document.createTextNode('◇'))">`,
-  settings: '⚙',
+const svgIcon = (body) => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">${body}</svg>`);
+
+export const BUILTIN_ICONS = {
+  vibeos: BASE + 'icon.png',
+  chat: svgIcon('<rect width="32" height="32" rx="7" fill="#5b7cfa"/><path d="M8 10h16v10H14l-4 4v-4H8z" fill="#fff"/>'),
+  browser: svgIcon('<rect width="32" height="32" rx="7" fill="#3d9ae8"/><circle cx="16" cy="15" r="7" fill="none" stroke="#fff" stroke-width="2"/><path d="M22 21l5 5" stroke="#fff" stroke-width="2"/>'),
+  settings: svgIcon('<rect width="32" height="32" rx="7" fill="#6b7280"/><circle cx="16" cy="16" r="5" fill="none" stroke="#fff" stroke-width="2"/><path d="M16 6v3M16 23v3M6 16h3M23 16h3" stroke="#fff" stroke-width="2"/>'),
+  terminal: svgIcon('<rect width="32" height="32" rx="7" fill="#1e293b"/><path d="M8 11l5 4-5 4v-3H20v-2H8zM10 22h12v-2H10z" fill="#4ade80"/>'),
 };
+
+export const ICONS = {
+  vibeos: `<img src="${BUILTIN_ICONS.vibeos}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-win)" onerror="this.replaceWith(document.createTextNode('◇'))">`,
+  settings: `<img src="${BUILTIN_ICONS.settings}" alt="" class="dock-icon-img">`,
+  browser: `<img src="${BUILTIN_ICONS.browser}" alt="" class="dock-icon-img">`,
+  chat: `<img src="${BUILTIN_ICONS.chat}" alt="" class="dock-icon-img">`,
+};
+
+// Paint a dock/taskbar button: icon and optional short label (win95 taskbar).
+export function dockButtonContent(iconSrc, label) {
+  const img = document.createElement('img');
+  img.className = 'dock-icon-img';
+  img.src = iconSrc;
+  img.alt = '';
+  const frag = document.createDocumentFragment();
+  frag.appendChild(img);
+  if (label) {
+    const span = document.createElement('span');
+    span.className = 'dock-label';
+    span.textContent = label;
+    frag.appendChild(span);
+  }
+  return frag;
+}
 
 // The shell's own apps. `file` is where the agent finds the source and
 // `render` the export that paints it; list_apps reports both.
 export const SHELL = {
-  chat:     { id: 'chat', title: 'vibeOS', badge: '', render: 'ChatApp', file: 'ui/chat.js', w: 580, h: 500 },
-  browser:  { id: 'browser', title: 'Browser', badge: 'proxied', render: 'BrowserApp', file: 'ui/browser.js', w: 820, h: 560 },
-  settings: { id: 'settings', title: 'Settings', badge: '', render: 'SettingsApp', file: 'ui/settings.js', w: 720, h: 480 },
+  chat:     { id: 'chat', title: 'vibeOS', badge: '', render: 'ChatApp', file: 'ui/chat.js', w: 580, h: 500, icon: BUILTIN_ICONS.chat },
+  browser:  { id: 'browser', title: 'Browser', badge: 'proxied', render: 'BrowserApp', file: 'ui/browser.js', w: 820, h: 560, icon: BUILTIN_ICONS.browser },
+  settings: { id: 'settings', title: 'Settings', badge: '', render: 'SettingsApp', file: 'ui/settings.js', w: 720, h: 480, icon: BUILTIN_ICONS.settings },
 };
 export const openSettings = (tab) => openWindow(Object.assign({}, SHELL.settings, { opts: { tab } }));
