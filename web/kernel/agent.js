@@ -629,6 +629,7 @@ function forImage(prompt) {
 const APP_CONTRACT = `// @title <Short Name>
 // @target browser
 // @requires <space-separated caps, or none>
+Pass icon with create_app (required): inline <svg>… markup, a data:image/svg+xml or data:image/png URL, or an http(s) URL to a PNG/SVG the desktop downloads. It is shown in the dock, the window title bar, and the chat card. Simple apps: a 32×32 SVG with one shape or letter matching the app.
 Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs), net (raw TCP through the relay), ai (the connected model, api.ai.generate). Use none unless needed.
 Optional fourth header, where and how big the window opens: // @geometry <top-left|top-right|bottom-left|bottom-right> [<w>x<h>] or // @geometry <x>,<y>,<w>,<h> or // @geometry <w>x<h> alone (px; without it the window cascades at 430x320; a window is at least 300x180, is kept on screen under the menubar and clear of the dock, and is no bigger than the desktop). A helper, mascot or widget "in the corner of the screen" is a small window with a corner geometry, e.g. // @geometry bottom-right 300x220 — never position:fixed or a transform to escape the window.
 Then: export default function (mount, api) { ... }
@@ -647,7 +648,7 @@ Layout rules (required):
 
 Plain JavaScript, no JSX, no external URLs. ONE import resolves and nothing else does: import { html, render } from 'lit' (lit-html 3, vendored with the desktop — no build step, no network). Its interpolations escape by default, so render(html\`<p>\${name}</p>\`, mount) is safe where innerHTML is not: reach for it instead of building markup by hand, and re-render the whole view on change rather than patching nodes. Plain DOM is fine for something small. Any other import, or any URL, fails at runtime. Aim for about 200 lines and stay under 1000. It must work.`;
 
-const CREATE_APP_LEAD = 'Create a vibeOS desktop window app (// @target browser, the contract below) or install a VM script (// @title, // @target vm, // @file <name.sh>, then a shell script for the Linux the prompt names). Pass complete source with the headers; the reply names the dock entry and the file. A window app is held to this contract:';
+const CREATE_APP_LEAD = 'Create a vibeOS desktop window app (// @target browser, the contract below) or install a VM script (// @title, // @target vm, // @file <name.sh>, then a shell script for the Linux the prompt names). Pass title, complete source, and icon (window apps: inline SVG or PNG URL). The reply names the dock entry and the file. A window app is held to this contract:';
 const CREATE_APP_DESCRIPTION = CREATE_APP_LEAD + '\n' + APP_CONTRACT;
 // Word for word lib/agent-tools.ts; the test pins them.
 const SEARCH_FILE_DESCRIPTION = 'Find lines matching a regex. path is one file, a directory (system/, system/ui/) or a glob (system/**/*.js, apps/*.js): a directory or glob searches every text file under it and each hit carries file and line; 60 hits at most, binaries and files over 1 MB skipped and named; system/chat.json and the snapshots are never searched or listed. Use before edit_file on a system/ file. A path that matches nothing is refused naming what exists there.';
@@ -661,7 +662,9 @@ The OS is files in the person's workspace, and you have root on them. system/ker
 
 The machine: vm_exec runs a shell line on ttyS0 and returns its output (timeout_s up to 600); /mnt is the workspace's data/ and apps/ flat, /mnt/system a read-only copy of the OS source for cat, grep and diff. Apps are files under apps/: a .js with a // @title header is a dock entry, and create_app writes one and opens it. Generated apps must use the desktop's CSS custom properties (var(--text), var(--panel), var(--accent) …), never hardcoded colours.
 
-Results are JSON. A reply over 128 KB is refused naming the size — narrow the request. Everything you send and read goes through a relay in plaintext, and the token you hold is root on this desktop.`;
+Results are JSON. A reply over 128 KB is refused naming the size — narrow the request. Everything you send and read goes through a relay in plaintext, and the token you hold is root on this desktop.
+
+The person can type in vibeOS chat while you work: those lines are not pushed to you. When a tool result includes mailbox_hint, call get_mailbox and answer with reply_mailbox if you want a bubble in chat. Storage: data/mcp-mailbox-in.jsonl (human lines) and data/mcp-mailbox-state.json (read cursor).`;
 
 const READ_DESKTOP_DESCRIPTION = 'What the desktop looks like, as text: every open window (app id, title, minimized, z-order — first is on top — geometry, whether it is the built-in chat/Browser/Settings or a generated app and its file), the dock entries, the machine pill (VM.state, image, net, tty) and the theme. Pass { window: <title or app id> } for that window\'s body as trimmed text, one line per block (scripts and styles dropped, 8 KB cap); add { dom: true } for its sanitised outerHTML instead (no script, style, link or on* attributes, no javascript: urls, media and form urls replaced by data:, 16 KB cap); either way the value of a password or hidden input is withheld. { screen: \'png\' } is the machine\'s VGA screen as image {mimeType, data} (a jpeg no wider than 1024, under the relay\'s 128 KB frame) with the text console\'s rows as text when it is in text mode. A bitmap of the desktop itself is not available (no html2canvas is vendored): the text and DOM views are the substitute. Everything here is read; nothing runs.';
 
@@ -908,7 +911,132 @@ const WebTools = {
    archive) can create an app or restyle the desktop without a click.
    -------------------------------------------------------------------- */
 
-const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'list_files', 'read_desktop', 'read_file', 'search_file', 'edit_file', 'write_file', 'reload_ui', 'reload_os', 'web_fetch', 'web_search']);
+const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'list_files', 'read_desktop', 'read_file', 'search_file', 'edit_file', 'write_file', 'reload_ui', 'reload_os', 'web_fetch', 'web_search', 'get_mailbox', 'reply_mailbox']);
+
+/* ---------- MCP mailbox (data/mcp-mailbox-in.jsonl) ----------------------
+
+   While vibeos-mcp drives the desktop, the person still types in vibeOS chat.
+   Those lines land here; get_mailbox returns them to the agent and
+   reply_mailbox paints an assistant bubble. Every other MCP tool result
+   carries a mailbox hint when unread > 0 (lib/mailbox.ts pins the shape).
+   -------------------------------------------------------------------- */
+const MAILBOX_IN_PATH = 'data/mcp-mailbox-in.jsonl';
+const MAILBOX_STATE_PATH = 'data/mcp-mailbox-state.json';
+
+function attachMailboxHint(result, unread) {
+  if (!result || typeof result !== 'object' || unread <= 0) return result;
+  const hint = unread + ' unread — call get_mailbox';
+  return { ...result, mailbox: { unread, hint }, mailbox_hint: 'mailbox: ' + hint };
+}
+
+const Mailbox = {
+  messages: [],
+  readThrough: 0,
+  loaded: false,
+  loadPromise: null,
+
+  unreadCount() {
+    return this.messages.filter(m => m.id > this.readThrough).length;
+  },
+
+  async load() {
+    if (this.loaded) return;
+    if (!this.loadPromise) this.loadPromise = this._load();
+    await this.loadPromise;
+  },
+
+  async _load() {
+    this.messages = [];
+    this.readThrough = 0;
+    if (Workspace.open) {
+      try {
+        const st = await Workspace.readPath(MAILBOX_STATE_PATH);
+        const o = JSON.parse(st);
+        if (typeof o.readThrough === 'number' && o.readThrough >= 0) this.readThrough = o.readThrough;
+      } catch {}
+      try {
+        const raw = await Workspace.readPath(MAILBOX_IN_PATH);
+        for (const line of raw.split('\n')) {
+          const t = line.trim();
+          if (!t) continue;
+          try { this.messages.push(JSON.parse(t)); } catch {}
+        }
+      } catch {}
+    }
+    this.loaded = true;
+  },
+
+  async persistState() {
+    if (!Workspace.open) return;
+    await Workspace.writePath(MAILBOX_STATE_PATH, JSON.stringify({ readThrough: this.readThrough }) + '\n');
+  },
+
+  async appendLine(obj) {
+    const line = JSON.stringify(obj) + '\n';
+    if (Workspace.open) {
+      let prev = '';
+      try { prev = await Workspace.readPath(MAILBOX_IN_PATH); } catch {}
+      await Workspace.writePath(MAILBOX_IN_PATH, prev + line);
+    }
+    this.messages.push(obj);
+  },
+
+  async appendFromHuman(text, images) {
+    await this.load();
+    const id = this.messages.length ? Math.max(...this.messages.map(m => m.id)) + 1 : 1;
+    const entry = { id, at: Date.now(), role: 'human', text: String(text || '').trim() };
+    if (images && images.length) {
+      entry.images = images.map(im => {
+        const m = /^data:(image\/[a-z+]+);base64,(.+)$/i.exec(im.dataUrl || '');
+        return m ? { mime: m[1], base64: m[2].slice(0, 120000) } : null;
+      }).filter(Boolean);
+    }
+    await this.appendLine(entry);
+    track('mailbox_human', { images: entry.images ? entry.images.length : 0 });
+    return entry;
+  },
+
+  async get(input) {
+    await this.load();
+    const after = input && input.after;
+    const limit = Math.min(Math.max((input && input.limit) || 50, 1), 100);
+    const consume = !(input && input.consume === false);
+    let list = this.messages;
+    if (after !== undefined && after !== null && after !== '') {
+      const n = Number(after);
+      if (!Number.isFinite(n) || n < 0) return { ok: false, error: 'after must be a non-negative message id' };
+      list = list.filter(m => m.id > n);
+    } else {
+      list = list.filter(m => m.id > this.readThrough);
+    }
+    const slice = list.slice(0, limit);
+    const cursor = slice.length ? slice[slice.length - 1].id : (typeof after === 'number' ? after : this.readThrough);
+    if (consume && slice.length) {
+      this.readThrough = Math.max(this.readThrough, cursor);
+      await this.persistState();
+    }
+    return {
+      ok: true,
+      path: MAILBOX_IN_PATH,
+      messages: slice,
+      cursor,
+      unread: this.unreadCount(),
+      note: 'Store cursor from the last message id; pass after to read without clearing unread (consume: false).',
+    };
+  },
+
+  async reply(text) {
+    const body = String(text || '').trim();
+    if (!body) return { ok: false, error: 'text is required' };
+    await Chat.load();
+    const reply = { role: 'assistant', text: body, mailbox: true };
+    Chat.turns.push(reply);
+    await Chat.persist();
+    Chat.emit('done', { reply, mailbox: true });
+    track('mailbox_agent_reply');
+    return { ok: true, delivered: true, length: body.length };
+  },
+};
 
 // What the agent is told about the shell's own apps. They are functions in
 // os.js, so "change the Browser" is an edit to system/os.js — not a request.
@@ -951,6 +1079,10 @@ async function bridgeCall(call, event) {
   try { result = await Agent.executeTool({ toolName: call.tool, input: call.input || {} }, null, false); }
   catch (e) { result = { ok: false, error: e.message }; }
   if (event === 'guest_rpc') guestSystemNote(call, result);
+  if (event === 'mcp_call') {
+    const unread = Mailbox.unreadCount();
+    if (unread > 0) result = attachMailboxHint(result && typeof result === 'object' ? result : { ok: false, error: String(result) }, unread);
+  }
   return result;
 }
 
@@ -1126,11 +1258,13 @@ const Desktop = {
   async dock() {
     const shell = UI.stable().SHELL;
     const { apps } = await Apps.list();
-    const entry = (id, title) => ({ id, title: String(title), builtin: true, file: 'system/' + shell[id].file });
+    const entry = (id, title, icon) => ({ id, title: String(title), builtin: true, file: 'system/' + shell[id].file, icon });
+    const { BUILTIN_ICONS } = UI.stable();
     return [
-      entry('chat', shell.chat.title), entry('browser', shell.browser.title),
-      ...apps.slice(0, 8).map(a => ({ id: 'apps/' + a.name, title: String(a.title), builtin: false, file: 'apps/' + a.name, requires: a.requires })),
-      entry('settings', shell.settings.title),
+      entry('chat', shell.chat.title, BUILTIN_ICONS.chat),
+      entry('browser', shell.browser.title, BUILTIN_ICONS.browser),
+      ...apps.slice(0, 8).map(a => ({ id: 'apps/' + a.name, title: String(a.title), builtin: false, file: 'apps/' + a.name, requires: a.requires, icon: a.icon })),
+      entry('settings', shell.settings.title, BUILTIN_ICONS.settings),
     ];
   },
 
@@ -1466,7 +1600,11 @@ function toolResultText(output) {
 
 const TOOL_SCHEMAS = [
   { name: 'create_app', description: CREATE_APP_DESCRIPTION,
-    parameters: { type: 'object', properties: { title: { type: 'string' }, source: { type: 'string' } }, required: ['title', 'source'] } },
+    parameters: { type: 'object', properties: {
+      title: { type: 'string' },
+      source: { type: 'string' },
+      icon: { type: 'string', description: 'App icon: inline <svg>… markup, a data:image/svg+xml or data:image/png URL, or an http(s) URL to a PNG/SVG (downloaded client-side). Required for window apps.' },
+    }, required: ['title', 'source', 'icon'] } },
   { name: 'vm_exec', description: 'Run a shell command in the vibeOS Linux VM and return its output (stdout and stderr, ANSI stripped). Waits 20 s by default; pass timeout_s (up to 600) for an install or a build, or background it (cmd > /mnt/job.log 2>&1 &) and tail the log.',
     parameters: { type: 'object', properties: { command: { type: 'string' }, timeout_s: { type: 'integer', minimum: 1, maximum: 600, description: 'Seconds to wait before the command is interrupted with Ctrl-C and the call fails. Default 20.' } }, required: ['command'] } },
   { name: 'list_apps', description: 'List apps already saved in the vibeOS workspace. .js files without a // @title header are not apps and come back under unlisted with the reason; add the header with edit_file if the user wants one in the dock. The reply also carries the /mnt mapping: the mount is flat and subdirectories under /mnt are not mirrored, and unmirrored names the root entries the mirror skipped (directories, symlinks, special files).',
@@ -1491,6 +1629,14 @@ const TOOL_SCHEMAS = [
     parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
   { name: 'web_search', description: 'Search the web and get back result titles and URLs.',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+  { name: 'get_mailbox', description: 'Read messages the person typed in vibeOS chat while you drive the desktop through vibeos-mcp. Returns new lines since the last read (or since after id when consume is false). Human text is in messages[].text; optional images are {mime, base64}. Call this when a tool result includes mailbox_hint.',
+    parameters: { type: 'object', properties: {
+      after: { type: 'integer', description: 'Only messages with id greater than this (optional; default is unread since last get_mailbox)' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Max messages to return (default 50)' },
+      consume: { type: 'boolean', description: 'When true (default), marks returned messages read so mailbox_hint clears' },
+    }, required: [] } },
+  { name: 'reply_mailbox', description: 'Post a reply into the vibeOS chat window as an assistant bubble (visible to the person at the desktop). Use after get_mailbox when you want to answer in-chat.',
+    parameters: { type: 'object', properties: { text: { type: 'string', description: 'Plain-text reply shown in chat' } }, required: ['text'] } },
 ];
 
 // reload_os kills the page mid-turn, so whatever the model says after it never
@@ -2846,6 +2992,9 @@ const Agent = {
       onStatus?.(`creating “${title}”`);
       const target = parseTarget(source);
       if (target === 'vm') {
+        if (input.icon !== undefined && input.icon !== null && String(input.icon).trim()) {
+          return { ok: false, kind: 'vm', title, error: 'icon is only for // @target browser window apps; omit it for VM scripts' };
+        }
         const file = parseFile(source) || 'script.sh';
         let installed = false;
         if (VM.state === 'ready') {
@@ -2870,17 +3019,19 @@ const Agent = {
         track('lint_reject', { rule: 'syntax' });
         return { ok: false, kind: 'window', title, error: 'the module does not parse: ' + syntax };
       }
-      const saved = await Apps.save(title, source).catch(e => ({ error: e.message }));
+      let saved;
+      try { saved = await Apps.save(title, source, input.icon); }
+      catch (e) { return { ok: false, kind: 'window', title, error: e.message }; }
       if (saved.error) return { ok: false, kind: 'window', title, error: 'the app was not saved: ' + saved.error };
       paintDock();
       // Launch what was written, not what was passed: they differ when the
       // header had to be added, and the window must match the file.
       const written = saved.source || source;
-      launchApp({ title, name: saved.file, source: written, requires: parseRequires(written) });
+      launchApp({ title, name: saved.file, source: written, requires: parseRequires(written), icon: saved.icon });
       const { source: _written, ...report } = saved;
       // The dock shows the header's title, not input.title: they differ
       // when the source carried its own // @title line.
-      return { ok: true, kind: 'window', title, dockTitle: parseTitle(written), file: 'apps/' + saved.file, saved: report,
+      return { ok: true, kind: 'window', title, dockTitle: parseTitle(written), file: 'apps/' + saved.file, icon: saved.icon, saved: report,
                ...(saved.headerAdded?.length ? { note: `the source had no ${saved.headerAdded.map(t => '// @' + t).join(', ')} line; it was prepended so the file is a dock app and not unlisted` } : {}) };
     }
     if (toolName === 'vm_exec') {
@@ -2916,6 +3067,14 @@ const Agent = {
       onStatus?.('searching the web…');
       track('web_search');
       return WebTools.search(String(input.query || ''));
+    }
+    if (toolName === 'get_mailbox') {
+      onStatus?.('reading the chat mailbox…');
+      return Mailbox.get(input || {});
+    }
+    if (toolName === 'reply_mailbox') {
+      onStatus?.('posting to chat…');
+      return Mailbox.reply(input && input.text);
     }
     if (toolName === 'read_desktop') {
       onStatus?.('reading the desktop…');
@@ -3311,6 +3470,15 @@ const Chat = {
     // time too, so a steer carrying too many is refused as it is typed.
     try { Attachments.check(this.pending); }
     catch (e) { this.line(e.message, true); return null; }
+    // vibeos-mcp has no sampling path for the person's chat box: lines go to
+    // the mailbox and surface on the agent's next tool call via mailbox_hint.
+    if (RemoteBridge.state === 'connected' && !Gen.available) {
+      if (this.running || this.starting) return this.steer(text);
+      const images = this.pending.splice(0);
+      this.emit('chips');
+      this.starting = true;
+      return { started: this.sendMailbox(text, images) };
+    }
     // `starting` is the window between a send and the turn it starts: the log
     // is read first (await), and a second send in that gap used to start a
     // second turn beside the first. It is a turn in flight as far as the
@@ -3321,6 +3489,26 @@ const Chat = {
     this.starting = true;
     this.turnImages = images.slice();
     return { started: this.turnGuarded(text, images) };
+  },
+
+  async sendMailbox(text, images) {
+    try {
+      await this.load();
+      if (!text && !images.length) return;
+      await Mailbox.appendFromHuman(text, images);
+      const me = { role: 'user', text, mailbox: true };
+      if (images.length) {
+        me.images = images.length;
+        me.shots = images.map(im => im.dataUrl);
+      }
+      this.turns.push(me);
+      await this.persist();
+      this.emit('done', { reply: null, mailbox: true });
+    } catch (e) {
+      this.line('could not send to the agent mailbox: ' + e.message, true);
+    } finally {
+      this.starting = false;
+    }
   },
 
   // Nobody awaits a turn — the composer wants its answer now, not in a
@@ -3512,7 +3700,7 @@ const Chat = {
             track('app_generated', { target: 'browser' });
             const where = [item.saved && item.saved.vm && 'the VM', item.saved && item.saved.folder && Workspace.label].filter(Boolean).join(' and ');
             const headed = item.saved && item.saved.headerAdded && item.saved.headerAdded.length ? ' (header added)' : '';
-            this.card({ kind: 'window', title: item.title, where: where ? 'saved to ' + where + headed : 'opened on the desktop' });
+            this.card({ kind: 'window', title: item.title, icon: item.icon, where: where ? 'saved to ' + where + headed : 'opened on the desktop' });
           }
         }
         // The loop fell out of its last step: say so rather than ending on
