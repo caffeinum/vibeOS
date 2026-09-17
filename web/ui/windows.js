@@ -181,6 +181,15 @@ export function focusOrOpen(spec) {
   Windows.raise(open);
   return open;
 }
+
+// Start and the agent dock entry: open the chat, then offer connect/login when
+// nothing drives the desktop yet (Browser and Settings stay usable without).
+export async function openAgent() {
+  focusOrOpen(SHELL.chat);
+  if (!Gen.available && RemoteBridge.state !== 'connected') {
+    try { await Gen.askForKey(); } catch {}
+  }
+}
 // The chat card's Open and Settings › Workspace. A window is usually already
 // open for the app the card is about, and a second copy is two apps on one
 // file — aleks, 2026-09-07, with two Clippys on screen, one from the dock and
@@ -485,7 +494,7 @@ export const ICONS = {
 // The shell's own apps. `file` is where the agent finds the source and
 // `render` the export that paints it; list_apps reports both.
 export const SHELL = {
-  chat:     { id: 'chat', title: 'vibeOS', badge: 'agent', render: 'ChatApp', file: 'ui/chat.js', w: 580, h: 500 },
+  chat:     { id: 'chat', title: 'vibeOS', badge: '', render: 'ChatApp', file: 'ui/chat.js', w: 580, h: 500 },
   browser:  { id: 'browser', title: 'Browser', badge: 'proxied', render: 'BrowserApp', file: 'ui/browser.js', w: 820, h: 560 },
   settings: { id: 'settings', title: 'Settings', badge: '', render: 'SettingsApp', file: 'ui/settings.js', w: 720, h: 480 },
 };

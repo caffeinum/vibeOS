@@ -108,7 +108,7 @@ export function ChatApp(body, win) {
     const html = Gen.available ? readyLine()
       : agent ? `<b class="part yes"></b> is connected through vibeos-mcp and drives this desktop — talk to it in its own window.<br>
          <span class="tiny dimmer">This box can run a second model beside it.</span> <span class="row" style="margin-top:8px"><button class="btn sm" id="chatConnect">Connect a model here too</button></span>`
-      : `<b class="part">No model connected yet.</b> Prompts fall back to stock modules until one is.<br>
+      : `<b class="part">No model connected yet.</b> Connect one to generate apps and scripts from the chat.<br>
          <span class="row" style="margin-top:8px"><button class="btn p sm" id="chatConnect">Connect a model</button></span>`;
     if (introEl && introEl.isConnected) { introEl.innerHTML = html; }
     else introEl = bubble('vibeos', html);
@@ -193,20 +193,11 @@ export function ChatApp(body, win) {
       };
     }
   };
-  // E3 (2026-09-10). This is the moment of highest intent in the whole
-  // product — someone asked for something real and got a canned module — and
-  // the only thing offered was "Add a key", which names the MOST expensive
-  // door. The modal it opens actually LEADS with "Connect your agent": no key,
-  // no signup, using a Claude Code / Cursor / Codex subscription the person
-  // already pays for. So the button was advertising a price the product does
-  // not charge, at the exact instant someone had shown they wanted it.
-  // Measured leak: 207 desktops reached a machine last week, 33 connected a
-  // model — 84% lost — while 77 stock modules were handed out.
   // The id stays `addKeyNow`: the paint hook scrolls it into view by that name.
   const paintOffer = () => {
     const b = bubble('vibeos', `
-      <span class="part">That was a stock module — no model is connected yet.</span>
-      <p class="tiny dimmer" style="margin:6px 0 8px">Connect one and I'll build this for real. An agent you already pay for works — Claude Code, Cursor or Codex — with no API key.</p>
+      <span class="part">No model is connected — generation needs one.</span>
+      <p class="tiny dimmer" style="margin:6px 0 8px">Connect and I'll build this for real. An agent you already pay for works — Claude Code, Cursor or Codex — with no API key.</p>
       <button class="btn p sm" id="addKeyNow">Connect a model</button>`);
     b.querySelector('#addKeyNow').onclick = () => { track('offer_connect_click'); Chat.retryWithKey(); };
     return b;
@@ -253,7 +244,11 @@ export function ChatApp(body, win) {
     }
     if (t.said) renderMd(bubble('vibeos', '<span></span>').querySelector('span'), t.said);
     if (Chat.offer && Chat.offer.reply === t) paintOffer();
-    else if (t.failure === 'no model configured') line('that was a stock module — no model was configured');
+    else if (t.failure === 'no model configured') {
+      const d = bubble('vibeos', '<span class="no" id="failure"></span>');
+      d.querySelector('#failure').textContent = 'no model connected — connect a model to generate';
+      return;
+    }
     // The message may carry a slice of a proxy's HTML error page (a
     // Cloudflare 502, an interstitial) — text, never markup.
     else if (t.failure) paintFailure(t, i);
@@ -407,9 +402,7 @@ export function ChatApp(body, win) {
     if (type === 'loaded') enable();
     hint();
     paint();
-    // A stock module opens in its own window, on top of this chat — so the
-    // key offer can end up buried under the very thing it is offering to
-    // improve. Raise the chat and scroll the offer into view.
+    // Raise the chat and scroll the connect offer into view.
     if (type === 'done' && Chat.offer && Chat.offer.reply === data.reply) {
       UI.live().raise(win);
       const offer = log.querySelector('#addKeyNow');

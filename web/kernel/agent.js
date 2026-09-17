@@ -505,7 +505,7 @@ function parseThemes(css) {
 
 const Theme = {
   KEY: 'vibeos-theme',
-  id: 'vibeos-dark',
+  id: 'win95',
   // What load() found: the stored id the loaded css does not define, or the
   // parse error — surfaced in the chat and in Settings > Design, never a
   // failed boot.
@@ -3119,68 +3119,6 @@ const Agent = {
   },
 };
 
-/* Stock modules. In native mode the binary holds the key and writes these
-   with a model; a published page can reach no model, so these stand in and
-   say so. The execution and save path is identical either way. */
-const CANNED = {
-  clock: `// @title Clock
-// @requires none
-export default function (mount) {
-  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:grid;place-items:center;font:600 36px ui-monospace,monospace"></div>';
-  const el = mount.firstChild;
-  const t = () => el.textContent = new Date().toLocaleTimeString();
-  t(); setInterval(t, 1000);
-}`,
-  notes: `// @title Notes
-// @requires none
-export default function (mount) {
-  mount.innerHTML = '<textarea style="width:100%;height:100%;box-sizing:border-box;background:var(--panel2);color:var(--titletext);border:0;border-radius:0;padding:10px;font:13px ui-monospace,monospace;resize:none" placeholder="type; saved in this browser"></textarea>';
-  const ta = mount.firstChild;
-  ta.value = localStorage.getItem('vibeos-note') || '';
-  ta.oninput = () => localStorage.setItem('vibeos-note', ta.value);
-}`,
-  counter: `// @title Counter
-// @requires none
-export default function (mount) {
-  let n = 0;
-  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px"><b style="font-size:40px">0</b><button style="padding:8px 18px;border-radius:var(--radius-ctl);border:1px solid var(--line2);background:var(--btn);color:var(--btntext);cursor:pointer">increment</button></div>';
-  const b = mount.querySelector('b');
-  mount.querySelector('button').onclick = () => b.textContent = ++n;
-}`,
-  files: `// @title Folder listing
-// @requires files
-export default async function (mount, api) {
-  mount.innerHTML = '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;padding:8px"><p style="color:var(--dim);font-size:13px;margin:0 0 6px">Reading your workspace…</p><div class="app-scroll" style="flex:1"></div></div>';
-  const list = mount.querySelector('.app-scroll');
-  try {
-    const items = await api.list();
-    mount.firstChild.firstChild.textContent = items.length + ' items';
-    list.innerHTML = '';
-    items.slice(0,200).forEach(i => {
-      const d = document.createElement('div');
-      d.style.cssText = 'padding:3px 0;font-size:13px';
-      d.textContent = (i.dir ? '📁 ' : '📄 ') + i.name;
-      list.appendChild(d);
-    });
-  } catch (e) { mount.textContent = ''; const m = document.createElement('p'); m.style.cssText = 'color:var(--no);font-size:13px;padding:8px'; m.textContent = e.message; mount.appendChild(m); }
-}`,
-  shell: `// @title Terminal
-// @requires shell
-export default async function (mount, api) {
-  mount.innerHTML = '<pre style="width:100%;height:100%;box-sizing:border-box;margin:0;padding:8px;font-size:12px;white-space:pre-wrap;overflow:auto;scrollbar-width:thin"></pre>';
-  mount.firstChild.textContent = await api.shell('uname -a && ls ~');
-}`,
-};
-
-function pickCanned(p) {
-  p = p.toLowerCase();
-  if (/shell|terminal|command|bash/.test(p))       return 'shell';
-  if (/file|folder|browse|directory|disk/.test(p)) return 'files';
-  if (/note|text|write|scratch|memo/.test(p))      return 'notes';
-  if (/count|click|tally|increment/.test(p))       return 'counter';
-  return 'clock';
-}
-
 /* ---------- the conversation, held by the kernel -----------------------
 
    The chat window paints; this owns the turns. A turn used to live in
@@ -3233,7 +3171,7 @@ const Chat = {
   loadError: '',    // why the log could not be read
   note: null,       // a reload note with no turn to land in
   notes: [],        // { at, text, error }: transient lines, kept so a repaint shows them
-  offer: null,      // { text, reply }: the "Add a key" offer after a stock module
+  offer: null,      // { text, reply }: resend the prompt after connect
   ready: false,     // the log has been read (or failed to be)
   loaded: null,
   listeners: new Set(),
@@ -3541,6 +3479,11 @@ const Chat = {
     // next one, at once and with no click.
     const finish = () => { this.running = null; this.turnImages = []; this.emit('done', { reply, failure }); this.flushQueue(); };
 
+    // Offer connect/login when they send a first prompt, not on an empty desktop.
+    if (!Gen.available && RemoteBridge.state !== 'connected') {
+      try { await Gen.askForKey(); } catch {}
+    }
+
     // Both paths are the agent now. Signing in with ChatGPT proxies through
     // vibeos.sh; a pasted key talks to the provider from this page. Same
     // tools, same prompt, same loop.
@@ -3589,28 +3532,28 @@ const Chat = {
       return;
     }
 
+    if (!Gen.available) {
+      giveBack();
+      failure = 'no model configured';
+      this.failed(failure, remember);
+      this.offer = { text, reply };
+      finish();
+      void Gen.askForKey();
+      return;
+    }
+
     let source;
     try {
-      if (!Gen.available) throw new Error('no model configured');
       source = await Gen.generate(text, prior, undefined, images); live = true;
     } catch (e) {
       failure = e.message;
       giveBack();
-      // A model that answered with an error is an error on screen and
-      // nothing on the desktop (this.failed). No model at all is the one
-      // case a stock module stands in, on purpose: the demo a desktop with
-      // no key gives, with the "Add a key" offer under it.
-      if (failure !== 'no model configured') { this.failed(failure, remember); finish(); return; }
-      source = CANNED[pickCanned(text)];
+      this.failed(failure, remember);
+      finish();
+      return;
     }
     remember(live, source);
-    await this.openFromSource(source, text, live, failure);
-    // Offer the key HERE rather than only at boot. Asking on load happens
-    // before anyone knows what a key is for; this is the moment someone has
-    // just demonstrated they want the thing it unlocks. Measured: 45 people
-    // asked the agent with no key on the same day only 12 added one, and
-    // the two groups barely overlapped.
-    if (!live && failure === 'no model configured') this.offer = { text, reply };
+    await this.openFromSource(source, text);
     finish();
   },
 
@@ -3664,12 +3607,10 @@ const Chat = {
     if (out && out.started) await out.started;
   },
 
-  async openFromSource(source, text, live, failure) {
+  async openFromSource(source, text) {
     const target = parseTarget(source);
     const title = parseTitle(source) || text.slice(0, 30);
-    if (live) track('app_generated', { target });
-    else if (failure === 'no model configured') track('app_stock', { target });
-    else throw new Error('openFromSource with a failed model reply: ' + failure + ' (Chat.failed is the path for that)');
+    track('app_generated', { target });
 
     if (target === 'vm') {
       const file = parseFile(source) || 'script.sh';

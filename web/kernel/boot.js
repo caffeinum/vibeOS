@@ -10,6 +10,50 @@
  * replaceable under a running kernel.
  */
 
+// Shown only on the hosted page (index.html still loads /_vercel/insights).
+// Self-hosted images strip that tag; no script means no banner and track() is
+// already a no-op there.
+const ANALYTICS_DISMISS_KEY = 'vibeos-analytics-dismissed';
+const OPEN_SOURCE_URL = 'https://github.com/caffeinum/vibeOS';
+
+function hostedBuildCollectsAnalytics() {
+  try { return !!document.querySelector('script[src*="_vercel/insights"]'); }
+  catch { return false; }
+}
+
+function paintAnalyticsBar() {
+  if (!hostedBuildCollectsAnalytics()) return;
+  try { if (localStorage.getItem(ANALYTICS_DISMISS_KEY)) return; } catch {}
+  if (document.getElementById('analyticsBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'analyticsBar';
+  bar.setAttribute('role', 'status');
+  const msg = document.createElement('span');
+  msg.className = 'analytics-msg';
+  msg.appendChild(document.createTextNode(
+    'This hosted build stores analytics about how you use vibeOS. If you\u2019d rather not, '));
+  const link = document.createElement('a');
+  link.href = OPEN_SOURCE_URL;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.textContent = 'run the open-source build yourself';
+  msg.appendChild(link);
+  msg.appendChild(document.createTextNode('.'));
+  bar.appendChild(msg);
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'analytics-dismiss';
+  dismiss.textContent = 'Got it';
+  dismiss.setAttribute('aria-label', 'Dismiss analytics notice');
+  dismiss.onclick = () => {
+    try { localStorage.setItem(ANALYTICS_DISMISS_KEY, '1'); } catch {}
+    track('analytics_banner_dismiss');
+    bar.remove();
+  };
+  bar.appendChild(dismiss);
+  (document.body || document.documentElement).appendChild(bar);
+}
+
 /* ---------- the windows, held by the kernel --------------------------
 
    A window is a record here: which app, with what options, its state bag,
@@ -193,8 +237,8 @@ const UI = {
     if (this.stop) this.stop();
     this.stop = this.live().start();
     await deadline(paintDock(), UI_PAINT_MS, 'painting the dock');
-    const el = focusOrOpen(this.live().SHELL.chat);
-    await deadline(Windows.rec(el).done, UI_PAINT_MS, 'painting the chat');
+    // The agent chat is not opened on first paint — Start (win95 taskbar) or
+    // another dock entry opens it when the person is ready.
   },
 
   // The hot path: { ok, ... } for the tool, never a throw for a ui that is
@@ -384,6 +428,7 @@ window.addEventListener('beforeunload', (e) => {
   // desktop was usable, when the person first asked it for something, and how
   // long they waited to do it.
   track('app_open', { ms: Math.round(performance.now()) });
+  paintAnalyticsBar();
 
   // The machine's ready handler, registered after the ui is up and run at
   // once if the machine got there first: it ends in a dock repaint, and a boot
@@ -413,17 +458,10 @@ window.addEventListener('beforeunload', (e) => {
   // The same for an agent through vibeos-mcp: one whose client samples is a
   // model for apps the moment it pairs, and none when it leaves.
   RemoteBridge.on(() => { Promise.resolve().then(paintDock).catch(e => console.warn('dock repaint after an agent change failed:', e)); });
-  // Ask once, while the machine boots behind it. Declining is fine — the
-  // desktop still works, prompts just fall back to stock modules.
-  if (!Gen.available) {
-    try {
-      if (!localStorage.getItem('vibeos-asked')) {
-        localStorage.setItem('vibeos-asked', '1');
-        await Gen.askForKey();
-      }
-    } catch { await Gen.askForKey(); }
-  }
-  // The agent is already open (UI.open), not a settings panel — vibeOS is the app.
+  // Open the agent chat (and offer connect/login when no model is here).
+  // Exposed for e2e and for Start; Browser and Settings need no model.
+  window.__vibeosOpenChat = () => focusOrOpen(UI.live().SHELL.chat);
+  window.__vibeosOpenAgent = () => UI.live().openAgent();
   bootFinished();
   if (window.__vibeosBoot.source === 'served' && window.__vibeosBoot.storedFailed) {
     recoveryBar('Your edited OS did not finish booting last time, so this is the stock one.',
