@@ -1082,7 +1082,7 @@ function DesignAppRender(body, rerender) {
   const fv = body.querySelector('#forkVersion');
   if (fv) {
     fv.querySelector('.d').textContent = forkVersionText();
-    const keep = fv.querySelector('#forkKeep'), take = fv.querySelector('#forkTake'), agent = fv.querySelector('#forkAgent'), diff = fv.querySelector('#forkDiffBtn');
+    const keep = fv.querySelector('#forkKeep'), take = fv.querySelector('#forkTake'), agent = fv.querySelector('#forkAgent');
     const paintAgent = () => {
       if (!agent) return;
       const ok = window.__vibeosFork.agentAvailable();
@@ -1100,7 +1100,6 @@ function DesignAppRender(body, rerender) {
       }
       window.__vibeosFork.agent().catch(e => recoveryBar('Could not start the agent merge.', e.message));
     };
-    if (diff) diff.onclick = () => window.__vibeosFork.diff();
     if (agent && typeof Gen !== 'undefined') Gen.on(paintAgent);
     if (agent && typeof RemoteBridge !== 'undefined') RemoteBridge.on(paintAgent);
   }
@@ -1135,7 +1134,6 @@ function forkVersionHtml() {
       ${moved && fork && !fork.dismissed ? '<button class="btn sm" id="forkKeep">Keep mine</button>' : ''}
       <button class="btn sm${moved ? ' p' : ''}" id="forkTake">Take the update</button>
       ${moved ? '<button class="btn sm" id="forkAgent">Let agent update</button>' : ''}
-      <button class="btn sm" id="forkDiffBtn">Show diff</button>
     </div>`;
 }
 
@@ -1150,7 +1148,7 @@ function forkVersionText() {
   if (!fork.moved) return 'Forked: ' + from + '. That is still what vibeos.sh serves, so this copy is up to date with it.';
   const now = fork.files.filter(f => fork.base[f] !== fork.served[f]).map(f => f + ' is ' + fork.served[f]).join(', ');
   return 'Forked: ' + from + '. vibeOS has moved since: ' + now + ' now' + (fork.dismissed ? ' (you chose to keep yours for this version)' : '') +
-    '. Keep mine hides the notice until the next served change; Take the update sets each of your copies aside as system/<file>.bak and boots the served ones; Let agent update gives the connected agent your fork and the served copy to merge; Show diff lists what changed between them.';
+    '. Keep mine hides the notice until the next served change; Take the update sets each of your copies aside as system/<file>.bak and boots the served ones; Let agent update gives the connected agent your fork and the served copy to merge.';
 }
 
 export function ModelApp(body) {
