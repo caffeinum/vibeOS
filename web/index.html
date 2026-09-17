@@ -1,5 +1,14 @@
 <meta charset="utf-8">
-<title>vibeOS Web</title>
+<title>vibeOS</title>
+<!-- Static Add to Home Screen metadata: Safari's A2HS pass does not reliably
+     see icons/metas injected only via document.write, and it probes
+     /apple-touch-icon.png at the site root when unsure. /app/... is absolute
+     so it 200s on vibeos.sh/app with or without a trailing slash. -->
+<link rel="apple-touch-icon" sizes="180x180" href="/app/apple-touch-icon.png">
+<link rel="manifest" href="/app/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="vibeOS">
+<meta name="theme-color" content="#101219">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap">
