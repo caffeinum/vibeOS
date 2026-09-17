@@ -80,6 +80,7 @@ export async function paintDock(dock = document.getElementById('dock')) {
     const b = document.createElement('button');
     b.innerHTML = html; b.title = title; b.onclick = onclick;
     if (cls) b.className = cls;
+    if (cls === 'dock-start') b.id = 'dockStart';
     dock.appendChild(b);
     return b;
   };
@@ -93,12 +94,18 @@ export async function paintDock(dock = document.getElementById('dock')) {
   // loudly: focusing is the feature, launching is the old behaviour.
   const ui = UI.live();
   const focusOrOpen = ui.focusOrOpen;
+  const openAgent = ui.openAgent || (() => focusOrOpen(SHELL.chat));
   const focusOrLaunch = ui.focusOrLaunch || (app => {
     console.warn('your system/ui/windows.js has no focusOrLaunch — launching a second window; Settings › Design › Take the update');
     return ui.launchApp(app);
   });
-  add(ICONS.vibeos, 'vibeOS — ask for an app', () => focusOrOpen(SHELL.chat));
-  add('🌐', 'Browser', () => focusOrOpen(SHELL.browser));
+  const win95 = Theme.id === 'win95';
+  if (win95) {
+    add('Start', 'Start — open vibeOS agent', () => openAgent(), 'dock-start');
+  } else {
+    add(ICONS.vibeos, 'vibeOS — ask for an app', () => focusOrOpen(SHELL.chat));
+  }
+  add(win95 ? 'Web' : '🌐', 'Browser', () => focusOrOpen(SHELL.browser));
 
   const live = dock.isConnected;
   let apps = [];
@@ -122,7 +129,7 @@ export async function paintDock(dock = document.getElementById('dock')) {
   const sep2 = document.createElement('span');
   sep2.style.cssText = 'width:1px;background:rgba(0,0,0,.18);margin:4px 2px';
   dock.appendChild(sep2);
-  add(ICONS.settings, 'Settings', () => focusOrOpen(SHELL.settings));
+  add(win95 ? 'Set' : ICONS.settings, 'Settings', () => focusOrOpen(SHELL.settings));
 }
 
 // Wire the menubar to the kernel's state and paint it now. Returns stop().

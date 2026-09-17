@@ -1144,7 +1144,7 @@ export function ModelApp(body) {
                straight to the provider. Model: <b>${Gen.model}</b>.`
             : Gen.oauth
               ? `Signed in with ChatGPT (<b>${Gen.provider}</b>). Model: <b>${Gen.model}</b>.`
-              : `No key set, so prompts fall back to stock modules.`}
+              : `No model connected — connect one in chat or paste a key here to generate.`}
       </p>
       <div class="row">
         <button class="btn p sm" id="setkey">${Gen.key || Gen.oauth ? 'Replace key' : 'Add a key'}</button>
