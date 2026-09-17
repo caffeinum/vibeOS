@@ -378,8 +378,7 @@ function forkBar(fork) {
     '<span style="flex:1;min-width:200px"><b></b> <span class="d" style="opacity:.8"></span></span>' +
     '<button class="keep" style="' + btn + 'background:transparent;color:#fff;border:1px solid rgba(255,255,255,.5)">Keep mine</button>' +
     '<button class="take" style="' + btn + 'background:#fff;color:#78350f">Take the update</button>' +
-    '<button class="agent" style="' + btn + 'background:#fef3c7;color:#78350f">Let agent update</button>' +
-    '<button class="diff" style="' + btn + 'background:transparent;color:#fff;border:1px solid rgba(255,255,255,.5)">Show diff</button>';
+    '<button class="agent" style="' + btn + 'background:#fef3c7;color:#78350f">Let agent update</button>';
   bar.querySelector('b').textContent = fork.error
     ? 'vibeOS could not read the version record of your copy.'
     : 'vibeOS updated since your copy was forked.';
@@ -397,90 +396,7 @@ function forkBar(fork) {
     if (!forkAgentAvailable()) { recoveryBar('No agent connected.', 'Add a model in Settings › Model or pair an agent in Settings › Capabilities.'); return; }
     window.__vibeosFork.agent().catch(e => recoveryBar('Could not start the agent merge.', e.message));
   };
-  bar.querySelector('.diff').onclick = () => window.__vibeosFork.diff();
   (document.body || document.documentElement).appendChild(bar);
-}
-
-/* Myers' O(ND) line diff. D is capped: a fork and a served file that have
-   drifted apart by more than DIFF_MAX_EDITS lines get counts and no hunks,
-   and the window says so, rather than a diff nobody can read or a tab that
-   hangs while it is computed. The trace keeps one row per edit, so the cap
-   also bounds memory: 2000 edits keeps ~2001 rows of Int32Array(4003) — ~32 MB. */
-const DIFF_MAX_EDITS = 2000;
-function lineDiff(a, b) {
-  const n = a.length, m = b.length, max = Math.min(DIFF_MAX_EDITS, n + m), off = max + 1;
-  const v = new Int32Array(2 * max + 3);
-  const trace = [];
-  let found = -1;
-  for (let d = 0; d <= max && found < 0; d++) {
-    trace.push(v.slice());
-    for (let k = -d; k <= d; k += 2) {
-      let x = (k === -d || (k !== d && v[off + k - 1] < v[off + k + 1])) ? v[off + k + 1] : v[off + k - 1] + 1;
-      let y = x - k;
-      while (x < n && y < m && a[x] === b[y]) { x++; y++; }
-      v[off + k] = x;
-      if (x >= n && y >= m) { found = d; break; }
-    }
-  }
-  if (found < 0) return null;
-  const ops = [];
-  let x = n, y = m;
-  for (let d = found; d >= 0; d--) {
-    const t = trace[d], k = x - y;
-    const prevK = (k === -d || (k !== d && t[off + k - 1] < t[off + k + 1])) ? k + 1 : k - 1;
-    const prevX = t[off + prevK], prevY = prevX - prevK;
-    while (x > prevX && y > prevY) { ops.push([' ', a[x - 1], x, y]); x--; y--; }
-    if (d > 0) { if (x === prevX) { ops.push(['+', b[y - 1], x, y]); y--; } else { ops.push(['-', a[x - 1], x, y]); x--; } }
-  }
-  return ops.reverse();
-}
-
-// Which top-level function or const a served line sits in, so a hunk has a
-// name and not only a line number: "BrowserApp changed" is what the reader
-// wants to know. Nested functions are not tracked; the nearest top-level wins.
-function regionName(lines, idx) {
-  for (let i = Math.min(idx, lines.length - 1); i >= 0; i--) {
-    const m = /^(?:export\s+)?(?:async\s+)?function\s+(\w+)|^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=/.exec(lines[i]);
-    if (m) return m[1] || m[2];
-  }
-  return '(top)';
-}
-
-const DIFF_MAX_LINES = 400;
-function renderDiff(fork, file) {
-  const mine = fork.storedText[file].split('\n'), theirs = fork.servedText[file].split('\n');
-  const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  const ops = lineDiff(mine, theirs);
-  if (!ops) return `<p><b>${file}</b>: your copy (${mine.length} lines) and the served one (${theirs.length} lines) differ by more than ${DIFF_MAX_EDITS} lines, which is past what this diff will draw. Ask the agent to compare them, or take the update and re-apply your edits from the .bak.</p>`;
-  const added = ops.filter(o => o[0] === '+').length, removed = ops.filter(o => o[0] === '-').length;
-  if (!added && !removed) return `<p><b>${file}</b>: identical to the served copy.</p>`;
-  const hunks = [];
-  let cur = null;
-  ops.forEach((o, i) => {
-    if (o[0] === ' ') {
-      if (cur && i - cur.last <= 2) cur.lines.push(o);
-      else if (cur) { hunks.push(cur); cur = null; }
-      return;
-    }
-    if (!cur) {
-      cur = { last: i, lines: ops.slice(Math.max(0, i - 2), i), name: regionName(theirs, o[3] - 1), at: o[3] };
-    }
-    cur.lines.push(o); cur.last = i;
-  });
-  if (cur) hunks.push(cur);
-  let html = `<p><b>${file}</b>: the served copy against yours, line by line. <span style="color:#3fb950">+${added}</span> only in the served copy (the update); <span style="color:#f85149">−${removed}</span> only in yours (your edits, or lines the update removed). ${hunks.length} region${hunks.length === 1 ? '' : 's'}.</p>`;
-  let shown = 0, cut = false;
-  for (const h of hunks) {
-    html += `<div style="opacity:.7;margin:10px 0 2px">@@ served line ${h.at} · in ${esc(h.name)}</div>`;
-    for (const o of h.lines) {
-      if (shown++ >= DIFF_MAX_LINES) { cut = true; break; }
-      const col = o[0] === '+' ? '#3fb950' : o[0] === '-' ? '#f85149' : 'inherit';
-      html += `<div style="color:${col};white-space:pre-wrap">${o[0]} ${esc(o[1])}</div>`;
-    }
-    if (cut) break;
-  }
-  if (cut) html += `<p>… stopped after ${DIFF_MAX_LINES} lines; ${hunks.length} regions differ in total.</p>`;
-  return html;
 }
 
 // Whether an agent can run a fork merge: the in-chat loop (model key or Codex
@@ -532,8 +448,8 @@ function openChatForForkMerge() {
   } catch {}
 }
 
-// The four answers to "vibeOS moved since you forked". Settings > Design
-// offers the same four, through these, so there is one implementation.
+// The three answers to "vibeOS moved since you forked". Settings > Design
+// offers the same three, through these, so there is one implementation.
 window.__vibeosFork = {
   agentAvailable: forkAgentAvailable,
   keep() {
@@ -578,26 +494,6 @@ window.__vibeosFork = {
     bootFinished();
     window.__vibeosIntentionalUnload = true;
     location.reload();
-  },
-  // The OS's own window when the OS is up, a plain panel when it is not: the
-  // diff must still be reachable when the fork is what broke openWindow.
-  diff() {
-    const fork = window.__vibeosBoot.fork;
-    if (!fork) throw new Error('nothing to diff: this boot ran the served OS');
-    const body = document.createElement('div');
-    body.id = 'forkDiff';
-    body.style.cssText = 'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px;overflow:auto;height:100%;box-sizing:border-box';
-    body.innerHTML = fork.files.map(f => renderDiff(fork, f)).join('<hr style="border:0;border-top:1px solid rgba(128,128,128,.3)">');
-    if (typeof openWindow === 'function') {
-      openWindow({ title: 'vibeOS update — served vs your copy', w: 760, h: 480, render: b => { b.style.padding = '0'; b.appendChild(body); } });
-      return;
-    }
-    const panel = document.createElement('div');
-    panel.style.cssText = 'position:fixed;left:40px;top:60px;width:min(760px,calc(100% - 80px));height:min(480px,calc(100% - 120px));z-index:99997;background:#fff;color:#111;border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.4)';
-    panel.innerHTML = '<button style="position:absolute;right:8px;top:6px;border:0;background:transparent;font-size:16px;cursor:pointer">&times;</button>';
-    panel.querySelector('button').onclick = () => panel.remove();
-    panel.appendChild(body);
-    (document.body || document.documentElement).appendChild(panel);
   },
   // Served snapshots land as system/<file>.vibeos-served so read_file can see
   // stock while the fork still boots; the in-chat agent gets Chat.send, MCP
