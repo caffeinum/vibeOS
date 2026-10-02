@@ -1,0 +1,14 @@
+experiments/browser-use-CDP/uv.lock
+  h_e9fef506e0f829 5-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e06da2f54a37aa37f2a4edbb9d23cd565f8a0043",
+  "prompts": {},
+  "humans": {
+    "h_e9fef506e0f829": {
+      "author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
