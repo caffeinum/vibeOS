@@ -20,6 +20,44 @@ function historyWindow(history) {
   return turns;
 }
 
+/* A vibeOS account (Hexclave, served by the Next app — never in this tree).
+   /api/account/me answers { signedIn, email?, displayName? } from the
+   session cookie. The static mirror has no /api (404) and the container has
+   no accounts (503): either is `available: false`, remembered for the page,
+   and the modal keeps the waitlist note. /auth/sign-up runs the hosted
+   sign-up and comes back to /app; it leaves `vibeos-account-new` in
+   sessionStorage when the account is younger than the trip, read once here. */
+const Account = {
+  ME: '/api/account/me',
+  SIGNUP: '/auth/sign-up?next=/app',
+  NEW_FLAG: 'vibeos-account-new',
+  absent: false,
+  async me() {
+    if (this.absent) return { available: false };
+    let r;
+    try { r = await fetch(this.ME, { credentials: 'same-origin', cache: 'no-store' }); }
+    catch (e) { console.warn('account probe failed:', e && e.message); return { available: false }; }
+    if (r.status === 404 || r.status === 503) { this.absent = true; return { available: false }; }
+    if (!r.ok) { console.warn(`account probe answered ${r.status}`); return { available: false }; }
+    const body = await r.json().catch(() => null);
+    if (!body || typeof body.signedIn !== 'boolean') {
+      console.error('account probe answered something that is not { signedIn }:', body);
+      return { available: false };
+    }
+    return { available: true, signedIn: body.signedIn, email: body.email ?? null, displayName: body.displayName ?? null };
+  },
+  noteNewAccount() {
+    let fresh = false;
+    try { fresh = sessionStorage.getItem(this.NEW_FLAG) === '1'; if (fresh) sessionStorage.removeItem(this.NEW_FLAG); } catch {}
+    if (!fresh) return;
+    // The insights script is deferred and the kernel can run before it has
+    // defined window.va; track() drops an event with no va.
+    if (window.va || document.readyState === 'complete') track('account_created');
+    else addEventListener('load', () => track('account_created'), { once: true });
+  },
+};
+Account.noteNewAccount();
+
 const Gen = {
   available: false,
   token: (location.hash.match(/token=([^&]+)/) || [])[1] || '',
@@ -142,6 +180,10 @@ const Gen = {
               <p class="note" id="keyCreateNote" hidden style="margin:0">
                 Coming soon! <a href="/get-access">Subscribe to waitlist</a> to know it first.
               </p>
+              <div class="col" id="keyAccount" hidden>
+                <p class="note" id="keyAccountLine" style="margin:0"></p>
+                <p class="tiny dimmer" id="keyAccountStatus" style="margin:0">Hosted AI for accounts is coming — you're on the list.</p>
+              </div>
               <button type="button" class="btn sm skip" id="keySkipBtn">Continue without AI features</button>
             </div>
           </div>
@@ -216,9 +258,26 @@ const Gen = {
         if (k) track('key_added', { via: 'paste' });
         finish();
       };
-      overlay.querySelector('#keyCreateBtn').onclick = () => {
+      // One probe per modal, started on open so a signed-in person sees who
+      // they are before they reach for the button; the click reuses it.
+      const account = Account.me();
+      const paintSignedIn = a => {
+        overlay.querySelector('#keyCreateBtn').hidden = true;
+        overlay.querySelector('#keyCreateNote').hidden = true;
+        // The email is the person's data: text, never markup.
+        overlay.querySelector('#keyAccountLine').textContent = a.email ? `Signed in as ${a.email}` : 'Signed in';
+        overlay.querySelector('#keyAccount').hidden = false;
+      };
+      account.then(a => { if (a.available && a.signedIn) paintSignedIn(a); });
+      overlay.querySelector('#keyCreateBtn').onclick = async () => {
         track('create_account_click');
-        overlay.querySelector('#keyCreateNote').hidden = false;
+        const btn = overlay.querySelector('#keyCreateBtn');
+        btn.disabled = true;
+        const a = await account;
+        btn.disabled = false;
+        if (a.available && a.signedIn) paintSignedIn(a);
+        else if (a.available) location.href = Account.SIGNUP;
+        else overlay.querySelector('#keyCreateNote').hidden = false;
       };
       overlay.querySelector('#keyLoginBtn').onclick = async () => {
         track('login_openai_click');
@@ -1777,10 +1836,10 @@ const mcpRevokeFrame = token => JSON.stringify({ hello: 'tab', token, revoke: tr
 // agent reads "peer not connected" for a result that was merely big.
 const MCP_FRAME_MAX = 128 * 1024;
 const MCP_TOKEN_RE = /^[0-9a-f]{64}$/;
-// The durable relay (infra/mcp-relay: API Gateway WebSockets, pairing rows in
-// DynamoDB). The page is static, so the url is a constant like NET_DEFAULT in
-// machine.js; the same-origin /api/mcp/relay is the fallback when this one
-// cannot be dialed, and `vibeos-mcp-relay` in localStorage overrides both.
+// Durable MCP relay (infra/mcp-relay): API Gateway WebSocket + DynamoDB pairing
+// rows keyed by sha256(token). Not subject to Vercel maxDuration 800 — the WS
+// stays on API Gateway (~10 min idle, 2 h max; ping every 30 s). The tab only
+// hits Vercel's 800 s when it fellBack to originUrl() (/api/mcp/relay).
 const MCP_RELAY_URL = 'wss://2yetm9bvy2.execute-api.us-east-1.amazonaws.com/prod';
 
 /* A pairing link: vibeos.sh/app#pair=<64 hex>[&relay=<encoded wss url>]
@@ -1841,23 +1900,26 @@ let pendingLink = (() => {
 })();
 
 
-// A WebSocket that redials in place, the shape of RelaySocket without the
-// WISP stream bookkeeping: the relay is a serverless function that ends at
-// its maxDuration (800 s), so a healthy socket closes every ~13 minutes and
-// the hello has to be the first frame on every dial. Frames sent in a gap are
-// held and flushed. Five failed dials, or a close the relay means (4001
-// replaced, 4003 revoked), end it; the bridge says which.
+// A WebSocket that redials in place, the shape of RelaySocket (machine.js)
+// without the WISP stream bookkeeping.
+//
+// **Which relay, which timeout:** RemoteBridge dials MCP_RELAY_URL (API
+// Gateway + DynamoDB) by default. That socket is held by API Gateway, not
+// inside a Vercel function — limits are ~10 min idle (30 s keepalive
+// mitigates) and a 2 h maximum connection, not maxDuration 800. If the
+// durable dial never opens, fallBack() switches to this page's
+// originUrl() (/api/mcp/relay on vibeos.sh — same serveRelay adapter, **800 s**
+// Vercel cut, in-memory pairing per instance). Redial is the same either way:
+// hello first, frames held across the gap. Five failed dials, or a close the
+// relay means (4001 replaced, 4003 revoked), end it; the bridge says which.
 class RemoteSocket {
-  // Never gives up on its own: the relay is a serverless function, and a
-  // deploy cuts every socket for longer than five quick redials (~7.5 s) —
-  // a tab that gave up sat in the error state with "retry" while its agent
-  // dialed a relay that had the token and no tab. Backoff climbs to a
-  // 30 s cap and stays there for as long as the tab holds a token; only a
-  // close code that means it (4001 replaced, 4003 revoked) or close() ends it.
+  // Never gives up on its own: a deploy or platform limit can cut the socket
+  // while the tab still holds a token — backoff climbs to a 30 s cap and stays
+  // there until 4001/4003 or close().
   static delays = [500, 1000, 2000, 5000, 10000, 30000];
   static CAP_MS = 30000;
 
-  constructor(url, { hello, onOpen, onFrame, onGap, onEnd, onFirstFail = null }) {
+  constructor(url, { hello, onOpen, onFrame, onGap, onEnd, onFirstFail = null, rotateMs = 0 }) {
     this.url = url;
     this.hello = hello;
     this.onOpen = onOpen; this.onFrame = onFrame; this.onGap = onGap; this.onEnd = onEnd;
@@ -1865,6 +1927,8 @@ class RemoteSocket {
     // there instead of redialing: the bridge uses it to fall back to another
     // relay. A drop after an open is a gap, never a fallback.
     this.onFirstFail = onFirstFail;
+    this.rotateMs = rotateMs;
+    this.rotateTimer = null;
     this.__inner = null;            // the native socket of the moment; a test hook, and named so
     this.opened = false;
     this.ended = false;
@@ -1885,6 +1949,13 @@ class RemoteSocket {
       this.opened = true;
       inner.send(JSON.stringify(this.hello()));
       for (const frame of this.held.splice(0)) inner.send(frame);
+      clearTimeout(this.rotateTimer);
+      if (this.rotateMs > 0) {
+        this.rotateTimer = setTimeout(() => {
+          if (inner !== this.__inner || inner.readyState !== 1) return;
+          inner.close(1000, 'rotate');
+        }, this.rotateMs);
+      }
       this.onOpen();
     });
     inner.addEventListener('message', e => {
@@ -1921,6 +1992,8 @@ class RemoteSocket {
 
   closed_(e) {
     if (this.ended) return;
+    clearTimeout(this.rotateTimer);
+    this.rotateTimer = null;
     if (this.released) { this.ended = true; clearTimeout(this.timer); return; }
     const meant = e.code === 4001 || e.code === 4003;
     if (meant) {
@@ -1951,6 +2024,8 @@ class RemoteSocket {
     if (this.ended) return;
     this.ended = true;
     clearTimeout(this.timer);
+    clearTimeout(this.rotateTimer);
+    this.rotateTimer = null;
     this.held = [];
     if (this.__inner.readyState < 2) this.__inner.close(1000, 'bye');
     this.onEnd({ code, reason, gaveUp: false });
@@ -1965,6 +2040,8 @@ class RemoteSocket {
     if (this.ended) return;
     this.ended = true;
     clearTimeout(this.timer);
+    clearTimeout(this.rotateTimer);
+    this.rotateTimer = null;
     this.held = [];
     if (this.__inner.readyState < 2) this.__inner.close(code, reason);
   }
@@ -1976,11 +2053,18 @@ const RemoteBridge = {
   // Set when the durable relay's first dial never opened; every later dial
   // goes to this origin's /api/mcp/relay until the page reloads.
   fellBack: false,
+  // True when this tab dial uses originUrl() (Vercel 800 s MCP relay) because
+  // the durable URL never opened — not the common production path; tracked as
+  // mcp_relay_fallback.
   KEEPALIVE_MS: 30000,
-  // A pong must come back within this, or the socket is dead without a
-  // close event (a laptop that slept, a network that changed) and the pane
-  // would say 'waiting' over a relay that dropped the tab long ago.
-  PONG_MS: 10000,
+  // Pairing stays up while pongs keep arriving (~30 s ping). Only a missed
+  // pong (or revoke / 4001) ends the tab side — not platform idle while active.
+  PONG_MS: 75000,
+  // API Gateway hard-max is 2 h; rotate the tab socket in place before that so
+  // the same token re-helloes without the agent reading peer-not-connected.
+  APIGW_ROTATE_MS: 110 * 60 * 1000,
+  // Degraded origin fallback only: Vercel maxDuration 800 s — rotate before cut.
+  VERCEL_ROTATE_MS: 11 * 60 * 1000,
   instance: null,
   // off | pairing | waiting | connected | error. `detail` is the agent's name
   // when connected, the message when error, the reason while pairing.
@@ -2012,6 +2096,11 @@ const RemoteBridge = {
   },
 
   get token() { return remoteToken; },
+  // True when the relay socket is open and the last frame said an agent is
+  // paired — not merely `state === 'connected'`, which lags a dead socket
+  // (Safari background, a gap before pong fires) and made the pill green while
+  // the agent read "peer not connected".
+  live() { return this.state === 'connected' && Boolean(this.socket && this.socket.open); },
   command() {
     if (!remoteToken) throw new Error('RemoteBridge.command: no token — pair first');
     // The whole `claude mcp add` line, not the bare npx command: a stdio mcp
@@ -2106,7 +2195,7 @@ const RemoteBridge = {
   // For the pane: which relay this tab is on, in words, plus the instance.
   relayLabel() {
     const where = this.relay === 'aws' ? 'the durable relay (aws)'
-      : this.relay === 'origin' ? 'this origin (the durable relay could not be reached)'
+      : this.relay === 'origin' ? 'this origin (degraded — Vercel 800 s cap; durable relay unreachable)'
       : this.relay === 'container' ? 'this container\u2019s own relay \u2014 nothing is sent to vibeos.sh'
       : 'the relay at ' + this.relayUrl();
     return where + (this.instance ? ', instance ' + this.instance : '');
@@ -2286,6 +2375,7 @@ const RemoteBridge = {
         // every connect of its own, and `want` is answered every time.
         this.socket.send(JSON.stringify(this.toolsFrame()));
         this.set('waiting');
+        this.emit();
       },
       onFrame: raw => this.handle(raw),
       onGap: (attempt, delay) => this.set('pairing', attempt ? `the relay is unreachable (${attempt} redials); trying again in ${Math.round(delay / 1000)} s` : 'the relay dropped the socket; redialing'),
@@ -2299,14 +2389,20 @@ const RemoteBridge = {
         throw new Error('RemoteSocket: ' + what);
       },
       onFirstFail: this.relay === 'aws' ? () => this.fallBack() : null,
+      rotateMs: this.relay === 'aws' ? this.APIGW_ROTATE_MS
+        : this.relay === 'origin' ? this.VERCEL_ROTATE_MS
+        : this.containerRelay() ? this.APIGW_ROTATE_MS
+        : 0,
     });
     this.startKeepalive();
   },
 
   // The durable relay's first dial never opened (a network that blocks
-  // execute-api, a stack that is gone): the same token, this origin's relay.
-  // Only a failed FIRST dial, never a timeout on a call — a drop after an
-  // open is the 2 h cut or an outage, and RemoteSocket redials in place.
+  // execute-api, a stack that is gone): the same token, this origin's relay
+  // (Vercel maxDuration 800 s — the ~13 min cut). Only a failed FIRST dial,
+  // never a timeout on a call — a drop after an open is API GW 2 h / idle,
+  // browser background, or Vercel 800 on the fallback path, and RemoteSocket
+  // redials in place.
   async fallBack() {
     // A container named its own relay: there is nothing to fall back TO. Ours
     // is not a safety net for a self-hosted box — reaching it would be the
@@ -2485,9 +2581,17 @@ const RemoteBridge = {
     const pick = i.title || i.command || i.path || i.query || i.url || i.theme || (typeof i.code === 'string' ? i.code : '') || i.note || '';
     return String(pick).replace(/\s+/g, ' ').slice(0, 120);
   },
-  async call(msg) {
+  callQueue: Promise.resolve(),
+  call(msg) {
+    const work = () => this._callOne(msg);
+    const next = this.callQueue.then(work, work);
+    this.callQueue = next.catch(() => {});
+    return next;
+  },
+  async _callOne(msg) {
     this.calls++;
-    this.connected();
+    if (this.socket?.open) this.connected();
+    else if (this.state === 'connected') this.set('pairing', 'the relay socket dropped; redialing');
     this.emit();
     const t0 = Date.now();
     const entry = { at: t0, tool: String(msg.tool), what: this.summarise(msg.tool, msg.input), ok: null, ms: 0, error: '' };
@@ -2527,8 +2631,8 @@ const RemoteBridge = {
     this.set('off');
   },
 
-  // A revoke clicked in a gap (the 800 s cut, any drop) used to forget the
-  // token here and nowhere else: the relay kept the agent side attached, the
+  // A revoke clicked while the socket was down used to forget the token here
+  // and nowhere else: the relay kept the agent side attached, the package read
   // package read every later call as "peer not connected" — an outage, not a
   // decision — and the token stayed resolvable for anyone holding it. One
   // fresh dial carries the frame; the relay answers 4003 to both ends.

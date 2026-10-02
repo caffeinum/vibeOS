@@ -52,11 +52,14 @@ const Workspace = {
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
   emit() { this.listeners.forEach(fn => { try { fn(); } catch {} }); },
 
-  async mount(handle) {
+  // remember:false keeps the stored folder handle in IndexedDB when the person
+  // still owes a re-grant — mount private storage for this session only.
+  async mount(handle, opts = {}) {
+    const remember = opts.remember !== false;
     this.root = handle;
     this.apps = await handle.getDirectoryHandle('apps', { create: true });
     this.dataDir = await handle.getDirectoryHandle('data', { create: true });
-    await idb.set('workspace', handle);
+    if (remember) await idb.set('workspace', handle);
     this.emit();
   },
 
@@ -68,7 +71,7 @@ const Workspace = {
   // Fallback when a real folder cannot be opened: OPFS. Same interface, same
   // code path, but it lives in this browser rather than on their disk — so it
   // is labelled differently everywhere it appears.
-  async mountPrivate() {
+  async mountPrivate(opts = {}) {
     if (!navigator.storage || !navigator.storage.getDirectory) throw new Error('This browser has no private storage.');
     let dir;
     try {
@@ -81,7 +84,7 @@ const Workspace = {
         : 'Private storage was refused: ' + e.name);
     }
     this.private = true;
-    await this.mount(dir);
+    await this.mount(dir, opts);
   },
 
   // 'no workspace' is a state, not a name: the Workspace pane and the app
@@ -738,7 +741,7 @@ const Sync = {
   async diff() {
     const vm = this.vmFiles();
     if (vm === null) return { error: 'The VM is not running — open the Terminal window first.' };
-    if (!Workspace.open) return { error: 'No workspace open — pick a folder first.' };
+    if (!Workspace.open) return { error: 'No workspace storage is available in this browser.' };
 
     const ws = await Workspace.listAll();
     const names = [...new Set([...ws.map(f => f.name), ...vm.map(f => f.name)])].sort();

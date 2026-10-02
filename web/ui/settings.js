@@ -501,10 +501,10 @@ export function WorkspaceApp(body) {
   const paint = async () => {
     if (!Workspace.open) {
       body.innerHTML = `
-        <h3>Pick a workspace folder</h3>
-        <p class="small muted">Everything the agent builds gets written here as ordinary
-          <code>.js</code> files — not browser storage. That is what makes the handoff to the
-          native binary free: it opens the same folder.</p>
+        <h3>Workspace storage</h3>
+        <p class="small muted">vibeOS can run without this step. Choose a folder when you want apps and
+          chat to persist on <b>your disk</b> as ordinary <code>.js</code> files — the same folder the
+          native build opens, with no export.</p>
         <pre class="out">vibeos/
   apps/     one file per generated app
   data/     whatever those apps save</pre>
@@ -520,7 +520,7 @@ export function WorkspaceApp(body) {
               is exactly the case that needs an explicit export to reach the native build.</p>
           </div>` : ''}
         <div class="row" style="margin-top:10px">
-          <button class="btn ${canPickDirectory ? 'p' : ''}" id="pick" ${canPickDirectory ? '' : 'disabled'}>Choose folder…</button>
+          <button class="btn ${canPickDirectory ? 'p' : ''}" id="pick" ${canPickDirectory ? '' : 'disabled'}>Save to a folder…</button>
           <button class="btn ${canPickDirectory ? '' : 'p'}" id="priv">Use private storage</button>
           ${Workspace.pending ? '<button class="btn" id="regrant">Reopen last folder</button>' : ''}
         </div>`;
@@ -706,7 +706,7 @@ export function CapsApp(body, win) {
 function mcpPane(body, win) {
   const state = body.querySelector('#mcpState'), cmd = body.querySelector('#mcpCmd'), code = body.querySelector('#mcpCommand');
   const trust = body.querySelector('#mcpTrust'), pair = body.querySelector('#mcpPair'), retry = body.querySelector('#mcpRetry'), revoke = body.querySelector('#mcpRevoke'), copy = body.querySelector('#mcpCopy');
-  trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token is remembered in this browser for seven days — Forget this agent ends it, closing the tab does not.';
+  trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token is remembered in this browser for seven days — Forget this agent ends it, closing the tab does not. On the default relay, pairing stays up while keepalive pings succeed; a socket recycle reattaches the same token without starting over.';
   const refusal = RemoteBridge.refusal();
   let probe = null;
   // Which relay this tab is on, and the instance that answered. On the
@@ -952,6 +952,7 @@ export function SettingsApp(body, win, opts) {
 export function NetworkApp(body, win) {
   const render = () => {
     const on = !!VM.relay;
+    const hostedWisp = on && VM.relay && (VM.relay === NET_DEFAULT || /vibeos\.sh/i.test(VM.relay)) && !VM.containerNet();
     body.innerHTML = `
       <h3>Network</h3>
       <p class="small muted" style="margin-top:0">
@@ -998,7 +999,8 @@ export function NetworkApp(body, win) {
             <td class="dimmer tiny">the relay refuses loopback, private ranges and odd ports, so the guest cannot reach our infrastructure</td></tr>
         <tr><td>Staying connected</td><td class="part"><b>redials</b></td>
             <td class="dimmer tiny">the relay is a serverless function and its socket closes at its max duration (800 s); the desktop redials in place — connections open at that moment are dropped, new ones work</td></tr>
-      </tbody></table>`;
+      </tbody></table>
+      ${hostedWisp ? `<p class="note" style="margin-top:10px"><b>Long downloads</b> (curl, apt, nvm source builds) can fail mid-transfer when the relay recycles (~13 min on vibeos.sh). The VM redials but open TCP does not resume — retry with <code>curl -C -</code> or run a self-hosted container where WISP is not capped at 800 s. See <code>docs/wisp-transport-longevity.md</code>.</p>` : ''}`;
     const rc = body.querySelector('#reconnect');
     if (rc) rc.onclick = async () => { rc.disabled = true; rc.textContent = 'restarting…'; await VM.restart(); render(); };
 

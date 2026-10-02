@@ -489,6 +489,7 @@ class RelaySocket {
     this.streams = new Set();       // WISP stream ids with a CONNECT sent and no CLOSE either way
     this.dropped = new Set();       // the streams open when the current gap began
     this.held = [];                 // frames v86 sent during the gap
+    this.lastDroppedStreams = 0;    // for netNote + analytics after a redial
     // A probe says nothing until it knows: 'connecting' every 10 s would turn
     // a dead relay into a pill that flickers.
     if (!probe) this.onLink('connecting');
@@ -526,6 +527,7 @@ class RelaySocket {
     // Fail the streams the relay forgot before anything else moves, then let
     // through what the guest did while we were dialing.
     const dropped = this.dropped; this.dropped = new Set();
+    this.lastDroppedStreams = dropped.size;
     for (const id of dropped) {
       this.streams.delete(id);
       this.dispatch('message', new MessageEvent('message', { data: RelaySocket.closeFrame(id, 3).buffer }));
@@ -778,7 +780,11 @@ const VM = {
     // Only a link that was open has connections to drop: a first dial that
     // failed and then opened is a connection, not a reconnection.
     if (link === 'open' && this.linkWasOpen && (was === 'reconnecting' || was === 'dead')) {
-      this.netNote = 'reconnected; open connections were dropped';
+      const n = this.relaySocket && this.relaySocket.lastDroppedStreams != null
+        ? this.relaySocket.lastDroppedStreams : null;
+      this.netNote = 'reconnected; open connections were dropped'
+        + (n != null ? ' (' + n + ' stream' + (n === 1 ? '' : 's') + ')' : '');
+      try { track('vm_wisp_redial', { streams: n != null ? String(n) : '' }); } catch {}
     }
     if (link === 'open') this.linkWasOpen = true;
     this.syncNet();

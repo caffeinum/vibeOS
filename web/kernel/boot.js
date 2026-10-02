@@ -389,11 +389,15 @@ window.addEventListener('beforeunload', (e) => {
   // the boot has to know where the workspace is to find one. This is a
   // handle lookup and a permission query — milliseconds, no gesture, and a
   // folder that needs re-granting is left pending exactly as before.
-  let state = await Workspace.restore();
-  // Nothing mounted and nothing pending: use private browser storage so apps
-  // persist without a click. A real folder stays one click away in Settings.
-  if ((state === 'none' || state === 'no-picker') && canStoreWorkspace) {
-    try { await Workspace.mountPrivate(); state = 'private'; } catch {}
+  const wsState = await Workspace.restore();
+  // No folder mounted yet: use private browser storage so the desktop, VM, and
+  // agent work without a picker. A real folder is opt-in in Settings ›
+  // Workspace. When a previous folder needs re-granting, mount OPFS for this
+  // session only so idb still holds the handle for "Reopen last folder".
+  if (!Workspace.open && canStoreWorkspace) {
+    try {
+      await Workspace.mountPrivate({ remember: wsState !== 'needs-permission' });
+    } catch {}
   }
   // Start the machine BEFORE the key modal. It is an in-page overlay that is
   // awaited, so booting after it left the VM at 'off' until the user dealt with
@@ -463,6 +467,14 @@ window.addEventListener('beforeunload', (e) => {
   window.__vibeosOpenChat = () => focusOrOpen(UI.live().SHELL.chat);
   window.__vibeosOpenAgent = () => UI.live().openAgent();
   bootFinished();
+  if (Workspace.open && Workspace.private && canPickDirectory) {
+    try {
+      if (!sessionStorage.getItem('vibeos-persist-hint')) {
+        sessionStorage.setItem('vibeos-persist-hint', '1');
+        Chat.line('Using private browser storage for now. Settings › Workspace → Choose folder… saves apps and chat on your disk across sessions.');
+      }
+    } catch {}
+  }
   if (window.__vibeosBoot.source === 'served' && window.__vibeosBoot.storedFailed) {
     recoveryBar('Your edited OS did not finish booting last time, so this is the stock one.',
                 'Fix the system/ files in your workspace (or delete them) and reload. Your files and apps are untouched.');

@@ -43,22 +43,31 @@ export function paintWorkspace() {
 // through vibeos-mcp, the local server, or nothing. Never the key, never
 // an account: a model id, a provider name, the MCP client's own name — all
 // textContent. The tooltip says where the credential lives.
+function mcpPill() {
+  const name = RemoteBridge.agentName || RemoteBridge.detail || 'an agent';
+  const paired = RemoteBridge.state === 'connected' || (RemoteBridge.token && RemoteBridge.state === 'waiting');
+  if (!paired && !(RemoteBridge.token && RemoteBridge.state === 'pairing')) return { suffix: '', agent: '', on: false, reconnecting: false, titleExtra: '' };
+  const live = RemoteBridge.live();
+  if (live) return { suffix: ' (mcp)', agent: name, on: true, reconnecting: false, titleExtra: ' ' + name + ' drives this desktop through vibeos-mcp with its own model.' };
+  return { suffix: ' (reconnecting)', agent: name, on: false, reconnecting: true, titleExtra: ' ' + name + ' is paired but the relay socket is down or redialing — tool calls may fail until it is back.' };
+}
 export function loginLine() {
-  const agent = RemoteBridge.state === 'connected' ? (RemoteBridge.agentName || RemoteBridge.detail || 'an agent') : '';
-  const via = agent ? ' + mcp' : '';
-  if (Gen.viaServer) return { text: 'Server · ' + (Gen.model || 'local') + via, on: true, title: 'A local vibeOS server holds the model.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
-  if (Gen.provider === 'openai-codex') return { text: 'Codex · ' + Gen.model + via, on: true, title: 'Signed in with ChatGPT; the model is ' + Gen.model + (Gen.codexModel ? ' (set in Settings › Model)' : ' (the default)') + '. Tokens stay in this browser.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
-  if (Gen.key && Gen.provider) return { text: 'API key · ' + Gen.provider + ' ' + Gen.model + via, on: true, title: 'A pasted ' + Gen.provider + ' key, kept in this browser; the model is ' + Gen.model + '.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
-  if (agent) return { text: 'Agent · ' + agent + ' (mcp)', on: true, title: agent + ' drives this desktop through vibeos-mcp with its own model; no model is connected here.' };
-  return { text: 'no model', on: false, title: 'No model connected. Click to connect one.' };
+  const mcp = mcpPill();
+  const agent = mcp.agent;
+  const via = mcp.agent ? (mcp.reconnecting && !Gen.available ? mcp.suffix : mcp.reconnecting ? ' (reconnecting)' : ' + mcp') : '';
+  if (Gen.viaServer) return { text: 'Server · ' + (Gen.model || 'local') + via, on: true, warn: mcp.reconnecting, title: 'A local vibeOS server holds the model.' + (agent ? (mcp.reconnecting ? mcp.titleExtra : ' ' + agent + ' also drives this desktop through vibeos-mcp.') : '') };
+  if (Gen.provider === 'openai-codex') return { text: 'Codex · ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'Signed in with ChatGPT; the model is ' + Gen.model + (Gen.codexModel ? ' (set in Settings › Model)' : ' (the default)') + '. Tokens stay in this browser.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  if (Gen.key && Gen.provider) return { text: 'API key · ' + Gen.provider + ' ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'A pasted ' + Gen.provider + ' key, kept in this browser; the model is ' + Gen.model + '.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  if (agent) return { text: 'Agent · ' + agent + (mcp.reconnecting ? mcp.suffix : ' (mcp)'), on: mcp.on, warn: mcp.reconnecting, title: mcp.reconnecting ? mcp.titleExtra.slice(1) : agent + ' drives this desktop through vibeos-mcp with its own model; no model is connected here.' };
+  return { text: 'no model', on: false, warn: false, title: 'No model connected. Click to connect one.' };
 }
 
 export function paintLogin() {
   const txt = document.getElementById('loginText'), dot = document.getElementById('loginDot'), pill = document.getElementById('loginPill');
   if (!txt) return;
-  const { text, on, title } = loginLine();
+  const { text, on, warn, title } = loginLine();
   txt.textContent = text;
-  dot.className = 'dot' + (on ? '' : ' off');
+  dot.className = 'dot' + (on ? '' : warn ? ' warn' : ' off');
   pill.title = title;
 }
 
