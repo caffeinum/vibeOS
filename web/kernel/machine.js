@@ -22,13 +22,77 @@
 // selfcontained.mjs would catch it, which is the only reason this is a
 // tripwire and not a landmine. Adding a track() call is free; making window.va
 // exist in the image is not.
+//
+// Every event is also posted to /api/events (Hexclave, dual-write while its
+// counts are checked against Vercel's). Same gate as the Vercel half and the
+// analytics banner in boot.js — the insights tag, so the mirror and the image
+// make zero requests — plus how that tag's own script answered: a page served
+// by something with no /_vercel/insights (a static server, a mirror that kept
+// the tag) has no /api either, and the browser has already logged the
+// script's 404, so this sends nothing rather than a second failed request.
+// The decision waits for `load` (the script is deferred, its timing entry
+// lands after). Where the script loaded but the route still fails, the first
+// post is the only one: the rest of the page sends nothing, never a retry per
+// event. That first post is also the one that mints this browser's anonymous
+// Hexclave user, so later events wait for it rather than racing it.
+const HexEvents = {
+  state: 'first', // first | waiting | sending | on | off
+  queue: [],
+  hosted() {
+    try {
+      const tag = document.querySelector('script[src*="_vercel/insights"]');
+      if (!tag) return false;
+      const entry = performance.getEntriesByName(tag.src)[0];
+      return !(entry && entry.responseStatus >= 400);
+    } catch { return false; }
+  },
+  post(evt) {
+    return fetch('/api/events', {
+      method: 'POST', keepalive: true, credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(evt),
+    });
+  },
+  hold(evt) { if (this.queue.length < 50) this.queue.push(evt); },
+  start() {
+    if (!this.hosted()) { this.state = 'off'; this.queue = []; return; }
+    const first = this.queue.shift();
+    if (!first) { this.state = 'first'; return; }
+    this.state = 'sending';
+    this.post(first).then(r => r.ok || r.status === 202 || r.status === 400, () => false).then(up => {
+      this.state = up ? 'on' : 'off';
+      const held = this.queue; this.queue = [];
+      if (up) for (const e of held) this.post(e).catch(() => {});
+    });
+  },
+  send(evt) {
+    try {
+      if (this.state === 'off') return;
+      if (this.state === 'on') { this.post(evt).catch(() => {}); return; }
+      this.hold(evt);
+      if (this.state !== 'first') return;
+      if (document.readyState === 'complete') { this.start(); return; }
+      this.state = 'waiting';
+      addEventListener('load', () => { try { this.start(); } catch { this.state = 'off'; } }, { once: true });
+    } catch { this.state = 'off'; }
+  },
+};
+
 function track(name, data) {
   try {
     const evt = { name };
     if (data) evt.data = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)]));
     window.va && window.va('event', evt);
+    HexEvents.send(evt);
   } catch {}
 }
+// Vercel's insights script records the page view itself (so not through
+// track(), which would add a custom Vercel event); this is its Hexclave half,
+// once per page load.
+try {
+  let referrer = '';
+  try { referrer = document.referrer ? new URL(document.referrer).host : ''; } catch {}
+  HexEvents.send({ name: '$page-view', data: { path: location.pathname, referrer } });
+} catch {}
 
 /* ---------- capability providers ------------------------------------- */
 
