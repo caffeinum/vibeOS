@@ -1,0 +1,39 @@
+web/index.html
+  s_ed25aaaf9c7e77::t_f326c5635e90d7 35,44-47,70-93,100-112,114,116-117,121-155,158-170,219,226,260-264,266,643,647
+web/kernel/agent.js
+  s_ed25aaaf9c7e77::t_0fda7777230668 161-174,252-266,703-709,941-942,2067,2581-2591,2607,2609-2613,2617,3079-3080,3358-3369
+web/kernel/boot.js
+  s_ed25aaaf9c7e77::t_14ab0455e7c9c9 375-413,423-425,509
+web/kernel/machine.js
+  s_ed25aaaf9c7e77::t_223eff0eb2a5fb 244,268,295
+web/kernel/net.js
+  s_ed25aaaf9c7e77::t_22d05a55411b99 32-34
+web/kernel/workspace.js
+  s_ed25aaaf9c7e77::t_104b0f723c996d 585,587
+web/os.css
+  s_ed25aaaf9c7e77::t_52904a84e05451 269,299-372,655-670,705-724
+web/tools.js
+  s_ed25aaaf9c7e77::t_a5043407eaace9 1-176
+web/ui/dock.js
+  s_ed25aaaf9c7e77::t_cae7ec11418650 157-387
+web/ui/settings.js
+  s_ed25aaaf9c7e77::t_e3568098179e0f 688-700,765-782
+web/ui/windows.js
+  s_ed25aaaf9c7e77::t_185e2e173c600c 227-314
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b2c6877751a4a4a59e3042deda88b03bcf2d73d2",
+  "prompts": {},
+  "sessions": {
+    "s_ed25aaaf9c7e77": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "90dd1251-161e-469a-96db-040d1e555035",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}

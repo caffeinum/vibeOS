@@ -1,0 +1,19 @@
+web/kernel/machine.js
+  s_2e326df08d3ef7::t_17522f640ba5c3 25-79,85,88-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "95b27a8159b1eb89f24da0798b1f6ae8a3fc9328",
+  "prompts": {},
+  "sessions": {
+    "s_2e326df08d3ef7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-aforum-build-6764a36594eac0a3",
+        "model": "unknown"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
