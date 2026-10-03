@@ -12,7 +12,9 @@
  */
 
 // Product events, so "46 people opened /app" can become "and this is what
-// happened next". Deliberately coarse: no prompt text, no URLs, no key state.
+// happened next". Deliberately coarse: no URLs, no key state, and no prompt
+// text but one — the first a browser ever sends, redacted, under a visible
+// notice (FirstPrompt below).
 //
 // In the self-hosted image every one of these is dropped, and it is the
 // DELETION that does it, not this guard: the build strips the insights tag
@@ -77,14 +79,58 @@ const HexEvents = {
   },
 };
 
-function track(name, data) {
+// `hexOnly` props ride the Hexclave row and never reach Vercel: the first
+// prompt's text is the one such prop (FirstPrompt below).
+function track(name, data, hexOnly) {
   try {
     const evt = { name };
     if (data) evt.data = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)]));
     window.va && window.va('event', evt);
-    HexEvents.send(evt);
+    // A new object: va may hold the one it was handed (its queue) and read it later.
+    HexEvents.send(hexOnly ? { name, data: { ...evt.data, ...Object.fromEntries(Object.entries(hexOnly).map(([k, v]) => [k, String(v)])) } } : evt);
   } catch {}
 }
+
+// The text of the first prompt a browser ever sends, so we learn what people
+// try to build (operator-approved, beads-2taw). Only where HexEvents records
+// at all — the hosted page; the mirror and the image strip the insights tag —
+// and only with the chat's visible notice up while nothing has been sent from
+// this browser. Later prompts are never recorded. Keys, emails and phone
+// numbers are replaced before anything leaves the tab, then the text is cut to
+// the event guard's 200 chars (lib/event-guard.ts MAX_VALUE_CHARS).
+const FIRST_PROMPT_MAX = 200;
+const FIRST_PROMPT_REDACT = [
+  [/\bsk-[A-Za-z0-9_-]{8,}/g],                              // OpenAI / Anthropic (sk-ant-…) keys
+  [/\b(?:gh[pousr]_|github_pat_|xox[abposr]-|AKIA|AIza|glpat-|hf_)[A-Za-z0-9_-]{10,}/g],
+  [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/g],  // email
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?/g],     // JWT
+  [/\b[0-9a-fA-F]{32,}\b/g, m => /\d/.test(m)],             // long hex (not 'aaaa…')
+  [/[A-Za-z0-9+/_-]{32,}={0,2}/g, m => /\d/.test(m) && /[A-Za-z]/.test(m)],  // a token, not a long path or word
+  [/(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)[\s.-]?)?\d{2,4}(?:[\s.-]?\d{2,4}){2,4}\b/g,
+    m => m.replace(/\D/g, '').length >= 9 || /^\+|\(/.test(m)],               // a phone, not a date or a size
+];
+function redactPrompt(text) {
+  let s = String(text).replace(/\s+/g, ' ').trim();
+  for (const [re, is] of FIRST_PROMPT_REDACT) s = s.replace(re, m => (!is || is(m)) ? '[redacted]' : m);
+  if (s.length > FIRST_PROMPT_MAX) {
+    s = s.slice(0, FIRST_PROMPT_MAX);
+    if (/[\uD800-\uDBFF]$/.test(s)) s = s.slice(0, -1);
+  }
+  return s;
+}
+const FirstPrompt = {
+  KEY: 'vibeos-first-prompt-sent',
+  sent() { try { return localStorage.getItem(this.KEY) === '1'; } catch { return false; } },
+  // The notice: shown exactly when a send now would record its text.
+  notice() { return !this.sent() && HexEvents.state !== 'off' && HexEvents.hosted(); },
+  // Consumes the once-per-browser slot: the redacted text to record, or null
+  // when nothing may be recorded (not hosted, or this browser already sent).
+  take(text) {
+    if (!this.notice()) return null;
+    try { localStorage.setItem(this.KEY, '1'); } catch {}
+    return redactPrompt(text);
+  },
+};
 // Vercel's insights script records the page view itself (so not through
 // track(), which would add a custom Vercel event); this is its Hexclave half,
 // once per page load.

@@ -164,15 +164,17 @@ const winxp = () => document.documentElement.dataset.theme === 'winxp';
 /* ---------- the boot splash (winxp) --------------------------------------
 
    The first thing a visit does is wait on the machine. In the winxp theme
-   that wait is XP's boot screen — the mark, a marquee of blue blocks — and
-   it ends in a short "welcome back." that fades into the desktop. Shown
-   once per page, only while the first boot is still under way, and never a
-   trap: a click or Escape dismisses it, a failure or a fallback ends it at
-   once, and it sits under the key modal, the pairing dialog and the
+   the page opens on XP's boot screen — the mark, a marquee of blue blocks —
+   for SPLASH_MS only, then a short "welcome back." fades into the desktop
+   while the machine keeps booting behind the menubar pill (aleks: "it looks
+   like its broken. maybe only show it for 2-3 seconds"): a splash held for
+   the whole 20-90 s boot read as a hung page. Shown once per page, never a
+   trap: a Skip button, a click or Escape dismisses it, a failure or a
+   fallback ends it at once, and it sits under the key modal, the pairing dialog and the
    recovery bar (z 8500 against 9000 and 99999), which must stay readable.
    The layout that keeps it a full screen is inline, so a forked os.css that
    predates the rules shows a plain black screen, not loose text. */
-const SPLASH_MAX_MS = 180000, WELCOME_MS = 1400, FADE_MS = 500;
+const SPLASH_MS = 2000, WELCOME_MS = 700, FADE_MS = 400;
 
 function bootSplash() {
   if (window.__vibeosSplashDecided) return () => {};
@@ -182,7 +184,7 @@ function bootSplash() {
   el.id = 'bootSplash';
   el.className = 'boot-splash';
   el.setAttribute('role', 'status');
-  el.setAttribute('aria-label', 'vibeOS is starting; click or press Escape to use the desktop now');
+  el.setAttribute('aria-label', 'vibeOS is starting; Skip, click or press Escape to use the desktop now');
   el.style.cssText = 'position:fixed;inset:0;z-index:8500;background:#000;color:#fff;cursor:default';
   el.innerHTML = `
     <div class="bs-boot">
@@ -190,7 +192,7 @@ function bootSplash() {
       <div class="bs-bar" aria-hidden="true"><i></i><i></i><i></i></div>
       <p class="bs-status"></p>
     </div>
-    <p class="bs-hint">Click or press Esc to use the desktop while it boots</p>
+    <p class="bs-hint">Linux keeps starting in the background. <button type="button" class="bs-skip">Skip</button></p>
     <div class="bs-welcome">
       <div class="bs-band"></div>
       <div class="bs-mid"><p class="bs-hello">welcome back.</p><img class="bs-pic" alt=""></div>
@@ -235,7 +237,7 @@ function bootSplash() {
   el.addEventListener('pointerdown', end);
   const themeWatch = new MutationObserver(() => { if (!winxp()) end(); });
   themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-  const cap = setTimeout(end, SPLASH_MAX_MS);
+  const cap = setTimeout(welcome, SPLASH_MS);
   return end;
 }
 

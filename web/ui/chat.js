@@ -64,6 +64,7 @@ export function ChatApp(body, win) {
         <textarea id="msg" class="chat-input" rows="2" placeholder="ask for a window, or a script for the VM — attach or paste an image"></textarea>
         <button class="btn p sm chat-send" id="send">Send</button>
       </div>
+      <div id="firstNote" class="chat-first-note" hidden></div>
     </div>`;
   const log = body.querySelector('#log'), input = body.querySelector('#msg'), chips = body.querySelector('#chips');
   // A picked file lands exactly like a pasted or dropped one: Chat.attach,
@@ -407,7 +408,20 @@ export function ChatApp(body, win) {
   agentMode();
   if (!Chat.ready) { input.disabled = true; input.placeholder = 'loading chat…'; }
   else hint();   // a reload_ui mid-turn opens this window with the turn already running
+  // The hosted page records the text of a browser's first prompt
+  // (FirstPrompt, kernel/machine.js); this line says so until it is sent.
+  const firstNote = body.querySelector('#firstNote');
+  firstNote.textContent = 'We read first messages to learn what to build.';
+  const paintFirstNote = () => { firstNote.hidden = !FirstPrompt.notice(); };
+  paintFirstNote();
+  // HexEvents decides the hosted gate once the page has loaded (the insights
+  // script's own status), so a mirror that kept the tag drops the line then.
+  if (document.readyState !== 'complete') {
+    addEventListener('load', paintFirstNote, { once: true });
+    Windows.onDispose(win, () => removeEventListener('load', paintFirstNote));
+  }
   const off = Chat.on((type, data) => {
+    if (type === 'first') return paintFirstNote();
     if (type === 'chips') return paintChips();
     if (type === 'status') return status(data.text);
     if (type === 'loaded') enable();

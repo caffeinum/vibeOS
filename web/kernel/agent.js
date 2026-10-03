@@ -3519,13 +3519,19 @@ const Chat = {
     text = String(text || '').trim();
     if (!text && !this.pending.length) return null;
     // Once per page: how long the person sat before asking for anything, and
-    // whether the machine had arrived by then. Bucketed, never the text — what
-    // they typed is theirs.
+    // whether the machine had arrived by then. The text rides only the first
+    // prompt this browser ever sends, only on the hosted page, under the
+    // composer's notice, redacted and to Hexclave alone (FirstPrompt in
+    // kernel/machine.js); a chip is recorded as its index, not its text.
     if (!this.asked) {
       this.asked = true;
       const s = Math.round(performance.now() / 1000);
+      const chip = EXAMPLE_PROMPTS.indexOf(text);
+      const first = FirstPrompt.take(text);
+      const extra = first === null ? null : chip >= 0 ? { chip } : first ? { text: first } : null;
       track('first_prompt', { after: s < 5 ? '0-5s' : s < 15 ? '5-15s' : s < 30 ? '15-30s' : s < 60 ? '30-60s' : '60s+',
-        vm: VM.state, model: Gen.available ? 'yes' : 'no' });
+        vm: VM.state, model: Gen.available ? 'yes' : 'no' }, extra);
+      this.emit('first');
     }
     // Pictures put back after a failure can stack past the cap; refuse here
     // rather than let the body grow past what the server will take — at queue

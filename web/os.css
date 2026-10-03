@@ -342,7 +342,9 @@
   [data-theme="winxp"] .bs-bar i:nth-child(3) { left: -18px; }
   @keyframes bs-marquee { to { transform: translateX(212px); } }
   [data-theme="winxp"] .bs-status { margin: 0; color: #9a9a9a; font-size: 12px; }
-  [data-theme="winxp"] .bs-hint { position: absolute; left: 16px; right: 16px; bottom: 28px; margin: 0; text-align: center; color: #6f6f6f; font-size: 12px; }
+  [data-theme="winxp"] .bs-hint { position: absolute; left: 16px; right: 16px; bottom: 28px; margin: 0; text-align: center; color: #b9b9b9; font-size: 13px; }
+  [data-theme="winxp"] .bs-skip { margin-left: 10px; padding: 3px 14px; font: inherit; font-weight: 600; color: #fff; background: transparent; border: 1px solid #8a8a8a; border-radius: 3px; cursor: pointer; }
+  [data-theme="winxp"] .bs-skip:hover, [data-theme="winxp"] .bs-skip:focus-visible { border-color: #fff; outline: none; }
   [data-theme="winxp"] .bs-welcome { display: none; }
   [data-theme="winxp"] .boot-splash.welcome .bs-boot,
   [data-theme="winxp"] .boot-splash.welcome .bs-hint { display: none; }
@@ -562,6 +564,7 @@
   }
   .chat-composer { flex: 0 0 auto; border-top: 1px solid var(--barline); background: var(--panel); }
   .chat-chips { flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
+  .chat-first-note { padding: 0 12px 8px; margin-top: -4px; font-size: 11px; color: var(--dimmer); }
   .chat-composer-row { gap: 8px; padding: 10px 12px; align-items: center; }
   .chat-attach { flex: 0 0 auto; width: 36px; height: 36px; padding: 0; display: grid; place-items: center; }
   .chat-input {
