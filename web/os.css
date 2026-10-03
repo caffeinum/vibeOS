@@ -89,38 +89,213 @@
     --font-mono: "Lucida Console", Consolas, "Courier New", monospace;
   }
   /* What the tokens cannot say. A compound selector is a theme's rules, not a
-     theme block: no @theme header goes on these, and parseThemes skips them.
-     Luna's title bar is a four-stop vertical gradient, not one colour, and its
-     bottom corners are square while the top two are round — a single
-     --radius-win cannot express that. */
-  [data-theme="winxp"] .titlebar {
-    background: linear-gradient(to bottom, #0058ee 0%, #3f8cf3 9%, #1c6fee 18%, #0058ee 82%, #0046d5 100%);
-    border-bottom: 0; padding: 5px 8px;
+     theme block: no header goes on these, and parseThemes skips them.
+     Luna, read off a stylised XP reel (title bars, the taskbar, a balloon,
+     dialogs): gradients with several stops, round tops over square bottoms,
+     glyphs on the caption buttons — none of it is one colour, so none of it
+     is a token. */
+
+  /* The frame: a 3 px blue border on three sides; the title bar is the top. */
+  [data-theme="winxp"] .win {
+    border: 3px solid #0054e3; border-top: 0;
+    border-radius: 8px 8px 0 0;
+    box-shadow: 0 0 0 1px #0831d9, var(--shadow-win);
   }
-  [data-theme="winxp"] .title { color: var(--titletext); text-shadow: 1px 1px 1px rgba(0, 0, 0, .35); font-weight: 700; }
-  [data-theme="winxp"] .win { border-top-left-radius: 8px; border-top-right-radius: 8px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-  /* XP's buttons are square-ish and sit at the right; the desktop keeps them
-     where they are, so only the shape changes. */
-  [data-theme="winxp"] .tl { border-radius: 3px; width: 16px; height: 14px; border: 1px solid rgba(255, 255, 255, .55); }
-  [data-theme="winxp"] .tl.r { background: #e04343; }
-  [data-theme="winxp"] .tl.y { background: #f0a830; }
-  [data-theme="winxp"] .tl.g { background: #4aa832; }
-  /* The base #desktop rule washes the palette with purple-to-pink so the web
-     and docker builds read as one product; on Luna that fights the sky, so
-     this theme paints Bliss itself — sky down to a green hill — instead of
-     tinting the tokens. */
+  /* Luna's title bar: a bright rim at the top, a long royal blue middle, a
+     dark lip at the bottom. */
+  [data-theme="winxp"] .titlebar {
+    background: linear-gradient(to bottom, #0997ff 0%, #0053ee 8%, #0050ee 40%, #0066ff 88%, #0066ff 93%, #005bff 95%, #003dd7 96%, #003dd7 100%);
+    border-bottom: 0; padding: 3px 5px 3px 7px; gap: 2px; min-height: 29px;
+  }
+  [data-theme="winxp"] .win .title {
+    color: var(--titletext); font: 700 13px/1.2 "Trebuchet MS", Tahoma, sans-serif;
+    letter-spacing: 0; text-shadow: 1px 1px 0 #0f1089;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  }
+  [data-theme="winxp"] .titlebar .badge { color: rgba(255, 255, 255, .85); border-color: rgba(255, 255, 255, .5); margin-left: 6px; }
+  /* XP's caption buttons sit at the right: minimise, maximise, close. Order
+     only — the desktop keeps the same three elements and the same handlers,
+     so a theme cannot break closing a window. */
+  [data-theme="winxp"] .titlebar .title { order: 1; margin-right: auto; }
+  [data-theme="winxp"] .titlebar .badge { order: 2; margin-right: 4px; }
+  [data-theme="winxp"] .titlebar .tl.y { order: 3; }
+  [data-theme="winxp"] .titlebar .tl.g { order: 4; }
+  [data-theme="winxp"] .titlebar .tl.r { order: 5; margin-left: 2px; }
+  /* Square, white-edged, a glossy radial; the glyph is an inline SVG layered
+     on top of it. */
+  [data-theme="winxp"] .tl {
+    width: 21px; height: 21px; flex: 0 0 auto; border-radius: 3px;
+    border: 1px solid #ffffff; box-shadow: 0 0 1px rgba(0, 0, 0, .35);
+  }
+  [data-theme="winxp"] .tl.y {
+    background:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 21 21'%3E%3Crect x='5' y='13' width='7' height='3' fill='white'/%3E%3C/svg%3E") center / 100% no-repeat,
+      radial-gradient(circle at 90% 90%, #0054e9 0%, #2263d5 55%, #4479e4 70%, #a3bbec 90%, #ffffff 100%);
+  }
+  [data-theme="winxp"] .tl.g {
+    background:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 21 21'%3E%3Crect x='5' y='5' width='10' height='10' fill='none' stroke='white' stroke-width='1.2'/%3E%3Crect x='5' y='5' width='10' height='2.6' fill='white'/%3E%3C/svg%3E") center / 100% no-repeat,
+      radial-gradient(circle at 90% 90%, #0054e9 0%, #2263d5 55%, #4479e4 70%, #a3bbec 90%, #ffffff 100%);
+  }
+  [data-theme="winxp"] .tl.r {
+    background:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 21 21'%3E%3Cpath d='M6 6l8 8M14 6l-8 8' stroke='white' stroke-width='2' stroke-linecap='square'/%3E%3C/svg%3E") center / 100% no-repeat,
+      radial-gradient(circle at 90% 90%, #cc4600 0%, #dc6527 55%, #cd7546 70%, #ffccb2 90%, #ffffff 100%);
+  }
+  [data-theme="winxp"] .tl:hover { filter: brightness(1.15) saturate(1.1); }
+  [data-theme="winxp"] .tl:active { filter: brightness(.85); }
+  [data-theme="winxp"] .resize {
+    background: radial-gradient(circle, #aca899 1px, transparent 1.5px) 0 0 / 4px 4px;
+    clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  }
+
+  /* Bliss, in gradients: a deep sky fading to haze, two soft clouds, and the
+     green hill — a wide ellipse under the left, a second slope on the right.
+     The base #desktop rule washes the palette purple-to-pink so the web and
+     docker builds read as one product; on Luna that fights the sky, so this
+     theme paints its own. */
   [data-theme="winxp"] #desktop {
     background:
-      linear-gradient(to bottom, #4a8fd8 0%, #79b4e8 42%, #b9d9ef 58%, #79a83c 63%, #5f8f2f 100%);
+      radial-gradient(ellipse 22% 7% at 24% 18%, rgba(255, 255, 255, .85), rgba(255, 255, 255, 0) 70%),
+      radial-gradient(ellipse 16% 5% at 70% 28%, rgba(255, 255, 255, .7), rgba(255, 255, 255, 0) 70%),
+      radial-gradient(ellipse 125% 70% at 30% 104%, #82c83e 0%, #5ca826 36%, #3f8c19 54.6%, rgba(63, 140, 25, 0) 55%),
+      radial-gradient(ellipse 100% 50% at 104% 100%, #6fae2e 0%, #4f9420 50%, #3a7a14 58.6%, rgba(58, 122, 20, 0) 59%),
+      linear-gradient(to bottom, #1f5fcf 0%, #3d84e0 30%, #8cbeee 58%, #cfe4f6 70%, #e6f1f9 78%);
   }
-  /* XP puts the window buttons at the right of the title bar. Order only —
-     the desktop keeps the same three elements and the same handlers, so a
-     theme cannot break closing a window. */
-  [data-theme="winxp"] .titlebar .tl { order: 2; }
-  [data-theme="winxp"] .titlebar .title { order: 1; margin-right: auto; }
-  [data-theme="winxp"] .titlebar .badge { order: 3; }
-  [data-theme="winxp"] #dock { background: linear-gradient(to bottom, #3f8cf3 0%, #245edb 10%, #245edb 100%); border-top: 1px solid #5b9bf5; }
-  [data-theme="winxp"] #menubar { background: linear-gradient(to bottom, #3f8cf3, #245edb 12%, #245edb); color: #ffffff; }
+
+  /* The taskbar: the dock stretched across the bottom. Its first button is
+     the green start button, apps are quick-launch icons between dotted
+     grips, and Settings sits at the right in the lighter notification area. */
+  [data-theme="winxp"] #dock {
+    left: 0; right: 0; bottom: 0; transform: none; width: auto; max-width: none;
+    height: 30px; padding: 0; gap: 2px; align-items: center; justify-content: flex-start;
+    border-radius: 0; backdrop-filter: none;
+    background: linear-gradient(to bottom, #1f2f86 0%, #3165c4 3%, #3682e5 6%, #4490e6 10%, #3883e5 12%, #2b71e0 15%, #2663da 18%, #235bd6 20%, #2258d5 23%, #2157d6 38%, #245ddb 54%, #2562df 86%, #245fdc 89%, #2158d4 92%, #1d4ec0 95%, #1941a5 98%);
+  }
+  [data-theme="winxp"] #dock button {
+    width: 26px; height: 26px; padding: 4px; border-radius: 3px; border: 1px solid transparent;
+    background: transparent; transition: none;
+  }
+  [data-theme="winxp"] #dock button:hover { transform: none; background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .35); }
+  [data-theme="winxp"] #dock button:active { background: rgba(0, 0, 0, .18); border-color: rgba(0, 0, 0, .3); }
+  [data-theme="winxp"] #dock .dock-icon-img { object-fit: contain; border-radius: 2px; }
+  [data-theme="winxp"] #dock .dock-sep {
+    width: 0; align-self: stretch; margin: 5px 3px; background: none;
+    border-left: 2px dotted rgba(255, 255, 255, .55);
+  }
+  [data-theme="winxp"] #dock > button:first-child {
+    width: auto; height: 30px; padding: 0 18px 0 9px; margin-right: 6px; gap: 6px;
+    border: 0; border-radius: 0 12px 12px 0;
+    background: linear-gradient(to bottom, #3c8f3c 0%, #63bf63 6%, #4cac4c 14%, #3e9c3e 45%, #379237 75%, #2f822f 92%, #2a702a 100%);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, .45), inset -3px 0 4px rgba(0, 0, 0, .25), 2px 0 3px rgba(0, 0, 0, .3);
+  }
+  [data-theme="winxp"] #dock > button:first-child::after {
+    content: 'start'; color: #ffffff; font: italic 700 17px/1 "Franklin Gothic Medium", "Trebuchet MS", Tahoma, sans-serif;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, .6); padding-bottom: 2px;
+  }
+  [data-theme="winxp"] #dock > button:first-child .dock-icon-img { width: 20px; height: 20px; }
+  [data-theme="winxp"] #dock > button:first-child:hover { background: linear-gradient(to bottom, #48a348 0%, #76d076 6%, #5bbd5b 14%, #4aac4a 45%, #42a142 75%, #389238 92%, #307e30 100%); }
+  [data-theme="winxp"] #dock > button:last-child {
+    margin-left: auto; width: auto; height: 30px; padding: 0 12px; border: 0; border-radius: 0;
+    border-left: 1px solid #1042af;
+    background: linear-gradient(to bottom, #0c59b9 1%, #139ee9 6%, #18b5f2 10%, #139beb 14%, #1290e8 19%, #0d8dea 63%, #0d9ff1 81%, #0f9eed 88%, #119be9 91%, #1392e2 94%, #137ed7 97%, #095bc9 100%);
+    box-shadow: inset 1px 0 1px #18bbff;
+  }
+  [data-theme="winxp"] #dock > button:last-child .dock-icon-img { width: 18px; height: 18px; }
+
+  /* The menubar wears the taskbar too: pills are task buttons, the clock is
+     the notification area at the right. */
+  [data-theme="winxp"] #menubar {
+    background: linear-gradient(to bottom, #3168d5 0%, #4993e6 8%, #2157d6 20%, #2157d6 70%, #245ddb 86%, #1941a5 100%);
+    color: #ffffff; padding-top: 4px; padding-bottom: 4px;
+  }
+  [data-theme="winxp"] .pill {
+    border-radius: 3px; padding: 3px 9px; color: #ffffff;
+    background: linear-gradient(to bottom, #3c81f3, #3a7bec 50%, #2f6ee3);
+    box-shadow: inset -1px 0 rgba(0, 0, 0, .3), inset 1px 1px rgba(255, 255, 255, .25);
+  }
+  [data-theme="winxp"] #wsPill:hover, [data-theme="winxp"] #loginPill:hover, [data-theme="winxp"] #lxPill:hover { background: #53a3ff; }
+  [data-theme="winxp"] #menubar > #clock {
+    align-self: stretch; display: flex; align-items: center;
+    margin: -4px -12px -4px 0; padding: 0 12px 0 14px; font-weight: 400;
+    border-left: 1px solid #1042af; box-shadow: inset 1px 0 1px #18bbff;
+    background: linear-gradient(to bottom, #0c59b9 1%, #139ee9 6%, #18b5f2 10%, #139beb 14%, #1290e8 19%, #0d8dea 63%, #0d9ff1 81%, #0f9eed 88%, #119be9 91%, #1392e2 94%, #137ed7 97%, #095bc9 100%);
+  }
+
+  /* Push buttons: white fading to beige, a navy hairline, round corners; an
+     amber glow on hover and Luna's blue inner ring on the default button. */
+  [data-theme="winxp"] .btn,
+  [data-theme="winxp"] #analyticsBar .analytics-dismiss {
+    border: 1px solid #003c74; border-radius: 3px; color: #000000;
+    background: linear-gradient(to bottom, #ffffff 0%, #ecebe6 86%, #d6d0c5 100%);
+  }
+  [data-theme="winxp"] .btn.p {
+    color: #000000; border-color: #003c74;
+    box-shadow: inset -1px 1px #cee7ff, inset 1px 2px #98b8ea, inset -2px 2px #bcd4f6, inset 1px -1px #89ade4, inset 2px -2px #89ade4;
+  }
+  [data-theme="winxp"] .btn:not(.skip):not(:disabled):hover,
+  [data-theme="winxp"] #analyticsBar .analytics-dismiss:hover {
+    border-color: #003c74;
+    box-shadow: inset -1px 1px #fff0cf, inset 1px 2px #fdd889, inset -2px 2px #fbc761, inset 2px -2px #e5a01a;
+  }
+  [data-theme="winxp"] .btn:not(.skip):not(:disabled):active { background: linear-gradient(to bottom, #cdcac3 0%, #e3e3db 8%, #e5e5de 94%, #f2f2f1 100%); box-shadow: none; }
+  [data-theme="winxp"] .key-modal-actions .btn.skip { background: transparent; border-color: transparent; color: #0046d5; }
+  [data-theme="winxp"] .key-modal-actions .btn.skip:hover { text-decoration: underline; border-color: transparent; }
+  [data-theme="winxp"] .btn:focus-visible { outline: 1px dotted #000000; outline-offset: -4px; border-radius: 3px; }
+
+  /* Fields: white, a slate-blue hairline, square. */
+  [data-theme="winxp"] input[type=text],
+  [data-theme="winxp"] input[type=password],
+  [data-theme="winxp"] textarea,
+  [data-theme="winxp"] .chat-input {
+    background: #ffffff; border: 1px solid #7f9db9; border-radius: 0;
+  }
+  [data-theme="winxp"] input[type=password] { width: 100%; padding: 6px 8px; font: inherit; font-size: 13px; outline: none; }
+  [data-theme="winxp"] input:focus, [data-theme="winxp"] textarea:focus { border-color: #316ac5; }
+  [data-theme="winxp"] ::selection { background: #316ac5; color: #ffffff; }
+
+  /* Scrollbars: a pale track and a rounded light-blue thumb with a grip. */
+  [data-theme="winxp"] ::-webkit-scrollbar { width: 16px; height: 16px; }
+  [data-theme="winxp"] ::-webkit-scrollbar-track { background: linear-gradient(to right, #f3f1ec, #fefefb); }
+  [data-theme="winxp"] ::-webkit-scrollbar-thumb {
+    border: 1px solid #ffffff; border-radius: 3px; box-shadow: inset 0 0 0 1px #b8cbf6;
+    background: linear-gradient(to right, #c9d7fc, #b5c8f7 60%, #a8bdf3);
+  }
+  [data-theme="winxp"] ::-webkit-scrollbar-thumb:hover { background: linear-gradient(to right, #dbe5fd, #c6d6fb 60%, #b9cdf8); }
+
+  /* Dialogs are XP windows: the heading becomes the title bar. */
+  [data-theme="winxp"] .key-modal-overlay { background: rgba(0, 0, 0, .25); backdrop-filter: none; }
+  [data-theme="winxp"] .key-modal {
+    padding: 0 16px 16px; overflow: hidden;
+    border: 3px solid #0054e3; border-top: 0; border-radius: 8px 8px 0 0;
+    box-shadow: 0 0 0 1px #0831d9, var(--shadow-win);
+  }
+  [data-theme="winxp"] .key-modal h2 {
+    margin: 0 -16px 12px; padding: 6px 10px; color: #ffffff;
+    font: 700 13px/1.3 "Trebuchet MS", Tahoma, sans-serif; text-shadow: 1px 1px 0 #0f1089;
+    background: linear-gradient(to bottom, #0997ff 0%, #0053ee 8%, #0050ee 40%, #0066ff 88%, #0066ff 93%, #005bff 95%, #003dd7 96%, #003dd7 100%);
+  }
+
+  /* The analytics notice is a notification-area balloon: pale yellow, a black
+     hairline, an info glyph, and a tail pointing down at the taskbar. */
+  [data-theme="winxp"] #analyticsBar {
+    left: auto; right: 14px; bottom: calc(44px + env(safe-area-inset-bottom, 0px));
+    max-width: min(440px, calc(100vw - 28px));
+    background: #ffffe1; color: #000000; border: 1px solid #000000; border-radius: 8px;
+    box-shadow: 2px 3px 4px rgba(0, 0, 0, .3); font-size: 12px;
+  }
+  [data-theme="winxp"] #analyticsBar::before {
+    content: 'i'; flex: 0 0 auto; align-self: flex-start; width: 16px; height: 16px; border-radius: 50%;
+    display: grid; place-items: center; color: #ffffff; font: italic 700 12px/1 Georgia, serif;
+    background: radial-gradient(circle at 35% 30%, #8ec5ff, #1f6fe0 60%, #0d3f9e);
+    box-shadow: 0 0 0 1px #ffffff, 0 0 0 2px #2a5bb8;
+  }
+  [data-theme="winxp"] #analyticsBar::after {
+    content: ''; position: absolute; right: 36px; bottom: -8px; width: 14px; height: 14px;
+    background: #ffffe1; border-right: 1px solid #000000; border-bottom: 1px solid #000000;
+    transform: skewX(30deg) rotate(45deg);
+  }
+  [data-theme="winxp"] #analyticsBar a { color: #0000ff; }
   /* Win95 chrome when the default palette is on (:root, no data-theme). Other
      themes keep mac traffic lights and the floating dock. */
   html:not([data-theme]) #desktop {
