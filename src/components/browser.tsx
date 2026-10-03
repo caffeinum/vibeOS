@@ -110,7 +110,7 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
     onError: (error) => {
       console.error('[Browser] Creation error:', error);
       const kernelErr: KernelError = {
-        message: error.message || "Failed to create Kernel browser. Please check your API key.",
+        message: error.message || "Failed to start the local browser.",
         code: "BROWSER_CREATION_FAILED"
       };
       setKernelError(kernelErr);
@@ -189,7 +189,7 @@ export function Browser({ isOpen: externalIsOpen, onClose, initialized, defaultU
       return browser;
     } else {
       const error: KernelError = {
-        message: "Failed to create Kernel browser. Please check your API key.",
+        message: "Failed to start the local browser.",
         code: "BROWSER_CREATION_FAILED"
       };
       setKernelError(error);
