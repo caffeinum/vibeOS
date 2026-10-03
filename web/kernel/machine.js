@@ -241,7 +241,7 @@ const IMAGES = {
     // Browser's localhost never answered on the default image.
     tty: "setsid sh -c 'TERM=xterm exec sh </dev/ttyS1 >/dev/ttyS1 2>&1' & wait $!",
     loopback: 'ifconfig lo up',
-    shellLine: 'Then a POSIX shell script for Alpine Linux 3.20 (BusyBox ash, musl). apk works (run apk update first; the network is on): apk add <pkg>. Installed: busybox sh grep sed awk find, curl wget ca-certificates, git nano less — the BusyBox versions, so no GNU-only flags (no find -printf, no ls --time-style, no sed -z; list a directory with ls -1p). No bash, no glibc — a glibc binary will not run without gcompat. The workspace is at /mnt. Print results to stdout.',
+    shellLine: VibeOSTools.SHELL_LINES.alpine,
   },
   busybox: {
     id: 'busybox', label: 'BusyBox', blurb: 'tiny: bundled 7 MB ISO, boots in about 10 s, no package manager',
@@ -265,7 +265,7 @@ const IMAGES = {
     // image bakes its own getty for ttyS1.
     tty: "setsid sh -c 'TERM=xterm exec sh </dev/ttyS1 >/dev/ttyS1 2>&1' & wait $!",
     loopback: 'ifconfig lo up',
-    shellLine: 'Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.',
+    shellLine: VibeOSTools.SHELL_LINES.busybox,
   },
   debian: {
     id: 'debian', label: 'Debian', blurb: 'full: streamed 1 GB disk, apt works, slow — 70 to 90 s to a shell, longer on a busy machine',
@@ -292,7 +292,7 @@ const IMAGES = {
     // autologin root, TERM=xterm), so the line is owned from boot and a
     // boot-time shell from ttyS0 would be a second reader on it.
     tty: null,
-    shellLine: 'Then a bash script for Debian 12. apt-get works (run apt-get update first; the network is on). Common tools are installed: bash coreutils grep sed awk find curl wget git nano vi. python3 is NOT installed by default. The workspace is at /mnt. Print results to stdout.',
+    shellLine: VibeOSTools.SHELL_LINES.debian,
   },
 };
 

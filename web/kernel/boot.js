@@ -372,6 +372,45 @@ window.addEventListener('beforeunload', (e) => {
   e.returnValue = '';   // the browser shows its own "leave page?" prompt; the text is not ours to set
 });
 
+// The boot flag clears when the OS is shown to work, which is the machine
+// answering a command — not the desktop painting, which a kernel/machine.js
+// fork that breaks VM.exec does perfectly. The echo computes its answer in
+// the guest ($((a+b))), so a parser that hands back the typed line does not
+// pass. A page with no machine (no libv86, no WebAssembly) is finished once
+// it has painted. A machine that fails, or an echo that does not come back,
+// is the fork's fault only when a kernel file is stored: on the served
+// kernel it is the network, the CDN or the load, and the next boot running
+// stock would change nothing. No timer: a slow boot is not a broken one, and
+// the loader's pagehide rule covers a person who leaves before the answer.
+const LIVENESS_EXEC_MS = 30000;
+function watchLiveness() {
+  bootPainted();
+  const forked = () => window.__vibeosBoot.source === 'stored';
+  let decided = false;
+  const decide = async (state) => {
+    if (decided) return;
+    if (state === 'unavailable') { decided = true; return bootFinished(); }
+    if (state === 'failed') {
+      decided = true;
+      return forked() ? bootBroken('the machine failed to boot under a stored kernel: ' + VM.detail) : bootFinished();
+    }
+    if (state !== 'ready') return;
+    decided = true;
+    const a = 100 + Math.floor(Math.random() * 900), b = 100 + Math.floor(Math.random() * 900);
+    const want = 'vibeos-alive-' + (a + b);
+    try {
+      const out = await VM.exec(`echo vibeos-alive-$((${a}+${b}))`, LIVENESS_EXEC_MS);
+      if (!String(out).split('\n').some(line => line.trim() === want)) throw new Error('the echo came back as ' + JSON.stringify(String(out).slice(0, 120)));
+      bootFinished();
+    } catch (e) {
+      if (forked()) bootBroken('the machine did not answer a command under a stored kernel: ' + e.message);
+      else { console.warn('the machine did not answer the boot\'s first command:', e.message); bootFinished(); }
+    }
+  };
+  VM.on(state => { decide(state); });
+  decide(VM.state);
+}
+
 (async () => {
   // The loader runs the kernel files in order whatever happened to the one
   // before, so a kernel file that failed to parse shows up here as its
@@ -381,8 +420,9 @@ window.addEventListener('beforeunload', (e) => {
   }
   const recovering = window.__vibeosBoot.recovering;
   // Paint the saved theme before anything else, or a light-mode desktop
-  // flashes dark for the length of the first two awaits.
-  Theme.load({ stock: recovering });
+  // flashes dark for the length of the first two awaits. ?stock=1 wears the
+  // served look too: a theme id may name a block only the fork's os.css has.
+  Theme.load({ stock: recovering || !!window.__vibeosBoot.stock });
   await detectMode();
   await Gen.probe();
   // The workspace before the machine: the machine's snapshot lives in it, so
@@ -466,7 +506,7 @@ window.addEventListener('beforeunload', (e) => {
   // Exposed for e2e and for Start; Browser and Settings need no model.
   window.__vibeosOpenChat = () => focusOrOpen(UI.live().SHELL.chat);
   window.__vibeosOpenAgent = () => UI.live().openAgent();
-  bootFinished();
+  watchLiveness();
   if (Workspace.open && Workspace.private && canPickDirectory) {
     try {
       if (!sessionStorage.getItem('vibeos-persist-hint')) {

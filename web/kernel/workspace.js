@@ -582,9 +582,9 @@ function parseFile(src) {
    -------------------------------------------------------------------- */
 const SystemMirror = {
   DIR: 'system',
-  // The loader and its two libraries are served, never forked (index.html
+  // The loader and its libraries are served, never forked (index.html
   // is the trusted loader; the page cannot write it).
-  SERVED_ONLY: ['index.html', 'oauth.js', 'skills.js'],
+  SERVED_ONLY: ['index.html', 'oauth.js', 'skills.js', 'tools.js'],
   // One exec on the boot's queue, not four: the setup is a script the host
   // drops at a root-level dotfile (hidden from Sync and Files like .vfetch-N)
   // because the serial line editor wraps a command over 80 columns into its

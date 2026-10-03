@@ -29,7 +29,9 @@
 const NativeWebSocket = window.WebSocket;
 if (window.__wsWrapped) throw new Error('kernel/net.js loaded after the relay wrapper: its socket would be claimed as the machine\'s');
 
-const NET_PORTS = [80, 443, 21, 22, 70, 1965, 3000, 8080, 8443];
+// The relay's port list, said once in tools.js (lib/wisp-server.ts hands the
+// same array to wisp-js).
+const NET_PORTS = VibeOSTools.NET_PORTS;
 const NET_HOST_RULES = [/^localhost$/i, /\.local$/i, /\.internal$/i, /^metadata\.google\.internal$/i];
 // Reasons the relay (wisp-js) puts in a CLOSE, in words an app can show.
 // 0x03 is wisp-js's generic NetworkError: the relay sends it for ANY stream

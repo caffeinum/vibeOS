@@ -266,7 +266,7 @@
   /* Dialogs are XP windows: the heading becomes the title bar. */
   [data-theme="winxp"] .key-modal-overlay { background: rgba(0, 0, 0, .25); backdrop-filter: none; }
   [data-theme="winxp"] .key-modal {
-    padding: 0 16px 16px; overflow: hidden;
+    padding: 0 16px 16px; overflow: hidden auto;
     border: 3px solid #0054e3; border-top: 0; border-radius: 8px 8px 0 0;
     box-shadow: 0 0 0 1px #0831d9, var(--shadow-win);
   }
@@ -296,6 +296,80 @@
     transform: skewX(30deg) rotate(45deg);
   }
   [data-theme="winxp"] #analyticsBar a { color: #0000ff; }
+
+  /* Tray balloons wear the same yellow, the tail pointing down at the tray. */
+  [data-theme="winxp"] .balloon {
+    background: #ffffe1; color: #000000; border: 1px solid #000000; border-radius: 8px;
+    box-shadow: 2px 3px 4px rgba(0, 0, 0, .3); font-size: 12px;
+  }
+  [data-theme="winxp"] .balloon::after {
+    content: ''; position: absolute; right: 30px; bottom: -8px; width: 14px; height: 14px;
+    background: #ffffe1; border-right: 1px solid #000000; border-bottom: 1px solid #000000;
+    transform: skewX(30deg) rotate(45deg);
+  }
+  [data-theme="winxp"] .balloon-icon {
+    display: grid; flex: 0 0 auto; width: 16px; height: 16px; border-radius: 50%; place-items: center;
+    color: #ffffff; font: italic 700 12px/1 Georgia, serif;
+    background: radial-gradient(circle at 35% 30%, #8ec5ff, #1f6fe0 60%, #0d3f9e);
+    box-shadow: 0 0 0 1px #ffffff, 0 0 0 2px #2a5bb8;
+  }
+  [data-theme="winxp"] .balloon-title { font-weight: 700; }
+  [data-theme="winxp"] .balloon-text { color: #000000; }
+  [data-theme="winxp"] .balloon-x {
+    width: 15px; height: 15px; padding: 0; display: grid; place-items: center; font-size: 12px;
+    color: #4d4d4d; background: #ffffff; border: 1px solid #aca899; border-radius: 3px;
+  }
+  [data-theme="winxp"] .balloon-x:hover { color: #ffffff; background: #e34a1b; border-color: #a72d0c; }
+
+  /* The boot screen while the machine boots, then "welcome back." — the
+     vibeOS mark where XP put its own, a marquee of three blue blocks. */
+  [data-theme="winxp"] .boot-splash { display: grid; place-items: center; font-family: Tahoma, "Segoe UI", sans-serif; user-select: none; }
+  [data-theme="winxp"] .bs-boot { display: flex; flex-direction: column; align-items: center; gap: 22px; margin-top: -6vh; }
+  [data-theme="winxp"] .bs-mark { display: flex; align-items: center; gap: 16px; margin-bottom: 34px; }
+  [data-theme="winxp"] .bs-logo { width: 68px; height: 68px; border-radius: 14px; object-fit: cover; }
+  [data-theme="winxp"] .bs-word { font: italic 700 52px/1 "Franklin Gothic Medium", "Trebuchet MS", Tahoma, sans-serif; letter-spacing: -1px; }
+  [data-theme="winxp"] .bs-word b { color: #ff7a1a; font-size: .6em; vertical-align: super; margin-left: 2px; }
+  [data-theme="winxp"] .bs-bar {
+    position: relative; width: 164px; height: 18px; overflow: hidden;
+    border: 2px solid #b2b2b2; border-radius: 6px;
+  }
+  [data-theme="winxp"] .bs-bar i {
+    position: absolute; top: 3px; left: -40px; width: 9px; height: 8px; border-radius: 1px;
+    background: linear-gradient(to bottom, #2838c7, #3e6cf2 35%, #8db0ff 50%, #3e6cf2 65%, #2838c7);
+    animation: bs-marquee 2.2s linear infinite;
+  }
+  [data-theme="winxp"] .bs-bar i:nth-child(2) { left: -29px; }
+  [data-theme="winxp"] .bs-bar i:nth-child(3) { left: -18px; }
+  @keyframes bs-marquee { to { transform: translateX(212px); } }
+  [data-theme="winxp"] .bs-status { margin: 0; color: #9a9a9a; font-size: 12px; }
+  [data-theme="winxp"] .bs-hint { position: absolute; left: 16px; right: 16px; bottom: 28px; margin: 0; text-align: center; color: #6f6f6f; font-size: 12px; }
+  [data-theme="winxp"] .bs-welcome { display: none; }
+  [data-theme="winxp"] .boot-splash.welcome .bs-boot,
+  [data-theme="winxp"] .boot-splash.welcome .bs-hint { display: none; }
+  [data-theme="winxp"] .boot-splash.welcome .bs-welcome { display: flex; flex-direction: column; position: absolute; inset: 0; }
+  [data-theme="winxp"] .bs-band {
+    height: 12vh; background: #00309c; border-bottom: 2px solid transparent;
+    border-image: linear-gradient(to right, #00309c, #ffffff 35%, #ffffff 65%, #00309c) 1;
+  }
+  [data-theme="winxp"] .bs-band.bs-low { border-bottom: 0; border-top: 2px solid transparent; border-image: linear-gradient(to right, #00309c, #f99736 40%, #f99736 60%, #00309c) 1; }
+  [data-theme="winxp"] .bs-mid {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 40px; padding: 0 16px;
+    background: radial-gradient(circle at 18% 22%, #8faeee, #5a7edc 42%);
+  }
+  [data-theme="winxp"] .bs-hello { margin: 0; color: #ffffff; font: italic 700 clamp(30px, 6vw, 52px)/1 "Franklin Gothic Medium", "Trebuchet MS", Tahoma, sans-serif; text-shadow: 1px 2px 3px rgba(0, 0, 50, .35); }
+  [data-theme="winxp"] .bs-pic { width: 96px; height: 96px; border-radius: 8px; border: 3px solid #ffffff; background: #ffffff; object-fit: cover; box-shadow: 0 0 0 2px #2c4fae; }
+
+  /* The pairing-link consent as Remote Assistance: the agent's tile, the
+     big friendly line, the question, Accept/Not now at the right. Focus
+     still starts on Not now; only the visual order changes. */
+  [data-theme="winxp"] .link-ra { display: flex; gap: 12px; align-items: center; }
+  [data-theme="winxp"] .link-avatar { width: 48px; height: 48px; flex: 0 0 auto; }
+  [data-theme="winxp"] .link-ra-who { margin: 0; font-size: 11px; color: #000000; }
+  [data-theme="winxp"] .link-ra-big { margin: 3px 0 0; font: 700 22px/1.15 "Trebuchet MS", Tahoma, sans-serif; color: #1c3fa5; }
+  [data-theme="winxp"] .link-modal .key-modal-actions { flex-direction: row; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+  [data-theme="winxp"] .link-modal .key-modal-actions .btn { width: auto; min-width: 75px; padding: 4px 12px; font-size: 12px; }
+  [data-theme="winxp"] #linkAcceptBtn { order: 1; }
+  [data-theme="winxp"] #linkRefuseBtn { order: 2; }
   /* Win95 chrome when the default palette is on (:root, no data-theme). Other
      themes keep mac traffic lights and the floating dock. */
   html:not([data-theme]) #desktop {
@@ -578,6 +652,22 @@
   .key-modal-actions .btn.skip { background: transparent; border-color: transparent; color: var(--dimmer); font-weight: 400; }
   .key-modal-actions .btn.skip:hover { color: var(--dim); border-color: var(--line); }
   .key-modal a { color: var(--accent); }
+  .key-modal { max-height: calc(100dvh - 32px); overflow-y: auto; }
+  .connect-steps { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 12px; counter-reset: step; }
+  .connect-steps > li { position: relative; padding-left: 28px; counter-increment: step; display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+  .connect-steps > li::before {
+    content: counter(step); position: absolute; left: 0; top: 0;
+    width: 20px; height: 20px; border-radius: 50%; text-align: center; line-height: 20px;
+    font-size: 11px; font-weight: 600; background: var(--accent); color: var(--winbg);
+  }
+  .connect-steps p { margin: 0; }
+  .connect-steps code { font-size: 11px; }
+  .copy-line, .prompt-card { display: flex; gap: 8px; align-items: center; }
+  .copy-line code { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-all; padding: 6px 8px; border: var(--border-w) solid var(--line); border-radius: var(--radius-sm); background: var(--panel2); }
+  .connect-prompts { gap: 6px; }
+  .prompt-card { padding: 6px 6px 6px 10px; border: var(--border-w) solid var(--line); border-radius: var(--radius-sm); background: var(--panel2); font-size: 12px; line-height: 1.35; }
+  .prompt-card span { flex: 1; min-width: 0; }
+  .key-modal-actions .copy-line .btn, .key-modal-actions .prompt-card .btn, .connect-steps .btn { width: auto; flex: none; }
   .oauth-panel { margin-top: 4px; gap: 10px; }
   .oauth-code {
     font-size: 28px; font-weight: 600; letter-spacing: .12em; text-align: center;
@@ -611,6 +701,26 @@
     font-size: 12px; font-weight: 600;
   }
   #analyticsBar .analytics-dismiss:hover { border-color: var(--focus); background: var(--hover); }
+
+  /* Tray balloons: a plain toast in the theme's own tokens (winxp dresses
+     it as a balloon above). Positioned by ui/dock.js above the dock. */
+  .balloon {
+    display: flex; gap: 10px; align-items: flex-start; width: min(320px, calc(100vw - 28px));
+    padding: 10px 12px; font-size: 12.5px; line-height: 1.4;
+    background: var(--panel); color: var(--text);
+    border: var(--border-w) solid var(--line2); border-radius: var(--radius-ctl);
+    box-shadow: var(--shadow-win); animation: balloon-in .18s ease-out;
+  }
+  @keyframes balloon-in { from { opacity: 0; transform: translateY(6px); } }
+  .balloon-icon { display: none; }
+  .balloon-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .balloon-title { display: block; font-weight: 600; }
+  .balloon-text { color: var(--dim); margin-top: 2px; }
+  .balloon-x { flex: 0 0 auto; border: 0; background: transparent; padding: 0 2px; font-size: 15px; line-height: 1; color: var(--dim); }
+  /* The pairing-link dialog: its Remote Assistance header is winxp's. */
+  .link-modal { display: flex; flex-direction: column; gap: 10px; }
+  .link-modal h2 { margin-bottom: 0; }
+  .link-ra { display: none; }
 
 /* the Terminal: a vt100 grid over VM.tty; colours are the classic 16 */
 .tty { position: relative; height: 100%; overflow: auto; background: #101012; color: #d6d6d6; padding: 6px 8px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.3; white-space: pre; cursor: text; outline: none; }

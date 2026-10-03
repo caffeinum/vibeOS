@@ -224,6 +224,94 @@ export function focusOrLaunch(app) {
 
 export function raise(el) { Windows.raise(el); }
 
+/* ---------- the solitaire cascade (winxp) ---------------------------------
+
+   create_app's window, celebrated the way Solitaire celebrated a win: card
+   ghosts of the new window leap off its title bar, bounce on the taskbar
+   and leave their trails, for about a second and a half. A canvas over the
+   desktop that takes no pointer events and removes itself; skipped outside
+   winxp and under prefers-reduced-motion. Called after the window is open,
+   so it can never delay it; the caller catches, so it can never fail it. */
+const CASCADE_MS = 1500, CASCADE_FADE_MS = 300, CASCADE_CARDS = 7;
+
+export function cascadeWindow(el) {
+  if (document.documentElement.dataset.theme !== 'winxp') return false;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+  if (!el || !el.isConnected) return false;
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return false;
+  const card = cascadeCard(el, r);
+  const cv = document.createElement('canvas');
+  cv.className = 'cascade';
+  cv.setAttribute('aria-hidden', 'true');
+  cv.style.cssText = `position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:7000;transition:opacity ${CASCADE_FADE_MS}ms`;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(innerWidth * dpr); cv.height = Math.round(innerHeight * dpr);
+  const ctx = cv.getContext('2d');
+  if (!ctx) throw new Error('cascade: no 2d context');
+  ctx.scale(dpr, dpr);
+  document.body.appendChild(cv);
+  const dock = document.getElementById('dock');
+  const dr = dock && dock.getBoundingClientRect();
+  const floor = dr && dr.height ? dr.top : innerHeight;
+  const cards = [];
+  const t0 = performance.now();
+  let launched = 0, last = t0, frame = 0;
+  const remove = () => { cancelAnimationFrame(frame); cv.remove(); };
+  const tick = now => { try { step(now); } catch (e) { console.warn('cascade stopped:', e); remove(); } };
+  const step = now => {
+    const dt = Math.min(3, (now - last) / 16.7);
+    last = now;
+    while (launched < CASCADE_CARDS && now - t0 >= launched * 110) {
+      const left = launched % 2 === 0;
+      cards.push({
+        x: r.left + Math.random() * Math.max(1, r.width - card.width), y: r.top,
+        vx: (left ? -1 : 1) * (2.5 + Math.random() * 4), vy: -(2 + Math.random() * 6),
+      });
+      launched++;
+    }
+    for (const c of cards) {
+      c.vy += 0.55 * dt; c.x += c.vx * dt; c.y += c.vy * dt;
+      if (c.y + card.height > floor) { c.y = floor - card.height; c.vy = -c.vy * 0.72; }
+      if (c.x > -card.width && c.x < innerWidth) ctx.drawImage(card.canvas, c.x, c.y, card.width, card.height);
+    }
+    if (now - t0 < CASCADE_MS) frame = requestAnimationFrame(tick);
+    else { cv.style.opacity = '0'; setTimeout(remove, CASCADE_FADE_MS); }
+  };
+  frame = requestAnimationFrame(tick);
+  // A background tab throttles rAF; the overlay must still go.
+  setTimeout(remove, CASCADE_MS + CASCADE_FADE_MS + 800);
+  return true;
+}
+
+// The ghost: the window as a small Luna card — its title bar, its icon,
+// its title, a beige body with a few lines of content.
+function cascadeCard(el, r) {
+  const w = Math.round(Math.max(96, Math.min(180, r.width * 0.36)));
+  const h = Math.round(Math.max(64, w * (r.height / r.width)));
+  const c = document.createElement('canvas');
+  c.width = w * 2; c.height = h * 2;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('cascade: no 2d context for the card');
+  g.scale(2, 2);
+  const bar = 16;
+  g.fillStyle = '#ece9d8'; g.fillRect(0, 0, w, h);
+  const grad = g.createLinearGradient(0, 0, 0, bar);
+  grad.addColorStop(0, '#0997ff'); grad.addColorStop(0.1, '#0053ee'); grad.addColorStop(0.9, '#0066ff'); grad.addColorStop(1, '#003dd7');
+  g.fillStyle = grad; g.fillRect(0, 0, w, bar);
+  g.strokeStyle = '#0054e3'; g.lineWidth = 2; g.strokeRect(1, 1, w - 2, h - 2);
+  let tx = 5;
+  const icon = el.querySelector('.win-icon');
+  if (icon && icon.complete && icon.naturalWidth) { try { g.drawImage(icon, 4, 2, 12, 12); tx = 19; } catch {} }
+  g.fillStyle = '#ffffff'; g.font = 'bold 9px Tahoma, sans-serif'; g.textBaseline = 'middle';
+  const title = el.querySelector('.title');
+  g.fillText(title ? title.textContent : '', tx, bar / 2 + 1, w - tx - 22);
+  g.fillStyle = '#e34a1b'; g.fillRect(w - 14, 3, 10, 10);
+  g.fillStyle = '#c5c2b2';
+  for (let y = bar + 9, i = 0; y < h - 6; y += 9, i++) g.fillRect(8, y, (w - 16) * (i % 3 === 2 ? 0.55 : 0.9), 3);
+  return { canvas: c, width: w, height: h };
+}
+
 /* ---------- running agent-written code, with no build step ------------
 
    An ES module written at runtime becomes a blob URL and is imported

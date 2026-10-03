@@ -32,7 +32,7 @@
 </div>
 
 <script>
-  // These two must load before the main script, and their location depends on
+  // These must load before the kernel, and their location depends on
   // where this page is served from: vibeos.sh/app (no trailing slash — /app/
   // redirects to it), a local /app/, or the root of the open-source mirror.
   // Absolute /app/ paths only ever worked on the first. Same derivation as BASE.
@@ -41,7 +41,10 @@
     var base = path.endsWith('/') ? path : /\.[a-z0-9]+$/i.test(path) ? path.replace(/[^/]*$/, '') : path + '/';
     // image-bases.js first: machine.js reads window.__vibeosImageBases when
     // it builds IMAGES, so it has to exist before the kernel runs.
-    ['image-bases.js', 'oauth.js', 'skills.js'].forEach(function (f) {
+    // tools.js (the tool surface, the app contract, the shell lines, the
+    // relay's ports) is served-only like oauth.js and skills.js: never in
+    // OS_FILES, so a forked kernel file reads the current one every boot.
+    ['image-bases.js', 'oauth.js', 'skills.js', 'tools.js'].forEach(function (f) {
       document.write('<script src="' + base + f + '"><\/script>');
     });
     // Add to Home Screen on an iPhone reads the apple-touch-icon and the
@@ -64,29 +67,106 @@
    exists. The URL is the only artefact that survives a brick, and it carries
    no hint, which makes a manual escape hatch the wrong primary.
 
-   So the escape is automatic. A flag is set before persisted state is applied
-   and cleared once the desktop is up. Finding it still set on the next load
-   means the previous boot never finished, and this one runs stock. Closing the
-   tab mid-boot trips it too — a false positive costs one plain boot and says
-   so, which is the right way round.
+   So the escape is automatic. Each boot records itself as pending before
+   persisted state is applied, and the record stays until the boot reaches a
+   verdict. Finding a record whose page is gone on the next load means a boot
+   never got there, and this one runs stock.
+
+   The verdict is the machine answering, not the desktop painting: a forked
+   kernel/machine.js that breaks VM.exec paints a perfect desktop. The kernel
+   calls bootFinished() once an `echo` has made the round trip through the
+   guest (or the page has no machine at all), and bootBroken() when it could
+   not and a stored kernel file is running. No timer marks a boot finished —
+   alpine takes 20-60 s and debian 70-90 s, so a timer short enough to matter
+   would pass a broken fork on the default image.
+
+   A boot nobody waited for gets the benefit of the doubt: on pagehide, a boot
+   with no verdict, no uncaught error and a painted desktop (or one still
+   inside its first PAINT_GRACE_MS) clears its own record. Closing the tab
+   while debian boots is not a failure. A page that froze, crashed or threw on
+   the way up leaves its record, and the next load recovers.
+
+   Records are per boot ({ <id>: { at, state } }) and each boot holds a Web
+   Lock named for its id until its verdict: a second tab opened while the
+   first is still booting sees the lock held and is not a recovery. A record
+   with no lock behind it is a boot whose page is gone. A plain timestamp (an
+   older desktop's flag) is such a record.
 
    All of this lives in the served file, which the page has no way to write.
    That is the whole reason it can be trusted.
    -------------------------------------------------------------------- */
 
 const BOOT_FLAG = 'vibeos-boot-pending';
+const BOOT_LOCK = 'vibeos-boot:';
+const PAINT_GRACE_MS = 10000;
+const bootId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const bootT0 = Date.now();
+const bootLife = { verdict: '', painted: false, error: '', release: null };
 
-function bootFailedLastTime() {
+function readBootFlags() {
+  let raw = null;
+  try { raw = localStorage.getItem(BOOT_FLAG); } catch {}
+  if (!raw) return {};
+  try { const v = JSON.parse(raw); if (v && typeof v === 'object' && !Array.isArray(v)) return v; } catch {}
+  return { legacy: { at: Number(raw) || 0, state: 'legacy' } };
+}
+
+function writeBootFlags(flags) {
   try {
-    if (localStorage.getItem(BOOT_FLAG)) { localStorage.removeItem(BOOT_FLAG); return true; }
-    localStorage.setItem(BOOT_FLAG, String(Date.now()));
+    if (Object.keys(flags).length) localStorage.setItem(BOOT_FLAG, JSON.stringify(flags));
+    else localStorage.removeItem(BOOT_FLAG);
   } catch {}
-  return false;
 }
 
-function bootFinished() {
-  try { localStorage.removeItem(BOOT_FLAG); } catch {}
+function setOwnBootFlag(state) {
+  const flags = readBootFlags();
+  if (state) flags[bootId] = { at: bootT0, state };
+  else delete flags[bootId];
+  writeBootFlags(flags);
 }
+
+// The lock is taken before the record is written, so no other tab can find
+// the record without it. Without Web Locks every record left behind counts,
+// which is the old single-flag behaviour.
+async function bootFailedLastTime() {
+  if (navigator.locks) {
+    try {
+      await new Promise((granted, refused) => navigator.locks.request(BOOT_LOCK + bootId, () => {
+        granted();
+        return new Promise(r => { bootLife.release = r; });
+      }).catch(refused));
+    } catch (e) { console.warn('boot lock not taken:', e.message); }
+  }
+  let held = new Set();
+  try { if (navigator.locks) held = new Set((await navigator.locks.query()).held.map(l => l.name)); } catch {}
+  const flags = readBootFlags();
+  const dead = Object.keys(flags).filter(id => !held.has(BOOT_LOCK + id));
+  for (const id of dead) delete flags[id];
+  if (!bootLife.verdict) flags[bootId] = { at: bootT0, state: 'pending' };
+  writeBootFlags(flags);
+  return dead.length > 0;
+}
+
+function settleBoot(verdict, detail) {
+  if (bootLife.verdict) return;
+  bootLife.verdict = verdict;
+  if (verdict === 'ok') setOwnBootFlag('');
+  else { setOwnBootFlag('failed'); console.error('this boot did not prove the OS works, so the next one runs stock:', detail); }
+  if (bootLife.release) bootLife.release();
+}
+
+// The kernel's three reports. bootPainted: the desktop is up (the kernel and
+// the ui ran). bootFinished: the OS works. bootBroken: it does not, and what
+// is stored is to blame — the next boot runs stock.
+function bootPainted() { bootLife.painted = true; }
+function bootFinished() { settleBoot('ok'); }
+function bootBroken(detail) { settleBoot('failed', detail); }
+
+window.addEventListener('pagehide', () => {
+  // bfcache: a failed record must still be there if this page comes back.
+  if (bootLife.verdict) { if (bootLife.verdict === 'failed') setOwnBootFlag('failed'); return; }
+  if (!bootLife.error && (bootLife.painted || Date.now() - bootT0 < PAINT_GRACE_MS)) setOwnBootFlag('');
+});
 
 // Styled with literal colours on purpose: the thing it reports on may be the
 // theme, so it must not ask the theme how to look. One bar, many rows: the
@@ -136,12 +216,14 @@ function recoveryBar(message, detail, action) {
 // URL as its filename; kernelBlobs maps it back so the bar names the file.
 const kernelBlobs = {};
 window.addEventListener('error', e => {
+  if (!bootLife.verdict && !bootLife.error) bootLife.error = e.message || 'error';
   const f = kernelBlobs[e.filename];
   if (f) recoveryBar('Your edited system/' + f + ' failed to load.', e.message + ' — reloading will boot the stock one.');
   else recoveryBar('vibeOS hit an error.', e.message);
 });
 window.addEventListener('unhandledrejection', e => {
   const r = e.reason;
+  if (!bootLife.verdict && !bootLife.error) bootLife.error = (r && r.message) || String(r);
   recoveryBar('vibeOS hit an error.', (r && r.message) || String(r));
 });
 
@@ -175,8 +257,13 @@ const BASE = (() => {
 })();
 
 window.__vibeosBoot = {
-  recovering: bootFailedLastTime(),
+  recovering: false,   // decided first thing in the loader below: it asks the Web Locks which boots are still alive
+  // ?safe=1: nothing persisted — the served OS, the default theme, and the
+  // machine booted fresh with its snapshot left alone. ?stock=1: the served
+  // OS and the default theme only — the snapshot restores and the workspace
+  // is yours, so "is it my edits or my machine" is two URLs apart.
   safe: (() => { try { return new URLSearchParams(location.search).has('safe'); } catch { return false; } })(),
+  stock: (() => { try { return new URLSearchParams(location.search).has('stock'); } catch { return false; } })(),
   source: 'served', storedFailed: false, storedError: '',
 };
 
@@ -553,10 +640,11 @@ window.__vibeosFork = {
 
 (async () => {
   const b = window.__vibeosBoot;
+  b.recovering = await bootFailedLastTime();
   // On a recovery boot nothing stored runs, but a legacy os.js alone never
   // ran either: a workspace holding only that must not be told its edited
   // OS failed, and its os.js is set aside on this boot, not the one after.
-  const probe = b.safe ? null : await storedOS();
+  const probe = b.safe || b.stock ? null : await storedOS();
   const stored = b.recovering ? null : probe;
   if (b.recovering && probe && OS_FILES.some(f => probe.files[f] !== null)) b.storedFailed = true;
   if (probe && probe.legacy) await reportLegacy(probe);

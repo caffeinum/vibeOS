@@ -685,10 +685,19 @@ export function CapsApp(body, win) {
       model and subscription, instead of a pasted key. Pair, then add the command to your agent.
     </p>
     <p class="small" id="mcpState" style="margin:0 0 8px"></p>
-    <div class="row" id="mcpCmd" hidden style="gap:6px;align-items:center;margin:0 0 8px;flex-wrap:wrap">
-      <code id="mcpCommand" style="font-size:11px;word-break:break-all;user-select:all"></code>
-      <button class="btn sm" id="mcpCopy">copy</button>
-    </div>
+    <ol class="connect-steps" id="mcpCmd" hidden style="margin:0 0 10px">
+      <li><b>Install vibeOS in your agent</b>
+        <p class="tiny dimmer">Paste this into your terminal:</p>
+        <div class="copy-line"><code class="mono" id="mcpCommand" style="user-select:all"></code><button class="btn sm" id="mcpCopy">copy</button></div>
+      </li>
+      <li><b>Open your agent in a folder</b>
+        <p class="tiny dimmer">In your project folder (or your home folder) run <code>claude</code> — Cursor and Codex work too.</p>
+        <div class="copy-line"><code class="mono" id="mcpRun"></code><button class="btn sm" id="mcpRunCopy">copy</button></div>
+      </li>
+      <li><b>Ask it something</b>
+        <div class="col connect-prompts" id="mcpPrompts"></div>
+      </li>
+    </ol>
     <p class="note" id="mcpTrust" style="margin:0 0 10px"></p>
     <div class="row" style="gap:6px">
       <button class="btn p sm" id="mcpPair">Pair an agent</button>
@@ -753,6 +762,24 @@ function mcpPane(body, win) {
     try { await navigator.clipboard.writeText(RemoteBridge.command()); copy.textContent = 'copied'; track('mcp_command_copied', { ok: 'yes' }); }
     catch (e) { copy.textContent = 'select the line and copy it (' + e.message + ')'; track('mcp_command_copied', { ok: 'no' }); }
   };
+  // Steps 2 and 3 are the kernel's (CONNECT_RUN_LINE, CONNECT_PROMPTS), so a
+  // forked ui offers the same first prompts as the key modal.
+  const copyText = async (text, btn) => {
+    try { await navigator.clipboard.writeText(text); btn.textContent = 'copied'; return true; }
+    catch (e) { btn.textContent = 'select the text and copy it (' + e.message + ')'; return false; }
+  };
+  body.querySelector('#mcpRun').textContent = CONNECT_RUN_LINE;
+  const runCopy = body.querySelector('#mcpRunCopy');
+  runCopy.onclick = () => copyText(CONNECT_RUN_LINE, runCopy);
+  for (const { which, text } of CONNECT_PROMPTS) {
+    const card = document.createElement('div'), line = document.createElement('span'), btn = document.createElement('button');
+    card.className = 'prompt-card'; card.dataset.which = which;
+    line.textContent = text;
+    btn.className = 'btn sm'; btn.textContent = 'copy';
+    btn.onclick = async () => track('mcp_prompt_copied', { which, ok: await copyText(text, btn) ? 'yes' : 'no' });
+    card.append(line, btn);
+    body.querySelector('#mcpPrompts').append(card);
+  }
   Windows.onDispose(win, RemoteBridge.on(paint));
   paint();
   // The static mirror has no /api: say so up front rather than after a

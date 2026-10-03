@@ -158,9 +158,20 @@ const Gen = {
             <div class="col" id="keyModalStep1">
               <button type="button" class="btn p" id="keyConnectBtn">Connect your agent</button>
               <div class="col" id="keyConnectPanel" hidden>
-                <p class="tiny dimmer" style="margin:0">Claude Code, Cursor or Codex drives this desktop through MCP. Paste this into your terminal, then talk to your agent in its own window:</p>
-                <code class="mono" id="keyConnectCmd" style="display:block;white-space:pre-wrap;word-break:break-all;padding:8px;border:1px solid var(--line);border-radius:var(--radius-sm)"></code>
-                <div class="row" style="gap:6px"><button type="button" class="btn sm" id="keyConnectCopy">Copy</button><span class="tiny dimmer" id="keyConnectState"></span></div>
+                <ol class="connect-steps">
+                  <li><b>Install vibeOS in your agent</b>
+                    <p class="tiny dimmer">Paste this into your terminal:</p>
+                    <div class="copy-line"><code class="mono" id="keyConnectCmd"></code><button type="button" class="btn sm" id="keyConnectCopy">Copy</button></div>
+                  </li>
+                  <li><b>Open your agent in a folder</b>
+                    <p class="tiny dimmer">In your project folder (or your home folder) run <code>claude</code> — Cursor and Codex work too.</p>
+                    <div class="copy-line"><code class="mono" id="keyConnectRun"></code><button type="button" class="btn sm" id="keyConnectRunCopy">Copy</button></div>
+                  </li>
+                  <li><b>Ask it something</b>
+                    <div class="col connect-prompts" id="keyConnectPrompts"></div>
+                  </li>
+                </ol>
+                <span class="tiny dimmer" id="keyConnectState"></span>
               </div>
               <p class="note" id="keyConnectError" hidden style="margin:0;color:var(--no)"></p>
               <button type="button" class="btn" id="keyLoginBtn">Login with Codex</button>
@@ -238,12 +249,21 @@ const Gen = {
         };
         offBridge = RemoteBridge.on(paint); paint(RemoteBridge.state, RemoteBridge.detail);
       };
-      overlay.querySelector('#keyConnectCopy').onclick = () => {
-        const text = overlay.querySelector('#keyConnectCmd').textContent;
-        navigator.clipboard.writeText(text).then(
-          () => { overlay.querySelector('#keyConnectCopy').textContent = 'Copied ✓'; },
-          () => { overlay.querySelector('#keyConnectState').textContent = 'the browser refused the clipboard — select the line and copy it'; });
-      };
+      const copy = (text, btn) => navigator.clipboard.writeText(text).then(
+        () => { btn.textContent = 'Copied ✓'; return true; },
+        () => { overlay.querySelector('#keyConnectState').textContent = 'the browser refused the clipboard — select the text and copy it'; return false; });
+      overlay.querySelector('#keyConnectCopy').onclick = e => copy(overlay.querySelector('#keyConnectCmd').textContent, e.currentTarget);
+      overlay.querySelector('#keyConnectRun').textContent = CONNECT_RUN_LINE;
+      overlay.querySelector('#keyConnectRunCopy').onclick = e => copy(CONNECT_RUN_LINE, e.currentTarget);
+      for (const { which, text } of CONNECT_PROMPTS) {
+        const card = document.createElement('div'), line = document.createElement('span'), btn = document.createElement('button');
+        card.className = 'prompt-card'; card.dataset.which = which;
+        line.textContent = text;
+        btn.type = 'button'; btn.className = 'btn sm'; btn.textContent = 'Copy';
+        btn.onclick = async () => track('mcp_prompt_copied', { which, ok: await copy(text, btn) ? 'yes' : 'no' });
+        card.append(line, btn);
+        overlay.querySelector('#keyConnectPrompts').append(card);
+      }
       overlay.querySelector('#keyPasteBtn').onclick = () => {
         overlay.querySelector('#keyPasteForm').hidden = false;
         overlay.querySelector('#keyInput').focus();
@@ -680,65 +700,13 @@ function forImage(prompt) {
   return prompt.replace(IMAGES.busybox.shellLine, line);
 }
 
-// The contract a window app is held to: the three headers, what api offers,
-// the layout rules, the size hint. The same text as lib/system-prompt.ts
-// APP_CONTRACT (pinned byte-equal by tests/agent-tools.test.ts); the paste-key
-// prompt embeds it and create_app's description carries it, so an agent on
-// vibeos-mcp — which never sees a prompt of ours — reads the same rules.
-const APP_CONTRACT = `// @title <Short Name>
-// @target browser
-// @requires <space-separated caps, or none>
-Pass icon with create_app (required): inline <svg>… markup, a data:image/svg+xml or data:image/png URL, or an http(s) URL to a PNG/SVG the desktop downloads. It is shown in the dock, the window title bar, and the chat card. Simple apps: a 32×32 SVG with one shape or letter matching the app.
-Caps: files (read the workspace), shell (run commands in the VM), tty (a terminal on the VM: stdin, Ctrl-C, full-screen programs), net (raw TCP through the relay), ai (the connected model, api.ai.generate). Use none unless needed.
-Optional fourth header, where and how big the window opens: // @geometry <top-left|top-right|bottom-left|bottom-right> [<w>x<h>] or // @geometry <x>,<y>,<w>,<h> or // @geometry <w>x<h> alone (px; without it the window cascades at 430x320; a window is at least 300x180, is kept on screen under the menubar and clear of the dock, and is no bigger than the desktop). A helper, mascot or widget "in the corner of the screen" is a small window with a corner geometry, e.g. // @geometry bottom-right 300x220 — never position:fixed or a transform to escape the window.
-Then: export default function (mount, api) { ... }
-mount is a fixed-size pane (~430x320px, resizable). api.list() -> [{name,dir}] (needs files). api.onResize((w,h) => ...) when layout depends on size. api.mountSize() -> {width,height}.
-api.shell(cmd, timeoutMs = 600000) -> Promise<string> (needs shell): one-shot commands. Waits up to ten minutes by default, because what an app runs is what a person typed into it — an apk add, a git clone. stdout and stderr together, ANSI stripped; rejects on timeout or while the machine is not running. It is ONE shell session shared by every app that uses it and the agent, so a cd leaks into everyone else's commands: never cd, use absolute paths. No stdin and no tty: vi, top, less, an interactive zsh hang until interrupted — those want api.tty(). List a directory with ls -1p. Pass a shorter timeoutMs for a quick status line you would rather see fail than wait on; a long build can go to the background, cmd > /mnt/job.log 2>&1 &, followed with api.shell("tail -n 20 /mnt/job.log").
-api.tty() -> { write(bytesOrString), onData(fn) -> off, resize(cols, rows), close() } (needs tty): a terminal is api.tty(): bytes both ways, ctrl-c, top, nano, passwords work; api.shell is for one-shot commands. It is its own shell on the machine's second serial line, not the one api.shell and the agent share, so a cd there stays there. The line echoes what you write: paint what onData delivers (\\r, \\n, \\b and ANSI escapes; answer \\x1b[6n with \\x1b[row;colR or vi and ash wait on it) instead of echoing keys yourself; send Enter as \\r, Ctrl-C as \\x03, arrows as \\x1b[A..D, and resize(cols, rows) when the pane changes. One tty per machine: while the built-in Terminal or another app holds it, api.tty() throws naming the holder — show that message; closing that window releases it.
-api.net.connect(host, port) -> { write(bytesOrString), onData(fn) -> off, onClose(fn) -> off, close(), state, reason } (needs net): opens raw TCP through the relay for a TCP client — a redis, irc or smtp toy; http stays on the proxy and the Browser, not this. Plain TCP only (no tls option; https means fetch or curl in the machine). localhost, private and loopback addresses and ports outside the relay's list (80, 443, 21, 22, 70, 1965, 3000, 8080, 8443) throw naming the rule; the relay closes a stream it refuses and onClose says why. The relay is a serverless function that ends about every 13 minutes: every open stream then closes with "network error: the relay reconnected and the connection was lost", so a long-lived client (irc, redis) must reconnect from onClose. A write after close throws. Closing the window closes the connection.
-api.ai.generate({ prompt, images?, json?, system?, maxTokens? }) -> Promise<string | object> (needs ai): the model connected to this desktop — the tab's own, or the connected agent's (MCP sampling), in which case a call may take up to two minutes while a person approves it, so show your own "asking…" state — one plain completion with no tools. Anything that needs judgment — identify what is in a picture, estimate, summarise, classify, write — is a call to it, never a keyword table, a lookup of your own, or a "cannot do this in the browser" note. images is an array of data urls (canvas.toDataURL('image/jpeg') of a video frame, a file read as a data url); json: true asks for one JSON object and returns it parsed (name the keys in prompt); system replaces the one-line default. The reply is text the app shows with textContent; it rejects with the provider's own error — show that too. A window that needs it declares // @requires ai and shows a connect prompt while no model is present, then runs when one is.
-
-Layout rules (required):
-- Root element: width:100%; height:100%; box-sizing:border-box; display:flex; flex-direction:column; overflow:hidden. No document scroll, no min-height larger than the window, no fat browser scrollbars on mount.
-- Fit the actual mount, not a desktop-sized page. Modest type (13-15px body, not huge serif headlines) and tight padding. Empty states must fit without overflowing.
-- Do not imitate getslash.co / Slash-style UIs with oversized serif titles and generous vertical padding — those overflow a ~430×320px window immediately.
-- If a region scrolls, use an inner child with overflow:auto and scrollbar-width:thin (or class app-scroll) — never scroll mount itself.
-- Respond to resize: use flex/%/min-height:0 throughout, or api.onResize to reflow.
-
-Plain JavaScript, no JSX, no external URLs. ONE import resolves and nothing else does: import { html, render } from 'lit' (lit-html 3, vendored with the desktop — no build step, no network). Its interpolations escape by default, so render(html\`<p>\${name}</p>\`, mount) is safe where innerHTML is not: reach for it instead of building markup by hand, and re-render the whole view on change rather than patching nodes. Plain DOM is fine for something small. Any other import, or any URL, fails at runtime. Aim for about 200 lines and stay under 1000. It must work.`;
-
-const CREATE_APP_LEAD = 'Create a vibeOS desktop window app (// @target browser, the contract below) or install a VM script (// @title, // @target vm, // @file <name.sh>, then a shell script for the Linux the prompt names). Pass title, complete source, and icon (window apps: inline SVG or PNG URL). The reply names the dock entry and the file. A window app is held to this contract:';
-const CREATE_APP_DESCRIPTION = CREATE_APP_LEAD + '\n' + APP_CONTRACT;
-// Word for word lib/agent-tools.ts; the test pins them.
-const SEARCH_FILE_DESCRIPTION = 'Find lines matching a regex. path is one file, a directory (system/, system/ui/) or a glob (system/**/*.js, apps/*.js): a directory or glob searches every text file under it and each hit carries file and line; 60 hits at most, binaries and files over 1 MB skipped and named; system/chat.json and the snapshots are never searched or listed. Use before edit_file on a system/ file. A path that matches nothing is refused naming what exists there.';
-const LIST_FILES_DESCRIPTION = 'List the workspace. path is \'\' for the top (apps/, data/, system/) or a directory: apps/, data/, system/, system/kernel, system/ui. Entries carry kind (file|dir), size and modified; under system/ every file the OS loads is listed whether or not a copy is stored, with source (stored: your fork boots next; served: stock) and booted (which one this page runs — stored but booted served means reload_os is pending). A path that does not exist is refused naming what its parent holds.';
-// What a remote agent is told on every pairing, as the MCP server's
-// instructions: not the prompt (aleks: basic instructions), the map. The app
-// contract rides behind it so the two never drift.
-const MCP_INSTRUCTIONS_LEAD = `You are driving vibeOS through vibeos-mcp: a small desktop OS running in one browser tab, with a Linux VM (v86, i686) inside it. Every tool here runs in that tab; you see nothing else of it, so start with read_desktop (windows, dock, machine state; { window } for a window's text, { screen: 'png' } for the VM's VGA screen — there is no screenshot of the desktop itself).
-
-The OS is files in the person's workspace, and you have root on them. system/kernel/*.js never hot-reloads (machine.js the VM, workspace.js the folder and sync, agent.js the model and these tools, boot.js the window registry and the boot); system/ui/*.js is what people see (windows.js, dock.js, chat.js, browser.js, settings.js) and reloads live; system/os.css is every style, and a theme is a [data-theme="id"] block there with a /* @theme id: Title — summary */ header on the line before. A change to the desktop is an edit to one of those files: search_file, read_file around the place, edit_file with an exact unique anchor, then reload_ui for a ui file (live, the turn continues) or reload_os for a kernel file or os.css (the page reloads; call it once, last — the pairing survives it, call again a few seconds later if a call fails right after). Your first edit forks the served file into the workspace; a fork that fails to load is skipped on the next boot and the desktop says so, and write_file('') retires it.
-
-The machine: vm_exec runs a shell line on ttyS0 and returns its output (timeout_s up to 600); /mnt is the workspace's data/ and apps/ flat, /mnt/system a read-only copy of the OS source for cat, grep and diff. Apps are files under apps/: a .js with a // @title header is a dock entry, and create_app writes one and opens it. Generated apps must use the desktop's CSS custom properties (var(--text), var(--panel), var(--accent) …), never hardcoded colours.
-
-Results are JSON. A reply over 128 KB is refused naming the size — narrow the request. Everything you send and read goes through a relay in plaintext, and the token you hold is root on this desktop.
-
-The person can type in vibeOS chat while you work: those lines are not pushed to you. When a tool result includes mailbox_hint, call get_mailbox and answer with reply_mailbox if you want a bubble in chat. Storage: data/mcp-mailbox-in.jsonl (human lines) and data/mcp-mailbox-state.json (read cursor).`;
-
-const READ_DESKTOP_DESCRIPTION = 'What the desktop looks like, as text: every open window (app id, title, minimized, z-order — first is on top — geometry, whether it is the built-in chat/Browser/Settings or a generated app and its file), the dock entries, the machine pill (VM.state, image, net, tty) and the theme. Pass { window: <title or app id> } for that window\'s body as trimmed text, one line per block (scripts and styles dropped, 8 KB cap); add { dom: true } for its sanitised outerHTML instead (no script, style, link or on* attributes, no javascript: urls, media and form urls replaced by data:, 16 KB cap); either way the value of a password or hidden input is withheld. { screen: \'png\' } is the machine\'s VGA screen as image {mimeType, data} (a jpeg no wider than 1024, under the relay\'s 128 KB frame) with the text console\'s rows as text when it is in text mode. A bitmap of the desktop itself is not available (no html2canvas is vendored): the text and DOM views are the substitute. Everything here is read; nothing runs.';
-
-const PASTE_KEY_SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
-
-TARGET 1, a desktop window (default). Header exactly:
-${APP_CONTRACT}
-
-TARGET 2, a program inside the VM. Use when the request is about files, text processing or system tasks. Header exactly:
-// @title <Short Name>
-// @target vm
-// @file <name.sh>
-Then a POSIX shell script for BusyBox ash. No bash arrays, no GNU-only flags, no package manager, no network. Available: sh ls cat grep sed awk wc sort head tail cut tr find echo test. The workspace is at /mnt. Print results to stdout.
-
-A remote agent (someone's own Claude Code, Cursor or Codex, through vibeos-mcp) may be connected to this desktop and edits or commands can come from it in parallel: a stale anchor in edit_file is refused, so re-read before you edit rather than assume the file is as you left it.`;
+// The tool surface and the operating manual — the app contract, the tool
+// schemas and their descriptions, the MCP instructions, the one-shot prompt —
+// are public/app/tools.js, served beside this file and never forked: the
+// Codex route and vibeos-mcp read the same objects, so there is no second
+// copy to drift. A fork of this file reads them from there on every boot.
+if (typeof VibeOSTools === 'undefined') throw new Error('tools.js did not load: the vibeOS loader serves it beside the kernel, and kernel/agent.js cannot describe its tools without it');
+const { PASTE_KEY_SYSTEM_PROMPT, TOOL_SCHEMAS, MCP_TOOL_SCHEMAS, MCP_INSTRUCTIONS } = VibeOSTools;
 
 
 const PROXY = '/api/proxy?url=';
@@ -970,7 +938,8 @@ const WebTools = {
    archive) can create an app or restyle the desktop without a click.
    -------------------------------------------------------------------- */
 
-const GUEST_TOOLS = new Set(['create_app', 'vm_exec', 'list_apps', 'list_files', 'read_desktop', 'read_file', 'search_file', 'edit_file', 'write_file', 'reload_ui', 'reload_os', 'web_fetch', 'web_search', 'get_mailbox', 'reply_mailbox']);
+// Exactly the agent's tools (tools.js), plus the js verb bridgeCall handles itself.
+const GUEST_TOOLS = new Set(VibeOSTools.TOOL_NAMES);
 
 /* ---------- MCP mailbox (data/mcp-mailbox-in.jsonl) ----------------------
 
@@ -1657,47 +1626,6 @@ function toolResultText(output) {
   return text.slice(0, TOOL_RESULT_MAX) + `\n…[truncated: ${text.length - TOOL_RESULT_MAX} more characters; narrow the request (from/to, a pattern, a path)]`;
 }
 
-const TOOL_SCHEMAS = [
-  { name: 'create_app', description: CREATE_APP_DESCRIPTION,
-    parameters: { type: 'object', properties: {
-      title: { type: 'string' },
-      source: { type: 'string' },
-      icon: { type: 'string', description: 'App icon: inline <svg>… markup, a data:image/svg+xml or data:image/png URL, or an http(s) URL to a PNG/SVG (downloaded client-side). Required for window apps.' },
-    }, required: ['title', 'source', 'icon'] } },
-  { name: 'vm_exec', description: 'Run a shell command in the vibeOS Linux VM and return its output (stdout and stderr, ANSI stripped). Waits 20 s by default; pass timeout_s (up to 600) for an install or a build, or background it (cmd > /mnt/job.log 2>&1 &) and tail the log.',
-    parameters: { type: 'object', properties: { command: { type: 'string' }, timeout_s: { type: 'integer', minimum: 1, maximum: 600, description: 'Seconds to wait before the command is interrupted with Ctrl-C and the call fails. Default 20.' } }, required: ['command'] } },
-  { name: 'list_apps', description: 'List apps already saved in the vibeOS workspace. .js files without a // @title header are not apps and come back under unlisted with the reason; add the header with edit_file if the user wants one in the dock. The reply also carries the /mnt mapping: the mount is flat and subdirectories under /mnt are not mirrored, and unmirrored names the root entries the mirror skipped (directories, symlinks, special files).',
-    parameters: { type: 'object', properties: {}, required: [] } },
-  { name: 'read_desktop', description: READ_DESKTOP_DESCRIPTION,
-    parameters: { type: 'object', properties: { window: { type: 'string', description: 'A window\'s title or app id: its body as text, one line per block' }, dom: { type: 'boolean', description: 'With window: the sanitised outerHTML instead of text' }, screen: { type: 'string', enum: ['image', 'png'], description: 'The machine\'s VGA screen as an image, with the text console\'s rows' } }, required: [] } },
-  { name: 'list_files', description: LIST_FILES_DESCRIPTION,
-    parameters: { type: 'object', properties: { path: { type: 'string', description: "'' for the top, or a directory: apps/, data/, system/, system/kernel, system/ui" } }, required: [] } },
-  { name: 'read_file', description: 'Read a file from the workspace. The operating system is system/kernel/*.js (the machine, workspace, agent loop; reload_os) and system/ui/*.js (windows, dock, chat, Browser, Settings; reload_ui), styled by system/os.css. Optional line range for big files.',
-    parameters: { type: 'object', properties: { path: { type: 'string' }, from: { type: 'integer' }, to: { type: 'integer' } }, required: ['path'] } },
-  { name: 'search_file', description: SEARCH_FILE_DESCRIPTION,
-    parameters: { type: 'object', properties: { path: { type: 'string' }, pattern: { type: 'string' } }, required: ['path', 'pattern'] } },
-  { name: 'edit_file', description: 'Replace one exact occurrence of old with new in a workspace file. The first edit of a system/ file forks it from the served copy; from then on yours boots. Call reload_ui to apply a system/ui edit live, reload_os for system/kernel or system/os.css.',
-    parameters: { type: 'object', properties: { path: { type: 'string' }, old: { type: 'string' }, new: { type: 'string' } }, required: ['path', 'old', 'new'] } },
-  { name: 'write_file', description: 'Write a whole workspace file (apps/*.js, data/*, system/kernel/*.js, system/ui/*.js, system/os.css). Prefer edit_file for changes.',
-    parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
-  { name: 'reload_ui', description: 'Re-import the ui — system/ui/*.js — under the running kernel, live: the machine, the workspace, the chat log and this turn all stay, open windows are repainted by the new ui, and the turn goes on, so say what changed after it. A ui that does not parse, fails to import or throws while painting is refused with the error and the previous ui keeps running. Refuses when no system/ui file has been edited.',
-    parameters: { type: 'object', properties: {}, required: [] } },
-  { name: 'reload_os', description: 'Reload the page so edits to system/kernel/*.js or system/os.css take effect (a system/ui edit needs only reload_ui). The reload ends this turn — nothing you say after it reaches the user — so make every edit first, call it once, last, and pass a note: it is shown in the chat after boot. Refuses when nothing has been edited. If the edited OS fails to boot, the stock one runs next time and says so — you cannot lock yourself out. Through vibeos-mcp the pairing survives the reload: the tab resumes it after boot and the package reconnects on its own; a call made while the page is down fails with peer not connected — wait a few seconds and call again.',
-    parameters: { type: 'object', properties: { note: { type: 'string', description: 'One line shown in the chat after the reboot, e.g. what changed' } }, required: [] } },
-  { name: 'web_fetch', description: 'Read a web page as text.',
-    parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
-  { name: 'web_search', description: 'Search the web and get back result titles and URLs.',
-    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
-  { name: 'get_mailbox', description: 'Read messages the person typed in vibeOS chat while you drive the desktop through vibeos-mcp. Returns new lines since the last read (or since after id when consume is false). Human text is in messages[].text; optional images are {mime, base64}. Call this when a tool result includes mailbox_hint.',
-    parameters: { type: 'object', properties: {
-      after: { type: 'integer', description: 'Only messages with id greater than this (optional; default is unread since last get_mailbox)' },
-      limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Max messages to return (default 50)' },
-      consume: { type: 'boolean', description: 'When true (default), marks returned messages read so mailbox_hint clears' },
-    }, required: [] } },
-  { name: 'reply_mailbox', description: 'Post a reply into the vibeOS chat window as an assistant bubble (visible to the person at the desktop). Use after get_mailbox when you want to answer in-chat.',
-    parameters: { type: 'object', properties: { text: { type: 'string', description: 'Plain-text reply shown in chat' } }, required: ['text'] } },
-];
-
 // reload_os kills the page mid-turn, so whatever the model says after it never
 // arrives. The note it passed is parked here and the next boot's chat reads it.
 const RELOAD_NOTE = 'vibeos-reload-note';
@@ -2136,7 +2064,7 @@ const RemoteBridge = {
     return this.override() ? 'override' : this.fellBack ? 'origin' : 'aws';
   },
   toolsFrame() {
-    return { tools: TOOL_SCHEMAS, instructions: MCP_INSTRUCTIONS_LEAD + '\n\n' + APP_CONTRACT };
+    return { tools: MCP_TOOL_SCHEMAS, instructions: MCP_INSTRUCTIONS };
   },
 
   // What the container (image-bases.js) declared, if anything. A string only;
@@ -2650,6 +2578,17 @@ const RemoteBridge = {
 };
 window.addEventListener('pagehide', () => RemoteBridge.unload());
 
+/* A window app was created and its window opened: the ui's tray balloon
+   and the winxp cascade listen here. Decoration only, so a listener that
+   throws is a console warning and never reaches create_app's result. */
+const AppEvents = {
+  listeners: new Set(),
+  on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
+  created(info) {
+    this.listeners.forEach(fn => { try { fn(info); } catch (e) { console.warn('AppEvents listener failed:', e); } });
+  },
+};
+
 /* The pairing-link consent gate.
 
    Every string that can come from the link is textContent — the relay host
@@ -2665,11 +2604,17 @@ function linkModal(link) {
   const overlay = document.createElement('div');
   overlay.className = 'key-modal-overlay';
   overlay.innerHTML = `
-    <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="linkModalTitle">
+    <div class="key-modal link-modal" role="dialog" aria-modal="true" aria-labelledby="linkModalTitle">
       <h2 id="linkModalTitle">You are handing this agent your desktop.</h2>
+      <div class="link-ra">
+        <svg class="link-avatar" viewBox="0 0 48 48" aria-hidden="true"><rect x="1" y="1" width="46" height="46" rx="6" fill="#dfe9fb" stroke="#7f9db9"/><rect x="11" y="13" width="26" height="20" rx="5" fill="#3f7fe6"/><circle cx="19" cy="23" r="3" fill="#fff"/><circle cx="29" cy="23" r="3" fill="#fff"/><path d="M24 13V7" stroke="#3f7fe6" stroke-width="2"/><circle cx="24" cy="6" r="2.5" fill="#ff9c00"/><path d="M15 41c2-5 5-7 9-7s7 2 9 7" fill="#3f7fe6"/></svg>
+        <div><p class="link-ra-who">An agent would like to share control of your computer.</p>
+        <p class="link-ra-big">It will take it from here.</p></div>
+      </div>
       <p class="small" style="margin:0">You opened a pairing link. Accepting gives the agent that made it <strong>root on this desktop for seven days</strong>: it can read and edit vibeOS's own source, run commands in its Linux machine, and read the files in your workspace.</p>
       <p class="tiny dimmer" style="margin:0">Accept only if you just started an agent yourself and expected to be sent here. You can end it any time in Settings &rsaquo; Capabilities.</p>
       <p class="tiny dimmer" id="linkRelay" hidden style="margin:0"></p>
+      <p class="small link-question" style="margin:0"><strong>Do you want to let this agent take over your desktop?</strong></p>
       <div class="key-modal-actions col">
         <button type="button" class="btn" id="linkRefuseBtn">Not now</button>
         <button type="button" class="btn p" id="linkAcceptBtn">Accept &mdash; pair this desktop</button>
@@ -3131,7 +3076,8 @@ const Agent = {
       // Launch what was written, not what was passed: they differ when the
       // header had to be added, and the window must match the file.
       const written = saved.source || source;
-      launchApp({ title, name: saved.file, source: written, requires: parseRequires(written), icon: saved.icon });
+      const win = launchApp({ title, name: saved.file, source: written, requires: parseRequires(written), icon: saved.icon });
+      AppEvents.created({ title: String(title), file: 'apps/' + saved.file, el: win });
       const { source: _written, ...report } = saved;
       // The dock shows the header's title, not input.title: they differ
       // when the source carried its own // @title line.
@@ -3407,6 +3353,18 @@ const EXAMPLE_PROMPTS = [
   'Create an app to track my calories from webcam photos',
   'Update all UI to match Windows Vista',
   'Create app that is a Clippy in the corner of the screen',
+];
+
+// "Connect your agent" in three steps (the key modal and Settings ›
+// Capabilities both paint them): install the `claude mcp add` line, open the
+// agent in a folder, then one of these first prompts, each copyable. Data in
+// the kernel for the same reason as EXAMPLE_PROMPTS — a forked ui offers the
+// same three. `which` is the `mcp_prompt_copied` property.
+const CONNECT_RUN_LINE = 'cd ~/your-project && claude';
+const CONNECT_PROMPTS = [
+  { which: 'desktop', text: 'Look at the Desktop folder on my computer and recreate my desktop inside vibeOS.' },
+  { which: 'project', text: "Read this project's files and show me what's in it as an app on my vibeOS desktop." },
+  { which: 'ui', text: 'Create a custom UI on my vibeOS desktop that helps me develop this project.' },
 ];
 
 // Vercel's analytics API exposes event counts but not event properties, so
