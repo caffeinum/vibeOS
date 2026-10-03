@@ -1,0 +1,37 @@
+web/index.html
+  s_0c6b04bac6a3b9::t_dc9715681f9fe4 178-181,216-258,266-272,275-277,279-281,284-294
+web/kernel/agent.js
+  s_0c6b04bac6a3b9::t_0f48de52509f20 148-151,153-157,220,240,256,286,335,1312-1321,1324,1819,1824,2228
+web/kernel/boot.js
+  s_0c6b04bac6a3b9::t_16ae5821d4f419 414-463,560
+web/kernel/machine.js
+  s_0c6b04bac6a3b9::t_9803b774a98d85 336-342,479-492,785-786,941,966,1147-1150,1235-1236,1266-1325,1516-1520,1603-1622,1624-1626,1630,1633-1636,1649-1651,1654-1666,1674-1677
+web/kernel/workspace.js
+  s_0c6b04bac6a3b9::t_ee4f5b468e34e4 356-358,360-367,375-381,385,388-391,731,764-766,790,804-806,821-823,832-835,837,839-845,847
+web/os.css
+  s_0c6b04bac6a3b9::t_6953649907da25 324-343,743-763
+web/tools.js
+  s_0c6b04bac6a3b9::t_b19b8ee9f9831e 66-74,90,146,170
+web/ui/dock.js
+  s_0c6b04bac6a3b9::t_334c628da9049f 159-160,392-602
+web/ui/settings.js
+  s_0c6b04bac6a3b9::t_365c675333aa0e 401,483-488,821-829,849,861-866,877-878,881-891,1024,1053-1055
+web/ui/windows.js
+  s_0c6b04bac6a3b9::t_a52065c02037a5 486-489
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1b5fd7265f8be57aa0e55a2a4e76586e4c2824c7",
+  "prompts": {},
+  "sessions": {
+    "s_0c6b04bac6a3b9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_0c6b04bac6a3b9",
+        "model": "unknown"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
