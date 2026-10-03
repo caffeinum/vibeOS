@@ -175,6 +175,10 @@ window.addEventListener('pagehide', () => {
 // went unreported. The same message twice is one row. `action` is an
 // optional { label, run } button for a row that has a fix to offer.
 function recoveryBar(message, detail, action) {
+  logError(detail ? message + ' ' + detail : message, 'recoveryBar', true);
+  paintBar(message, detail, action);
+}
+function paintBar(message, detail, action) {
   let bar = document.getElementById('recoveryBar');
   if (!bar) {
     bar = document.createElement('div');
@@ -209,6 +213,49 @@ function recoveryBar(message, detail, action) {
   rows.appendChild(row);
 }
 
+// What the person saw, and what was kept from them, for the agent driving the
+// desktop: read_desktop returns the newest of these as `errors`. An agent
+// over vibeos-mcp sees nothing of the page, so a red bar it cannot read is a
+// failure it cannot even be told about. Newest first, 30 kept, a repeat of the
+// newest one counted rather than stacked. The kernel redacts on the way out.
+const ERROR_LOG_MAX = 30, ERROR_TEXT_MAX = 500;
+const errorLog = [];
+function logError(message, source, shown) {
+  const entry = { time: new Date().toISOString(), message: String(message).slice(0, ERROR_TEXT_MAX),
+                  source: String(source).slice(0, 200), shown: !!shown };
+  const top = errorLog[0];
+  if (top && top.message === entry.message && top.source === entry.source && top.shown === entry.shown) {
+    top.count = (top.count || 1) + 1; top.time = entry.time; return;
+  }
+  errorLog.unshift(entry);
+  if (errorLog.length > ERROR_LOG_MAX) errorLog.length = ERROR_LOG_MAX;
+}
+window.__vibeosErrors = {
+  list: () => errorLog.map(e => ({ ...e })),
+  note: (message, source) => logError(message, source, false),
+};
+
+// A browser extension's content script runs in this page and its throws reach
+// the same window handlers ours do (measured on Safari: an extension's
+// "undefined is not an object (evaluating 'response.isEnabledForUrl')" painted
+// "vibeOS hit an error." over a working Browser). Ours is this origin, or a
+// blob of it (a stored kernel file, a ui module, an app); anything else, or a
+// throw with no filename whose stack names nothing of ours, is logged and
+// kept off the bar.
+function ownUrl(u) {
+  const o = location.origin;
+  return o !== 'null' && (u.startsWith(o + '/') || u.startsWith('blob:' + o + '/'));
+}
+function stackUrls(stack) {
+  return String(stack || '').match(/(?:blob:)?[a-z][a-z0-9+.-]*:\/\/[^\s)'"]+/gi) || [];
+}
+function errorSource(url, line) {
+  if (!url) return 'unknown';
+  if (kernelBlobs[url]) return 'system/' + kernelBlobs[url] + (line ? ':' + line : '');
+  const rel = url.startsWith(location.origin + '/') ? url.slice(location.origin.length + 1) : url.startsWith('blob:') ? 'blob module' : url;
+  return rel + (line ? ':' + line : '');
+}
+
 // Nothing caught these before: an exception on the way up left an empty desktop
 // with no chat window, so there was no way to even ask the agent what broke.
 // A stored kernel file runs from a blob URL, and a parse error in one reaches
@@ -216,15 +263,35 @@ function recoveryBar(message, detail, action) {
 // URL as its filename; kernelBlobs maps it back so the bar names the file.
 const kernelBlobs = {};
 window.addEventListener('error', e => {
+  const stack = e.error && e.error.stack;
+  const foreign = e.filename ? !ownUrl(e.filename) : !stackUrls(stack).some(ownUrl);
+  if (foreign) {
+    logError(e.message || 'error', 'third-party' + (e.filename ? ' ' + e.filename : ''), false);
+    console.warn('vibeOS: an error from outside vibeOS (an extension?) was not shown:', e.message, e.filename || stack || '');
+    return;
+  }
   if (!bootLife.verdict && !bootLife.error) bootLife.error = e.message || 'error';
   const f = kernelBlobs[e.filename];
-  if (f) recoveryBar('Your edited system/' + f + ' failed to load.', e.message + ' — reloading will boot the stock one.');
-  else recoveryBar('vibeOS hit an error.', e.message);
+  const source = errorSource(e.filename, e.lineno);
+  if (f) { logError('Your edited system/' + f + ' failed to load. ' + e.message, source, true); paintBar('Your edited system/' + f + ' failed to load.', e.message + ' — reloading will boot the stock one.'); }
+  else { logError(e.message, source, true); paintBar('vibeOS hit an error.', e.message); }
 });
+// A rejection carries no filename; its stack is the only witness. One whose
+// stack names only foreign urls is an extension's; one with no stack at all
+// (a DOMException from our own await, usually) stays ours.
 window.addEventListener('unhandledrejection', e => {
   const r = e.reason;
-  if (!bootLife.verdict && !bootLife.error) bootLife.error = (r && r.message) || String(r);
-  recoveryBar('vibeOS hit an error.', (r && r.message) || String(r));
+  const text = (r && r.message) || String(r);
+  const urls = stackUrls(r && r.stack);
+  if (urls.length && !urls.some(ownUrl)) {
+    logError(text, 'third-party ' + urls[0], false);
+    console.warn('vibeOS: a rejection from outside vibeOS (an extension?) was not shown:', text, urls[0]);
+    return;
+  }
+  if (!bootLife.verdict && !bootLife.error) bootLife.error = text;
+  const own = urls.find(ownUrl);
+  logError(((r && r.name && r.name !== 'Error') ? r.name + ': ' : '') + text, own ? errorSource(own.replace(/:(\d+):\d+$/, ''), (own.match(/:(\d+):\d+$/) || [])[1]) : 'unhandled rejection', true);
+  paintBar('vibeOS hit an error.', text);
 });
 
 /* ---------- the loader ---------------------------------------------------

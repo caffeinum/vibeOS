@@ -63,7 +63,15 @@ Layout rules (required):
 Plain JavaScript, no JSX, no external URLs. ONE import resolves and nothing else does: import { html, render } from 'lit' (lit-html 3, vendored with the desktop — no build step, no network). Its interpolations escape by default, so render(html\`<p>\${name}</p>\`, mount) is safe where innerHTML is not: reach for it instead of building markup by hand, and re-render the whole view on change rather than patching nodes. Plain DOM is fine for something small. Any other import, or any URL, fails at runtime. Aim for about 200 lines and stay under 1000. It must work.`;
 
 
-const CREATE_APP_LEAD = 'Create a vibeOS desktop window app (// @target browser, the contract below) or install a VM script (// @title, // @target vm, // @file <name.sh>, then a shell script for the Linux the prompt names). Pass title, complete source, and icon (window apps: inline SVG or PNG URL). The reply names the dock entry and the file. A window app is held to this contract:';
+// The whole api an app gets, in one line, at the TOP of create_app's
+// description and of the MCP instructions. Some MCP clients cut a long tool
+// description short: a Claude Code session on vibeos-mcp lost the contract
+// right around api.tty() and had to read windows.js to find write/onData/
+// resize/close. The details stay in APP_CONTRACT below; this is the index
+// that survives a cut, and it names where the source is.
+const APP_API_INDEX = 'App api at a glance (export default function (mount, api); each needs its // @requires cap): api.list() -> [{name,dir}] (files); api.shell(cmd, timeoutMs?) -> Promise<string> (shell); api.tty() -> { write(bytesOrString), onData(fn) -> off, resize(cols, rows), close() } (tty); api.net.connect(host, port) -> { write, onData(fn) -> off, onClose(fn) -> off, close(), state, reason } (net); api.ai.generate({ prompt, images?, json?, system?, maxTokens? }) -> Promise<string|object> (ai); api.onResize((w, h) => …); api.mountSize() -> {width, height}. If this text is cut short, the source is read_file system/ui/windows.js, function createAppApi.';
+
+const CREATE_APP_LEAD = 'Create a vibeOS desktop window app (// @target browser, the contract below) or install a VM script (// @title, // @target vm, // @file <name.sh>, then a shell script for the Linux the prompt names). Pass title, complete source, and icon (window apps: inline SVG or PNG URL). The reply names the dock entry and the file.\n' + APP_API_INDEX + '\nA window app is held to this contract:';
 const CREATE_APP_DESCRIPTION = CREATE_APP_LEAD + '\n' + APP_CONTRACT;
 
 const SEARCH_FILE_DESCRIPTION = 'Find lines matching a regex. path is one file, a directory (system/, system/ui/) or a glob (system/**/*.js, apps/*.js): a directory or glob searches every text file under it and each hit carries file and line; 60 hits at most, binaries and files over 1 MB skipped and named; system/chat.json and the snapshots are never searched or listed. Use before edit_file on a system/ file. A path that matches nothing is refused naming what exists there.';
@@ -79,7 +87,7 @@ Results are JSON. A reply over 128 KB is refused naming the size — narrow the 
 
 The person can type in vibeOS chat while you work: those lines are not pushed to you. When a tool result includes mailbox_hint, call get_mailbox and answer with reply_mailbox if you want a bubble in chat. Storage: data/mcp-mailbox-in.jsonl (human lines) and data/mcp-mailbox-state.json (read cursor).`;
 
-const READ_DESKTOP_DESCRIPTION = 'What the desktop looks like, as text: every open window (app id, title, minimized, z-order — first is on top — geometry, whether it is the built-in chat/Browser/Settings or a generated app and its file), the dock entries, the machine pill (VM.state, image, net, tty) and the theme. Pass { window: <title or app id> } for that window\'s body as trimmed text, one line per block (scripts and styles dropped, 8 KB cap); add { dom: true } for its sanitised outerHTML instead (no script, style, link or on* attributes, no javascript: urls, media and form urls replaced by data:, 16 KB cap); either way the value of a password or hidden input is withheld. { screen: \'png\' } is the machine\'s VGA screen as image {mimeType, data} (a jpeg no wider than 1024, under the relay\'s 128 KB frame) with the text console\'s rows as text when it is in text mode. A bitmap of the desktop itself is not available (no html2canvas is vendored): the text and DOM views are the substitute. Everything here is read; nothing runs.';
+const READ_DESKTOP_DESCRIPTION = 'What the desktop looks like, as text: every open window (app id, title, minimized, z-order — first is on top — geometry, whether it is the built-in chat/Browser/Settings or a generated app and its file), the dock entries, the machine pill (VM.state, image, net, tty), the theme, and errors: the page\'s recent errors newest first ({ time, message, source, shown } — shown: true is what the red bar showed the person; source third-party is a browser extension\'s throw kept off it). Pass { window: <title or app id> } for that window\'s body as trimmed text, one line per block (scripts and styles dropped, 8 KB cap); add { dom: true } for its sanitised outerHTML instead (no script, style, link or on* attributes, no javascript: urls, media and form urls replaced by data:, 16 KB cap); either way the value of a password or hidden input is withheld. { screen: \'png\' } is the machine\'s VGA screen as image {mimeType, data} (a jpeg no wider than 1024, under the relay\'s 128 KB frame) with the text console\'s rows as text when it is in text mode. A bitmap of the desktop itself is not available (no html2canvas is vendored): the text and DOM views are the substitute. Everything here is read; nothing runs.';
 
 const PASTE_KEY_SYSTEM_PROMPT = `You build things for vibeOS, a small desktop OS. Reply with SOURCE ONLY - no markdown fences, no commentary.
 
@@ -135,7 +143,7 @@ const TOOL_SCHEMAS = [
     parameters: { type: 'object', properties: { text: { type: 'string', description: 'Plain-text reply shown in chat' } }, required: ['text'] } },
 ];
 
-const MCP_INSTRUCTIONS = MCP_INSTRUCTIONS_LEAD + '\n\n' + APP_CONTRACT;
+const MCP_INSTRUCTIONS = MCP_INSTRUCTIONS_LEAD + '\n\n' + APP_API_INDEX + '\n\n' + APP_CONTRACT;
 
 // The bridge (bridgeCall in kernel/agent.js) has always accepted js from the
 // guest CLI and from vibeos-mcp, but tools/list never named it, so a remote
@@ -159,6 +167,7 @@ return deepFreeze({
   NET_PORTS: NET_PORTS,
   SHELL_LINES: SHELL_LINES,
   APP_CONTRACT: APP_CONTRACT,
+  APP_API_INDEX: APP_API_INDEX,
   CREATE_APP_LEAD: CREATE_APP_LEAD,
   CREATE_APP_DESCRIPTION: CREATE_APP_DESCRIPTION,
   SEARCH_FILE_DESCRIPTION: SEARCH_FILE_DESCRIPTION,

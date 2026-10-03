@@ -333,7 +333,13 @@ const IMAGES = {
     // udev may rename eth0 to enp0s5 before we get here; ask for whatever is not lo.
     dhcp: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); dhclient -1 $IF 2>&1 | tail -1',
     ip: "ip -4 -o addr show $(ls /sys/class/net | grep -v ^lo$ | head -1) | grep -o 'inet [0-9.]*' | cut -d' ' -f2",
-    netReset: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); ip link set $IF down; ip link set $IF up',
+    // dhclient -1 daemonises once it has a lease, and the snapshot carries
+    // that daemon: measured on debian-4, every restore's dhcp started another
+    // (pids 400 and 454 after one restore), each renewing on its own timer.
+    // The old one goes before the bounce; the new one re-adds the route the
+    // bounce drops (its "RTNETLINK answers: File exists" is the address that
+    // stayed, not a failure).
+    netReset: 'IF=$(ls /sys/class/net | grep -v ^lo$ | head -1); pkill -x dhclient; ip link set $IF down; ip link set $IF up',
     // debian-4 bakes a serial-getty on ttyS1 (scripts/debian/Dockerfile:
     // autologin root, TERM=xterm), so the line is owned from boot and a
     // boot-time shell from ttyS0 would be a second reader on it.
@@ -469,6 +475,20 @@ const Snapshots = {
 // The serial ports with a shell behind VM.tty. One entry: a second port is
 // another uart flag and another boot-time line.
 const TTY_PORTS = [1];
+
+// A tty start or a lease that failed is tried again on these delays, then
+// only on demand (the Terminal opening, api.tty(), a tty app's window). A
+// tab busy with something else — a 4K video wallpaper, measured in the field
+// on debian — made the restore's reader count miss its 10 s once, and that
+// one miss was 'failed' for the rest of the session while the same probe by
+// hand answered in 310 ms.
+const TTY_RETRY_MS = [2000, 5000, 15000];
+const NET_RETRY_MS = [2000, 5000, 15000];
+// The guest's default route, read from the kernel: /proc/net/route is the same
+// on every image whatever its ip/route tools are, tab-separated,
+// destination in the second column. A count, so the answer is a number or a
+// failure, never a guess.
+const DEFAULT_ROUTE_CMD = "cut -f2 /proc/net/route | grep -c '^00000000$'";
 
 const APT_INSTALL = /\bapt(-get)?\b[^|;&]*\binstall\b/;
 
@@ -762,6 +782,8 @@ const VM = {
   state: 'off',
   net: '',                 // '' = no relay, 'connecting' (lease or relay dial pending), 'no lease', then the link: connected | reconnecting | disconnected | unwatched
   ip: '',                  // the guest's lease, once it has one
+  route: false,            // the guest has a default route; an address without one reaches nothing
+  netError: '',            // why the last lease attempt did not end with an address and a route
   leased: false,           // dhcp has answered, one way or the other; net follows the link from here
   link: '',                // what the relay socket reports: connecting | open | reconnecting | dead
   linkWasOpen: false,      // the relay has been open at least once this boot; 'reconnected' means something only then
@@ -916,7 +938,7 @@ const VM = {
     if (this.state !== 'ready' || !this.leased) return;
     const byLink = { connecting: 'connecting', reconnecting: 'reconnecting', dead: 'disconnected' };
     if (byLink[this.link]) this.net = byLink[this.link];
-    else if (this.link === 'open') this.net = this.ip ? 'connected' : 'no lease';
+    else if (this.link === 'open') this.net = this.ip && this.route ? 'connected' : 'no lease';
     else if (this.link === '') {
       this.net = 'unwatched';
       console.error(new Error('relay ' + JSON.stringify(this.bootedRelay) + ' is configured but v86 dialed no socket the wrapper claimed; the link cannot be watched'));
@@ -941,7 +963,7 @@ const VM = {
     // second emulator over one that is still stopping.
     const destroyed = this.discard();
     this.screen = null; this.serial = '';
-    this.net = ''; this.ip = ''; this.leased = false; this.link = ''; this.linkWasOpen = false; this.netNote = '';
+    this.net = ''; this.ip = ''; this.route = false; this.netError = ''; this.leased = false; this.link = ''; this.linkWasOpen = false; this.netNote = '';
     this.relaySocket = null; this.bootedRelay = '';
     window.__v86loaded = null;
     this.set('off');
@@ -1122,6 +1144,10 @@ const VM = {
     this.store = null; this.storeError = ''; this.restored = false; this.restoredFrom = null;
     this.keptSnapshot = false; this.restoreError = ''; this.snapshotError = ''; this._written = new Set();
     this.ttyState = ''; this.ttyError = ''; this.ttyMs = 0; this.ttyRestore = '';
+    this._bootSeq++; this._ttyTried = false; this._ttyRetries = 0; this._ttyRun = null;
+    clearTimeout(this._ttyTimer); this._ttyTimer = 0;
+    this.route = false; this.netError = '';
+    const seq = this._bootSeq;
     try {
       await loadScriptOnce(V86_ASSETS + 'libv86.js');
       this.watchRelay();
@@ -1206,27 +1232,8 @@ const VM = {
       // The image brings the NIC up but does not ask for a lease, so a
       // configured relay would look broken until someone ran udhcpc by hand.
       // After a restore this runs again on purpose: the relay socket is v86's
-      // and did not survive the snapshot — the guest still holds its old
-      // lease, but every TCP connection it had is gone and the new socket is
-      // what its traffic now goes through. Renewing is how that gets checked
-      // rather than assumed; whatever it reports is what the pill says.
-      // The link is bounced first. Measured on BusyBox: after a restore the
-      // guest's DHCP discovers do leave the card (four net0-send events on
-      // v86's bus) and nothing ever comes back, until the driver resets the
-      // device — ifconfig down/up — after which the next request leases in
-      // under a second. A restored ne2k receives nothing until it is reset.
-      if (this.bootedRelay) {
-        this.net = 'connecting';
-        this.emit();
-        try {
-          if (this.restored) await this.exec(image.netReset, 15000);
-          await this.exec(image.dhcp, 45000);
-          const ip = (await this.exec(image.ip)).trim();
-          this.ip = /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip : '';
-        } catch { this.ip = ''; }
-        this.leased = true;
-        this.syncNet();
-      }
+      // and did not survive the snapshot. See lease() for the rest.
+      if (this.bootedRelay) await this.lease(image, seq);
 
       // A cold boot earns a snapshot once it has settled, so the next load of
       // this image is a restore. Not after a restore: that would rewrite the
@@ -1254,6 +1261,66 @@ const VM = {
       await this.teardown();
       await this.boot('busybox');
     }
+  },
+
+  // A lease is an address AND a default route, read back from the guest —
+  // not whatever the dhcp command printed. The link is bounced first after a
+  // restore. Measured on BusyBox: after a restore the guest's DHCP discovers
+  // do leave the card (four net0-send events on v86's bus) and nothing ever
+  // comes back until the driver resets the device — ifconfig down/up — after
+  // which the next request leases in under a second. A restored ne2k
+  // receives nothing until it is reset.
+  //
+  // The bounce is also what takes the route away: a link going down drops
+  // every route through it while the address stays. So a dhcp exec that then
+  // failed — a timeout in a busy tab is enough — left a guest with its old
+  // address and no default route, and the catch blanked VM.ip: apt said "Temporary
+  // failure resolving", ping "Network is unreachable", the pill "no lease",
+  // and nothing ever tried again (field report, debian, Safari, after
+  // reload_os). Now the outcome is read back, and a lease without an address
+  // or a route is redone — bounce, then dhcp — on NET_RETRY_MS, while the pill
+  // says what is true in between.
+  async lease(image, seq) {
+    this.net = 'connecting';
+    this.emit();
+    const why = await this.leaseOnce(image, this.restored);
+    if (seq !== this._bootSeq || this.state !== 'ready') return;
+    this.leased = true;
+    this._leaseVerdict(image, seq, why, 0);
+  },
+  // Only the first attempt is awaited by boot; the retries run behind it.
+  _leaseVerdict(image, seq, why, attempt) {
+    this.syncNet();
+    if (!why) return;
+    const delay = NET_RETRY_MS[attempt];
+    this.netError = why + (delay ? ` — trying again in ${delay / 1000}s` : ` — gave up after ${attempt + 1} tries; restart the machine`);
+    console.warn(`lease: ${this.netError}`);
+    this.emit();
+    if (!delay) return;
+    setTimeout(async () => {
+      if (seq !== this._bootSeq || this.state !== 'ready') return;
+      const next = await this.leaseOnce(image, true);
+      if (seq !== this._bootSeq || this.state !== 'ready') return;
+      this._leaseVerdict(image, seq, next, attempt + 1);
+    }, delay);
+  },
+  // One attempt; '' when the guest has an address and a default route, else
+  // the reason. Never throws: every failure is a reason.
+  async leaseOnce(image, bounce) {
+    let err = '';
+    try {
+      if (bounce) await this.exec(image.netReset, 15000);
+      await this.exec(image.dhcp, 45000);
+    } catch (e) { err = 'dhcp failed: ' + e.message; }
+    let ip = '', routes = '';
+    try {
+      ip = (await this.exec(image.ip)).trim();
+      routes = (await this.exec(DEFAULT_ROUTE_CMD)).trim();
+    } catch (e) { err = err || 'could not read the lease back: ' + e.message; }
+    this.ip = /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip : '';
+    this.route = /^\d+$/.test(routes) && routes !== '0';
+    if (this.ip && this.route) { this.netError = ''; return ''; }
+    return err || (this.ip ? `the guest holds ${this.ip} but has no default route` : 'the guest has no address after dhcp');
   },
 
   refuseSnapshot(reason) {
@@ -1446,6 +1513,11 @@ const VM = {
   ttyMs: 0,            // how long the ttyS1 shell took to reach its prompt
   ttyRestore: '',      // after a restore: 'survived' (the snapshot's shell answered) | 'busy' (a program holds the line) | 'restarted'
   get ttyReady() { return this.ttyState === 'ready'; },
+  _bootSeq: 0,         // which boot a delayed retry belongs to; a restart makes it stale
+  _ttyTried: false,    // an attempt ran this boot, so the next one counts the readers first
+  _ttyRetries: 0,      // timed retries used (TTY_RETRY_MS)
+  _ttyRun: null,       // the attempt in flight; a second caller waits on it
+  _ttyTimer: 0,
   _tty: {},
 
   _ttyByte(port, b) {
@@ -1528,17 +1600,40 @@ const VM = {
   // program ('busy', ready without a prompt), and only an unowned line gets
   // the boot line again. Before the count, a probe that saw no prompt under
   // top started a second shell over the first, and each got half the keys.
-  async startTty(image) {
+  //
+  // A failed start is tried again on TTY_RETRY_MS and then on demand
+  // (retryTty: the Terminal opening, api.tty(), a tty app's window). Every
+  // attempt after the first counts the readers first, exactly as a restore
+  // does, so a retry can never start a second shell over one an earlier
+  // attempt did start — two readers on one tty each get half the keys.
+  startTty(image) {
+    if (this._ttyRun) return this._ttyRun;
+    clearTimeout(this._ttyTimer); this._ttyTimer = 0;
+    const seq = this._bootSeq;
+    this._ttyRun = this._ttyAttempt(image, seq).finally(() => { if (seq === this._bootSeq) this._ttyRun = null; });
+    return this._ttyRun;
+  },
+  // On demand, after the timed retries: a no-op unless the line is 'failed'.
+  retryTty() {
+    if (this._ttyRun) return this._ttyRun;
+    if (this.state !== 'ready' || this.ttyState !== 'failed') return Promise.resolve();
+    return this.startTty(IMAGES[this.bootedImage]);
+  },
+  async _ttyAttempt(image, seq) {
     const port = TTY_PORTS[0];
+    const probe = this.restored || this._ttyTried;
+    const retry = this._ttyTried;
+    this._ttyTried = true;
     this.ttyState = 'starting'; this.ttyError = ''; this.ttyRestore = '';
     this.emit();
     const t0 = Date.now();
+    let error = '';
     try {
       let start = !!image.tty;
-      if (this.restored) {
-        const readers = (await this.exec(`ls -l /proc/[0-9]*/fd/0 2>/dev/null | grep -c /dev/ttyS${port}`, 10000)).trim();
-        if (!/^\d+$/.test(readers)) throw new Error(`could not count the readers of ttyS${port} after the restore: ${JSON.stringify(readers.slice(0, 80))}`);
-        if (readers === '0') this.ttyRestore = 'restarted';
+      if (probe) {
+        const readers = (await this.exec(`ls -l /proc/[0-9]*/fd/0 2>/dev/null | grep -c /dev/ttyS${port}`, retry ? 20000 : 10000)).trim();
+        if (!/^\d+$/.test(readers)) throw new Error(`could not count the readers of ttyS${port}${this.restored ? ' after the restore' : ''}: ${JSON.stringify(readers.slice(0, 80))}`);
+        if (readers === '0') this.ttyRestore = this.restored ? 'restarted' : '';
         else {
           this._ttySend(port, '\n');
           const alive = await this._ttyPrompt(port, 3000);
@@ -1551,12 +1646,24 @@ const VM = {
       if (this.ttyRestore !== 'busy' && !(await this._ttyPrompt(port, deadline))) {
         throw new Error(`no shell prompt on ttyS${port} within ${deadline / 1000}s (last bytes: ${JSON.stringify(this._tty[port].tail.slice(-60))})`);
       }
+    } catch (e) { error = e.message; }
+    if (seq !== this._bootSeq) return;   // a restart replaced this machine meanwhile
+    if (!error) {
       this.ttyMs = Date.now() - t0;
       this.ttyState = 'ready';
-    } catch (e) {
-      console.warn(`tty stayed down: ${e.message}`);
-      this.ttyState = 'failed';
-      this.ttyError = e.message;
+      this.emit();
+      return;
+    }
+    const delay = TTY_RETRY_MS[this._ttyRetries];
+    console.warn(`tty stayed down: ${error}`);
+    this.ttyState = 'failed';
+    this.ttyError = error + (delay ? ` — trying again in ${delay / 1000}s` : ' — tried again when a terminal opens');
+    if (delay) {
+      this._ttyRetries++;
+      this._ttyTimer = setTimeout(() => {
+        this._ttyTimer = 0;
+        if (seq === this._bootSeq && this.state === 'ready' && this.ttyState === 'failed') this.startTty(image);
+      }, delay);
     }
     this.emit();
   },
@@ -1564,6 +1671,10 @@ const VM = {
   tty(port = 1, holder = 'unnamed') {
     if (!TTY_PORTS.includes(port)) throw new Error(`no ttyS${port}: the machine has ttyS${TTY_PORTS.join(', ttyS')}`);
     if (this.state !== 'ready') throw new Error('Linux is not running yet.');
+    if (this.ttyState === 'failed') {
+      this.retryTty();
+      throw new Error(`the tty failed (${this.ttyError}); trying it again now — open it again in a moment`);
+    }
     if (this.ttyState !== 'ready') throw new Error(`the tty is ${this.ttyState || 'not started'}${this.ttyError ? ': ' + this.ttyError : ''}`);
     const t = this._tty[port];
     if (t.holder) throw new Error(`ttyS${port} is held by ${t.holder}; close that window first`);

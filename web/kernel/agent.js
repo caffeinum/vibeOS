@@ -145,8 +145,16 @@ const Gen = {
     this.setProvider();
     return this.oauth;
   },
-  askForKey() {
+  // `from` says who opened it when it was not a click: 'first_visit' is the
+  // boot's own offer (offerAgentOnFirstVisit in kernel/boot.js), carried on
+  // the events below so a connection it caused reads apart from one a click did.
+  askForKey({ from } = {}) {
     if (this._askModal) return this._askModal;
+    const src = from ? { from } : undefined;
+    // Seen once, by a click or by the boot: the boot's first-visit offer is
+    // for a browser that has never seen it, on this page or a later one.
+    this.askedThisPage = true;
+    try { localStorage.setItem('vibeos-asked', '1'); } catch {}
     this._askModal = new Promise(resolve => {
       const overlay = document.createElement('div');
       overlay.className = 'key-modal-overlay';
@@ -209,7 +217,7 @@ const Gen = {
         this._askModal = null;
         resolve(this.available);
       };
-      const decline = () => { track('key_declined'); finish(); };
+      const decline = () => { track('key_declined', src); finish(); };
       const onKey = e => { if (e.key === 'Escape') decline(); };
 
       document.addEventListener('keydown', onKey);
@@ -229,7 +237,7 @@ const Gen = {
       // connects, and says so if this page cannot pair (the static mirror has
       // no relay; a host shell refuses on purpose).
       overlay.querySelector('#keyConnectBtn').onclick = async () => {
-        track('connect_agent_click');
+        track('connect_agent_click', src);
         const btn = overlay.querySelector('#keyConnectBtn'), panel = overlay.querySelector('#keyConnectPanel');
         const err = overlay.querySelector('#keyConnectError'), cmd = overlay.querySelector('#keyConnectCmd'), st = overlay.querySelector('#keyConnectState');
         err.hidden = true; btn.disabled = true;
@@ -245,7 +253,7 @@ const Gen = {
             : state === 'waiting' ? 'waiting for your agent…'
             : state === 'pairing' ? detail || 'pairing…'
             : state === 'error' ? detail : '';
-          if (state === 'connected') { track('key_added', { via: 'mcp' }); finish(); }
+          if (state === 'connected') { track('key_added', { via: 'mcp', ...src }); finish(); }
         };
         offBridge = RemoteBridge.on(paint); paint(RemoteBridge.state, RemoteBridge.detail);
       };
@@ -275,7 +283,7 @@ const Gen = {
       overlay.querySelector('#keySaveBtn').onclick = () => {
         const k = overlay.querySelector('#keyInput').value.trim();
         this.saveKey(k);
-        if (k) track('key_added', { via: 'paste' });
+        if (k) track('key_added', { via: 'paste', ...src });
         finish();
       };
       // One probe per modal, started on open so a signed-in person sees who
@@ -324,7 +332,7 @@ const Gen = {
             },
           });
           this.saveOAuth(tokens);
-          track('key_added', { via: 'codex' });
+          track('key_added', { via: 'codex', ...src });
           finish();
         } catch (e) {
           if (slot.querySelector('#oauthPanel')) {
@@ -1301,9 +1309,19 @@ const Desktop = {
     return { state: VM.state, image: VM.bootedImage || null, net: VM.net || null, tty: VM.ttyState || null, ip: VM.ip || null, restored: !!VM.restored, pill: pill ? pill.textContent : '' };
   },
 
+  // The page's error log (the loader's, so a throw before the kernel ran is
+  // there too), newest first: what the red bar showed (shown: true) and what
+  // was kept off it (an extension's throw, a sync failure). Redacted like a
+  // first prompt — a provider error can quote a key back.
+  ERRORS_SHOWN: 10,
+  errors() {
+    if (!window.__vibeosErrors) throw new Error('window.__vibeosErrors is missing: the kernel must boot from the vibeOS loader');
+    return window.__vibeosErrors.list().slice(0, this.ERRORS_SHOWN).map(e => ({ ...e, message: redactPrompt(e.message), source: redactPrompt(e.source) }));
+  },
+
   async overview() {
     const windows = this.windows();
-    return { ok: true, windows, dock: await this.dock(), vm: this.vm(), theme: Theme.id, workspace: Workspace.label,
+    return { ok: true, windows, dock: await this.dock(), vm: this.vm(), theme: Theme.id, workspace: Workspace.label, errors: this.errors(),
              remote: { state: RemoteBridge.state, agent: RemoteBridge.agentName || null, sampling: RemoteBridge.sampling },
              note: windows.length ? 'windows are top first; pass { window: <title or app id> } for one window\'s text' : 'no window is open' };
   },
@@ -1798,10 +1816,12 @@ const MCP_RELAY_URL = 'wss://2yetm9bvy2.execute-api.us-east-1.amazonaws.com/prod
    Accepting is NOT automatic. The link is a capability: whoever holds it is
    root on this desktop for seven days. The boot asks first (linkModal), and
    a refusal drops it. */
+let pairLinkSeen = false;   // any #pair= at load, well-formed or not: the boot's first-visit offer stands down
 let pendingLink = (() => {
   let raw = '';
   try { raw = location.hash || ''; } catch { return null; }
   if (!raw || raw.indexOf('pair=') === -1) return null;
+  pairLinkSeen = true;
   const params = new URLSearchParams(raw.replace(/^#/, ''));
   const token = params.get('pair');
   // Strip the fragment whatever we make of it: a malformed pair= is still a
@@ -2205,6 +2225,7 @@ const RemoteBridge = {
   // own source and run commands in its machine. So the boot asks, in those
   // words, and nothing is stored and nothing is dialed until Accept.
   get pendingLink() { return pendingLink; },
+  get pairLinkSeen() { return pairLinkSeen; },
   // A link names the relay the AGENT is on — explicitly with &relay=, or by
   // its absence, which vibeos-mcp defines as a positive statement that the
   // agent is on the public default (the package omits &relay= only when it

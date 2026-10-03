@@ -353,9 +353,18 @@ const Workspace = {
   // is flat, so map by extension rather than inventing a second tree inside it.
   dirFor(name) { return name.endsWith('.js') ? this.apps : this.dataDir; },
 
+  // A file that is not there is an error naming it, never the browser's
+  // bare NotFoundError ("The object can not be found here." on Safari, which
+  // reached the person as "vibeOS hit an error." with no file in it).
   async readAny(name) {
-    const fh = await this.dirFor(name).getFileHandle(name);
-    return new Uint8Array(await (await fh.getFile()).arrayBuffer());
+    const where = (name.endsWith('.js') ? 'apps/' : 'data/') + name;
+    try {
+      const fh = await this.dirFor(name).getFileHandle(name);
+      return new Uint8Array(await (await fh.getFile()).arrayBuffer());
+    } catch (e) {
+      if (e.name === 'NotFoundError') throw new Error(where + ' is not in the workspace any more (deleted or renamed since the list was read)');
+      throw e;
+    }
   },
 
   async writeAny(name, bytes) {
@@ -363,14 +372,23 @@ const Workspace = {
     const w = await fh.createWritable(); await w.write(bytes); await w.close();
   },
 
+  // What the flat mirror carries: apps/*.js and data/ files that are not
+  // .js — the names dirFor maps back to the same place. Anything else in
+  // apps/ (an app's .icon, a log an agent left there) would be read from
+  // data/ by readAny and was the Sync pane's NotFoundError: aeon.icon sorted
+  // first, Sync.auto died on it every tick, and every workspace file after
+  // it stayed "workspace only". Those come back in `skipped`, by path. A file
+  // deleted between the directory listing and its read is simply not listed.
   async listAll() {
     if (!this.open) return [];
     const out = [];
-    for (const dir of [this.apps, this.dataDir]) {
+    for (const [dir, prefix] of [[this.apps, 'apps/'], [this.dataDir, 'data/']]) {
       for await (const [name, h] of dir.entries()) {
         if (h.kind !== 'file') continue;
-        const file = await h.getFile();
-        out.push({ name, size: file.size, modified: file.lastModified });
+        let file;
+        try { file = await h.getFile(); }
+        catch (e) { if (e.name === 'NotFoundError') continue; throw e; }
+        out.push({ name, path: prefix + name, size: file.size, modified: file.lastModified, mirrored: this.dirFor(name) === dir });
       }
     }
     return out;
@@ -710,7 +728,7 @@ const Sync = {
       try {
         const r = await this.auto();
         if (!r.error) this.last = { at: new Date(), moved: r.moved, conflicts: r.conflicts };
-      } catch { /* a failed tick must not kill the timer */ }
+      } catch (e) { window.__vibeosErrors.note('Sync tick failed: ' + e.message, 'sync'); }   // a failed tick must not kill the timer
       this.watchers.forEach(f => f());
     }, seconds * 1000);
     this.watchers.forEach(f => f());
@@ -743,7 +761,9 @@ const Sync = {
     if (vm === null) return { error: 'The VM is not running — open the Terminal window first.' };
     if (!Workspace.open) return { error: 'No workspace storage is available in this browser.' };
 
-    const ws = await Workspace.listAll();
+    const all = await Workspace.listAll();
+    const ws = all.filter(f => f.mirrored);
+    const skipped = all.filter(f => !f.mirrored).map(f => f.path).sort();
     const names = [...new Set([...ws.map(f => f.name), ...vm.map(f => f.name)])].sort();
     const rows = [];
     for (const name of names) {
@@ -767,7 +787,7 @@ const Sync = {
       }
       rows.push({ name, inWs, inVm, state });
     }
-    return { rows, unmirrored: this.unmirrored(), system: SystemMirror.status() };
+    return { rows, unmirrored: this.unmirrored(), skipped, system: SystemMirror.status() };
   },
 
 // Called by the VM's write hook, debounced. Only moves VM -> folder, and
@@ -781,7 +801,9 @@ const Sync = {
       if (d.error) return;
       let moved = 0;
       for (const r of d.rows) {
-        if (r.state === 'pull') { await this.pull(r.name); moved++; }
+        if (r.state !== 'pull') continue;
+        try { await this.pull(r.name); moved++; }
+        catch (e) { window.__vibeosErrors.note('Sync could not pull ' + r.name + ': ' + e.message, 'sync'); }
       }
       if (moved) {
         this.last = { at: new Date(), moved, conflicts: d.rows.filter(x => x.state === 'differs').length, live: true };
@@ -796,7 +818,9 @@ const Sync = {
     await VM.writeQuietly(name, bytes);
   },
   async pull(name) {
-    const bytes = await VM.readFile(name);
+    let bytes;
+    try { bytes = await VM.readFile(name); }
+    catch (e) { throw new Error('/mnt/' + name + ' could not be read from the machine: ' + e.message); }
     await Workspace.writeAny(name, bytes);
   },
 
@@ -805,12 +829,22 @@ const Sync = {
   async auto() {
     const d = await this.diff();
     if (d.error) return d;
+    // One file that cannot move is that file's failure, not the run's: the
+    // loop used to die on the first throw and every name sorted after it
+    // never moved. Each failure is named and goes to the page's error log
+    // (read_desktop's errors), never to the red bar.
     let moved = 0;
+    const failed = [];
     for (const r of d.rows) {
-      if (r.state === 'push' || r.state === 'stale') { await this.push(r.name); moved++; }
-      else if (r.state === 'pull') { await this.pull(r.name); moved++; }
+      const dir = r.state === 'push' || r.state === 'stale' ? 'push' : r.state === 'pull' ? 'pull' : null;
+      if (!dir) continue;
+      try { await this[dir](r.name); moved++; }
+      catch (e) {
+        failed.push({ name: r.name, error: e.message });
+        window.__vibeosErrors.note('Sync could not ' + dir + ' ' + r.name + ': ' + e.message, 'sync');
+      }
     }
-    return { moved, conflicts: d.rows.filter(r => r.state === 'differs').length };
+    return { moved, conflicts: d.rows.filter(r => r.state === 'differs').length, failed };
   },
 };
 

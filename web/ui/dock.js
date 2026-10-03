@@ -156,7 +156,8 @@ export function start() {
   const clock = setInterval(tick, 1000);
   const offSplash = bootSplash();
   const offTray = startTray();
-  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offSplash(); offTray(); };
+  const offAsk = startAsk();
+  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offSplash(); offTray(); offAsk(); };
 }
 
 const winxp = () => document.documentElement.dataset.theme === 'winxp';
@@ -387,4 +388,215 @@ function startTray() {
     if (mine.current) mine.current.el.remove();
     if (tray === mine) tray = null;
   };
+}
+
+/* ---------- the research ask ----------------------------------------------
+
+   User research, not a feature (2026-10-03, approved by vibeos-yc: we had
+   never talked to a user). A small card, bottom-left above the dock, asking
+   for an email so we can ask a couple of questions; it promises no call.
+   At most once per browser,
+   ever: `vibeos-research-ask` is written before the card is painted, and a
+   browser whose storage throws never sees it. Two groups:
+
+   - returner: this is not the browser's first visit. `vibeos-first-seen`
+     (epoch ms) is written on the first page that runs this, and a page at
+     least ASK_TIMING.returnGapMs (1 h) later is a return — a reload is not.
+     A browser that predates the stamp counts as returning when its machine
+     comes back restored from a snapshot (VM.restored, the existing signal):
+     that snapshot was written on an earlier visit. Asked once the desktop
+     has been up deskMs.
+   - silent: this page's machine reached 'ready' and the chat has had no
+     prompt (Chat.asked, the flag behind first_prompt) for silentMs (60 s)
+     since — not while an agent drives the desktop through vibeos-mcp.
+   Both due: returner wins. Never over the key modal or the pairing dialog
+   (.key-modal-overlay), the recovery or fork bar, or the winxp boot splash:
+   it waits until they are gone. Never on ?safe=1 / ?stock=1 / a recovery
+   boot, and never where HexEvents.hosted() is false — the static mirror
+   (its insights tag 404s) and the docker image (the tag is stripped) have
+   no /api, so nothing is probed there.
+   The email goes to /api/waitlist (source 'in-app-ask' + the group), which
+   keeps it in the Hexclave data vault and copies it to getwaitlist. Tracked:
+   ask_shown / ask_dismissed / ask_email with {group} — never the email.
+   Every string is textContent. window.__vibeosAskTiming overrides
+   ASK_TIMING field by field (scripts/e2e/research-ask.mjs shortens them).
+   One decision per page (__vibeosAskDecided, like the splash): a reload_ui
+   retires a card on screen and the new ui does not ask again. */
+// A calendar link for the thank-you state; empty, so no link (2026-10-03:
+// the operator chose not to share a calendar).
+export const RESEARCH_BOOKING_URL = '';
+const ASK_KEY = 'vibeos-research-ask', FIRST_SEEN_KEY = 'vibeos-first-seen';
+const ASK_TIMING = { deskMs: 5000, silentMs: 60000, returnGapMs: 3600000, pollMs: 1000 };
+const ASK_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash';
+const ASK_COPY = {
+  returner: "What brought you back to vibeOS? Leave your email and we'll ask you a couple of questions.",
+  silent: "Not sure what to do here? Tell us what you hoped for: leave your email and we'll ask you a couple of questions.",
+};
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function askStorage() {
+  try {
+    localStorage.setItem('vibeos-ask-probe', '1');
+    localStorage.removeItem('vibeos-ask-probe');
+    return localStorage;
+  } catch { return null; }
+}
+
+function startAsk() {
+  if (window.__vibeosAskDecided) return () => {};
+  window.__vibeosAskDecided = true;
+  const boot = window.__vibeosBoot || {};
+  if (boot.safe || boot.stock || boot.recovering) return () => {};
+  if (typeof HexEvents === 'undefined' || typeof Chat === 'undefined') {
+    console.warn('research ask: the kernel has no HexEvents/Chat (an older fork), so it is not shown');
+    return () => {};
+  }
+  const store = askStorage();
+  if (!store) return () => {};
+  const now = Date.now();
+  const raw = store.getItem(FIRST_SEEN_KEY);
+  let seen = raw === null ? null : Number(raw);
+  if (seen !== null && !Number.isFinite(seen)) {
+    console.warn('research ask: ' + FIRST_SEEN_KEY + ' is not a timestamp (' + raw.slice(0, 40) + '); restamped as a first visit');
+    seen = null;
+  }
+  if (seen === null) {
+    try { store.setItem(FIRST_SEEN_KEY, String(now)); } catch { return () => {}; }
+  }
+  if (store.getItem(ASK_KEY) !== null) return () => {};
+
+  const t = { ...ASK_TIMING, ...(window.__vibeosAskTiming || {}) };
+  const legacy = raw === null;
+  const returning = () => (seen !== null && now - seen >= t.returnGapMs) || (legacy && VM.state === 'ready' && !!VM.restored);
+  let deskUp = false, silentDue = false, silentTimer = null, card = null, ended = false;
+
+  const pick = () => {
+    if (deskUp && returning()) return 'returner';
+    if (silentDue && !Chat.asked && RemoteBridge.state !== 'connected') return 'silent';
+    return null;
+  };
+  // Nothing left that could still come true: the returner check has had its
+  // chance (a legacy browser's machine may yet come back restored), and the
+  // silent one has fired empty or the person has typed.
+  const settled = () => deskUp && !returning() && !(legacy && VM.state !== 'ready')
+    && (Chat.asked || silentDue);
+  const consider = () => {
+    if (ended || card) return;
+    if (document.readyState !== 'complete') return;
+    if (!HexEvents.hosted()) return end();
+    if (document.querySelector(ASK_BLOCKERS)) return;
+    const group = pick();
+    if (group) return show(group);
+    if (settled()) end();
+  };
+  const armSilent = () => {
+    if (silentTimer || VM.state !== 'ready') return;
+    silentTimer = setTimeout(() => { silentDue = true; consider(); }, t.silentMs);
+  };
+  const offVM = VM.on(() => { armSilent(); consider(); });
+  armSilent();
+  const deskTimer = setTimeout(() => { deskUp = true; consider(); }, t.deskMs);
+  const poll = setInterval(consider, t.pollMs);
+
+  function end() {
+    if (ended) return;
+    ended = true;
+    offVM(); clearTimeout(deskTimer); clearTimeout(silentTimer); clearInterval(poll);
+  }
+
+  function show(group) {
+    try { store.setItem(ASK_KEY, group + ' ' + new Date().toISOString()); } catch { return end(); }
+    end();
+    card = paintAsk(group);
+    track('ask_shown', { group });
+  }
+
+  return () => { end(); if (card) card.remove(); };
+}
+
+function paintAsk(group) {
+  const el = document.createElement('div');
+  el.id = 'researchAsk';
+  el.className = 'ask-card';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', 'A question from the maker of vibeOS');
+  el.dataset.group = group;
+  el.style.cssText = 'position:fixed;left:14px;z-index:8000';
+  const head = document.createElement('div');
+  head.className = 'ask-head';
+  const line = document.createElement('p');
+  line.className = 'ask-line';
+  line.textContent = ASK_COPY[group];
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'ask-x';
+  x.title = 'Close';
+  x.setAttribute('aria-label', 'Dismiss');
+  x.textContent = '×';
+  head.append(line, x);
+  const form = document.createElement('form');
+  form.className = 'ask-form';
+  form.noValidate = true;
+  const input = document.createElement('input');
+  input.type = 'email';
+  input.className = 'ask-email';
+  input.placeholder = 'you@example.com';
+  input.autocomplete = 'email';
+  input.maxLength = 320;
+  input.setAttribute('aria-label', 'Your email');
+  const send = document.createElement('button');
+  send.type = 'submit';
+  send.className = 'btn p ask-send';
+  send.textContent = 'Send';
+  form.append(input, send);
+  const note = document.createElement('p');
+  note.className = 'ask-note';
+  note.hidden = true;
+  el.append(head, form, note);
+  document.body.appendChild(el);
+  // Above whatever sits at the bottom, as the balloons are.
+  const tops = [document.getElementById('dock'), document.getElementById('analyticsBar')]
+    .map(n => n && n.getBoundingClientRect()).filter(r => r && r.height > 0).map(r => r.top);
+  el.style.bottom = (innerHeight - Math.min(innerHeight, ...tops) + 16) + 'px';
+
+  let sent = false;
+  const say = (text, err) => { note.hidden = false; note.className = 'ask-note' + (err ? ' err' : ''); note.textContent = text; };
+  x.onclick = () => {
+    if (!sent) track('ask_dismissed', { group });
+    el.remove();
+  };
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const email = input.value.trim();
+    if (!EMAIL_SHAPE.test(email) || email.length > 320) return say("That doesn't look like an email address.", true);
+    input.disabled = send.disabled = true;
+    say('Sending…');
+    let res = null, body = {};
+    try {
+      res = await fetch('/api/waitlist', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, source: 'in-app-ask', group, path: location.pathname }),
+      });
+      body = await res.json().catch(() => ({}));
+    } catch (err) { console.warn('research ask: send failed', err); }
+    if (!res || !res.ok) {
+      input.disabled = send.disabled = false;
+      return say(typeof body.error === 'string' ? body.error : "Couldn't send that. Try again in a moment.", true);
+    }
+    sent = true;
+    track('ask_email', { group });
+    form.remove();
+    say('Thanks. We will write to ' + email + ' soon.');
+    if (RESEARCH_BOOKING_URL) {
+      const book = document.createElement('a');
+      book.className = 'ask-book';
+      book.href = RESEARCH_BOOKING_URL;
+      book.target = '_blank';
+      book.rel = 'noopener';
+      book.textContent = 'Book 15 minutes';
+      el.appendChild(book);
+    }
+  };
+  return el;
 }

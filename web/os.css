@@ -321,6 +321,26 @@
   }
   [data-theme="winxp"] .balloon-x:hover { color: #ffffff; background: #e34a1b; border-color: #a72d0c; }
 
+  /* The research ask is a balloon too, its tail pointing down at Start. */
+  [data-theme="winxp"] .ask-card {
+    background: #ffffe1; color: #000000; border: 1px solid #000000; border-radius: 8px;
+    box-shadow: 2px 3px 4px rgba(0, 0, 0, .3); font: 12px/1.4 Tahoma, "Segoe UI", sans-serif;
+  }
+  [data-theme="winxp"] .ask-card::after {
+    content: ''; position: absolute; left: 30px; bottom: -8px; width: 14px; height: 14px;
+    background: #ffffe1; border-right: 1px solid #000000; border-bottom: 1px solid #000000;
+    transform: skewX(-30deg) rotate(45deg);
+  }
+  [data-theme="winxp"] .ask-email { background: #ffffff; color: #000000; border: 1px solid #7f9db9; border-radius: 0; padding: 3px 5px; }
+  [data-theme="winxp"] .ask-note { color: #000000; }
+  [data-theme="winxp"] .ask-note.err { color: #c00000; }
+  [data-theme="winxp"] .ask-book { color: #0000ff; font-weight: 400; text-decoration: underline; }
+  [data-theme="winxp"] .ask-x {
+    width: 15px; height: 15px; padding: 0; display: grid; place-items: center; font-size: 12px;
+    color: #4d4d4d; background: #ffffff; border: 1px solid #aca899; border-radius: 3px;
+  }
+  [data-theme="winxp"] .ask-x:hover { color: #ffffff; background: #e34a1b; border-color: #a72d0c; }
+
   /* The boot screen while the machine boots, then "welcome back." — the
      vibeOS mark where XP put its own, a marquee of three blue blocks. */
   [data-theme="winxp"] .boot-splash { display: grid; place-items: center; font-family: Tahoma, "Segoe UI", sans-serif; user-select: none; }
@@ -720,6 +740,27 @@
   .balloon-title { display: block; font-weight: 600; }
   .balloon-text { color: var(--dim); margin-top: 2px; }
   .balloon-x { flex: 0 0 auto; border: 0; background: transparent; padding: 0 2px; font-size: 15px; line-height: 1; color: var(--dim); }
+  /* The research ask (ui/dock.js startAsk): one line, an email field and
+     Send, bottom-left above the dock; winxp dresses it as a balloon. */
+  .ask-card {
+    display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 32px));
+    padding: 12px 12px 12px 14px; font-size: 12.5px; line-height: 1.45;
+    background: var(--panel); color: var(--text);
+    border: var(--border-w) solid var(--line2); border-radius: var(--radius-ctl);
+    box-shadow: var(--shadow-win); animation: balloon-in .18s ease-out;
+  }
+  .ask-head { display: flex; gap: 8px; align-items: flex-start; }
+  .ask-line { flex: 1; min-width: 0; margin: 0; overflow-wrap: anywhere; }
+  .ask-x { flex: 0 0 auto; border: 0; background: transparent; padding: 0 2px; font-size: 15px; line-height: 1; color: var(--dim); cursor: pointer; }
+  .ask-form { display: flex; gap: 6px; margin: 0; }
+  .ask-email {
+    flex: 1; min-width: 0; padding: 6px 8px; font: inherit; color: var(--text); background: var(--panel2);
+    border: var(--border-w) solid var(--line2); border-radius: var(--radius-sm);
+  }
+  .ask-send { flex: 0 0 auto; }
+  .ask-note { margin: 0; color: var(--dim); overflow-wrap: anywhere; }
+  .ask-note.err { color: var(--no); }
+  .ask-book { color: var(--accent); font-weight: 600; }
   /* The pairing-link dialog: its Remote Assistance header is winxp's. */
   .link-modal { display: flex; flex-direction: column; gap: 10px; }
   .link-modal h2 { margin-bottom: 0; }

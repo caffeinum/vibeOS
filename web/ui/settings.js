@@ -398,7 +398,7 @@ export function TerminalApp(body, win) {
   note.className = 'tty-note small';
   body.append(screen, input, note);
   const vt = createVt(screen, s => { if (tty) tty.write(s); });
-  let tty = null, ro = null, resizeTimer = 0, sized = false;
+  let tty = null, ro = null, resizeTimer = 0, sized = false, retried = false;
 
   const say = (text, cls) => { note.textContent = text; note.className = 'tty-note small' + (cls ? ' ' + cls : ''); note.hidden = !text; };
   const focus = () => input.focus();
@@ -480,7 +480,12 @@ export function TerminalApp(body, win) {
     const live = VM.state === 'ready' && VM.ttyState === 'ready';
     if (tty && !live) { const stale = tty; tty = null; stale.close(); }
     if (live) { if (!tty) attach(); return; }
-    if (VM.ttyState === 'failed') say('the machine has no terminal line: ' + VM.ttyError, 'no');
+    // Opened (or the line lost) while the start had failed: try once more per
+    // window before saying so (VM.retryTty counts readers first, so it can
+    // never put a second shell on the line). Once, or a failed retry's emit
+    // would retry again for ever.
+    if (VM.ttyState === 'failed' && VM.state === 'ready' && !retried) { retried = true; VM.retryTty(); say('the terminal line failed; trying it again…', 'dimmer'); }
+    else if (VM.ttyState === 'failed') say('the machine has no terminal line: ' + VM.ttyError, 'no');
     else if (VM.state === 'failed' || VM.state === 'unavailable') say('the machine is not available', 'no');
     else say('waiting for the machine…', 'dimmer');
   };
@@ -813,7 +818,15 @@ export function SyncApp(body, win) {
     differs: ['both changed',   'no',     ''],
   };
 
-  async function paint() {
+  // Every path here runs un-awaited (the timer's repaint, a button), so a
+  // throw used to be an unhandled rejection: the page-wide red bar with the
+  // browser's words and no file named. It is this pane's line now.
+  const guard = fn => async () => {
+    try { await fn(); }
+    catch (e) { msg.textContent = 'Sync: ' + e.message; window.__vibeosErrors.note('Sync pane: ' + e.message, 'ui/settings.js Sync'); }
+  };
+  const paint = guard(paintDiff);
+  async function paintDiff() {
     const d = await Sync.diff();
     if (d.error) { out.innerHTML = '<p class="note"></p>'; out.firstChild.textContent = d.error; return; }
     if (!d.rows.length) { out.innerHTML = '<p class="small dimmer">Nothing on either side yet.</p>'; msg.textContent = ''; unmirrored(d); return; }
@@ -833,7 +846,7 @@ export function SyncApp(body, win) {
       const btn = tr.querySelector('button');
       if (btn) btn.onclick = async () => {
         try { r.state === 'pull' ? await Sync.pull(r.name) : await Sync.push(r.name); await paint(); }
-        catch (e) { msg.textContent = e.message; }
+        catch (e) { msg.textContent = r.name + ': ' + e.message; }
       };
       tb.appendChild(tr);
     });
@@ -845,6 +858,12 @@ export function SyncApp(body, win) {
   }
 
   function unmirrored(d) {
+    if (d.skipped && d.skipped.length) {
+      const s = document.createElement('p');
+      s.className = 'small dimmer';
+      s.textContent = `not mirrored from the workspace: ${d.skipped.join(' ')} — only .js files in apps/ and non-.js files in data/ go into /mnt.`;
+      msg.appendChild(s);
+    }
     if (!d.unmirrored.length) return;
     // Guest names: textContent, never markup.
     const p = document.createElement('p');
@@ -855,18 +874,21 @@ export function SyncApp(body, win) {
   }
 
   body.querySelector('#refresh').onclick = paint;
-  body.querySelector('#pushall').onclick = async () => {
+  // One file that cannot move is named; the rest still move.
+  const moveAll = state => guard(async () => {
     const d = await Sync.diff();
     if (d.error) return;
-    for (const r of d.rows) if (r.state === 'push') await Sync.push(r.name);
-    paint();
-  };
-  body.querySelector('#pullall').onclick = async () => {
-    const d = await Sync.diff();
-    if (d.error) return;
-    for (const r of d.rows) if (r.state === 'pull') await Sync.pull(r.name);
-    paint();
-  };
+    const failed = [];
+    for (const r of d.rows) {
+      if (r.state !== state) continue;
+      try { await (state === 'pull' ? Sync.pull(r.name) : Sync.push(r.name)); }
+      catch (e) { failed.push(r.name + ': ' + e.message); }
+    }
+    await paintDiff();
+    if (failed.length) msg.textContent = 'Could not ' + state + ' ' + failed.join('; ');
+  });
+  body.querySelector('#pushall').onclick = moveAll('push');
+  body.querySelector('#pullall').onclick = moveAll('pull');
   const sel = body.querySelector('#every');
   sel.value = String(Sync.every);
   sel.onchange = e => Sync.start(+e.target.value);
@@ -999,7 +1021,7 @@ export function NetworkApp(body, win) {
       <p class="small ${VM.net === 'connected' ? 'yes' : 'dimmer'}" id="netState" style="margin:0 0 8px">
         ${!on ? '' : VM.net === 'connecting'
             ? (VM.leased ? (VM.ip ? 'guest has <b>' + VM.ip + '</b>; ' : 'no DHCP lease; ') + 'dialing the relay…' : 'getting a lease…')
-          : VM.net === 'no lease' ? 'connected to the relay but got no DHCP lease'
+          : VM.net === 'no lease' ? 'connected to the relay but the guest has no working lease' + (VM.ip && !VM.route ? ' (it holds <b>' + VM.ip + '</b> with no default route)' : '') + '<span class="netWhy"></span>'
           : VM.net === 'unwatched'
             ? '<span class="part">the relay socket could not be watched.</span> v86 dialed a socket this desktop did not recognise as the relay, so a drop will not be noticed here' + (VM.ip ? '; the guest has <b>' + VM.ip + '</b>' : '') + '.'
           : VM.net === 'reconnecting'
@@ -1028,6 +1050,9 @@ export function NetworkApp(body, win) {
             <td class="dimmer tiny">the relay is a serverless function and its socket closes at its max duration (800 s); the desktop redials in place — connections open at that moment are dropped, new ones work</td></tr>
       </tbody></table>
       ${hostedWisp ? `<p class="note" style="margin-top:10px"><b>Long downloads</b> (curl, apt, nvm source builds) can fail mid-transfer when the relay recycles (~13 min on vibeos.sh). The VM redials but open TCP does not resume — retry with <code>curl -C -</code> or run a self-hosted container where WISP is not capped at 800 s. See <code>docs/wisp-transport-longevity.md</code>.</p>` : ''}`;
+    // The reason carries exec errors and the guest's address: text, not html.
+    const why = body.querySelector('.netWhy');
+    if (why && VM.netError) why.textContent = ': ' + VM.netError;
     const rc = body.querySelector('#reconnect');
     if (rc) rc.onclick = async () => { rc.disabled = true; rc.textContent = 'restarting…'; await VM.restart(); render(); };
 

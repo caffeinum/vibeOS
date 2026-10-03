@@ -411,6 +411,56 @@ function watchLiveness() {
   decide(VM.state);
 }
 
+// The first visit asks for an agent, once, after the desktop has painted.
+// 65bac3b (2026-09-17) stopped opening the key modal at boot: the boot used
+// to AWAIT it before the ui came up, so a first visit was a modal over a
+// half-drawn desktop and a machine booting behind it. That speed win stays —
+// this never runs before UI.open() has painted, is never awaited, and the
+// boot flag clears on the machine's answer (watchLiveness) whatever the
+// modal is doing. What went with it was the offer itself: per device,
+// connect_agent_click per vm_ready fell from ~0.74 to ~0.27 while
+// click→pair held at 3-5%, so the people who never saw the modal are most
+// of the drop. Hypothesis (2026-10-03): offering it again on a first visit
+// raises (key_added + mcp_paired) devices ÷ vm_ready devices, weekly,
+// weekday-matched; read 2026-10-10 against 09-26..10-02.
+//
+// One visit per browser (`vibeos-asked`, the pre-65bac3b gate), and never
+// over something that already answers the question: a model connected, an
+// agent paired or resuming, a #pair= link (its consent dialog is the one
+// decision on screen), ?safe=1 / ?stock=1 / a recovery boot, or a modal a
+// click already opened. In winxp the boot splash goes first: the modal waits
+// for it to end or for the machine to be ready, whichever is sooner (the
+// modal is z 9000 over the splash's 8500 either way).
+const FIRST_VISIT_KEY = 'vibeos-asked';
+function firstVisitBlocked() {
+  const b = window.__vibeosBoot;
+  if (b.safe || b.stock || b.recovering) return 'safe/stock/recovery boot';
+  if (RemoteBridge.pairLinkSeen) return 'a pairing link';
+  if (Gen.available) return 'a model is connected';
+  if (RemoteBridge.token || RemoteBridge.state !== 'off') return 'an agent is paired';
+  if (Gen.askedThisPage) return 'the modal was already opened';
+  if (document.querySelector('.key-modal-overlay')) return 'a dialog is up';
+  return null;
+}
+const nextPaint = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+const splashOrReady = () => new Promise(resolve => {
+  if (!document.getElementById('bootSplash') || VM.state === 'ready') return resolve();
+  const done = () => { obs.disconnect(); off(); resolve(); };
+  const obs = new MutationObserver(() => { if (!document.getElementById('bootSplash')) done(); });
+  obs.observe(document.body, { childList: true });
+  const off = VM.on(s => { if (s === 'ready') done(); });
+});
+async function offerAgentOnFirstVisit() {
+  try { if (localStorage.getItem(FIRST_VISIT_KEY)) return; }
+  catch { return; }   // no storage: every visit would be a first one
+  if (firstVisitBlocked()) return;
+  await nextPaint();
+  await splashOrReady();
+  if (firstVisitBlocked()) return;
+  track('key_modal_auto');
+  await Gen.askForKey({ from: 'first_visit' });
+}
+
 (async () => {
   // The loader runs the kernel files in order whatever happened to the one
   // before, so a kernel file that failed to parse shows up here as its
@@ -507,6 +557,7 @@ function watchLiveness() {
   window.__vibeosOpenChat = () => focusOrOpen(UI.live().SHELL.chat);
   window.__vibeosOpenAgent = () => UI.live().openAgent();
   watchLiveness();
+  offerAgentOnFirstVisit().catch(e => console.warn('the first-visit agent offer failed:', e));
   if (Workspace.open && Workspace.private && canPickDirectory) {
     try {
       if (!sessionStorage.getItem('vibeos-persist-hint')) {

@@ -483,6 +483,10 @@ export function AppWindow(body, win, { app }) {
   };
   const watch = off => { offs.push(off); Windows.onDispose(win, off); };
   if (missing.some(c => VM_CAPS.includes(c)) && VM.state !== 'failed' && VM.state !== 'unavailable') watch(VM.on(recheck));
+  // A tty whose start failed is tried once more when a window asks for it
+  // (VM.retryTty, the timed retries spent); the watcher starts the app if it
+  // comes up.
+  if (missing.includes('tty') && VM.state === 'ready' && VM.ttyState === 'failed') VM.retryTty();
   // A model is the tab's own (Gen) or the connected agent's (RemoteBridge,
   // when its client samples): either arriving starts the window.
   if (missing.includes('ai')) { watch(Gen.on(recheck)); watch(RemoteBridge.on(recheck)); }
