@@ -1,0 +1,21 @@
+web/ui/dock.js
+  s_16629319d5ff14::t_5fd13b9f9da7c0 52,59-61,80
+web/ui/settings.js
+  s_16629319d5ff14::t_936a5029c1c04c 16,71,114,123,519-520,522-525,554-555,557,561,675-676,684-685,690,699,723,736,739,920,922-924,934,937,940-941,1008-1009,1035,1040-1045,1047,1049,1051,1198,1201,1215,1219
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e3372e9f1b623864980bc2129def630dc02e27aa",
+  "prompts": {},
+  "sessions": {
+    "s_16629319d5ff14": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "178efc37-68c6-4170-ba93-827188df0ccd",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
