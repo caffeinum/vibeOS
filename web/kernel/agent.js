@@ -161,7 +161,7 @@ const Gen = {
       overlay.innerHTML = `
         <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="keyModalTitle">
           <h2 id="keyModalTitle">vibeOS needs an agent.</h2>
-          <p class="small dimmer" id="keyModalSubtitle" style="margin:0">Connect the one you already have, or sign in.</p>
+          <p class="small dimmer" id="keyModalSubtitle" style="margin:0">Connect one you already use, or sign in.</p>
           <div class="key-modal-actions col">
             <div class="col" id="keyModalStep1">
               <button type="button" class="btn p" id="keyConnectBtn">Connect your agent</button>
@@ -172,7 +172,7 @@ const Gen = {
                     <div class="copy-line"><code class="mono" id="keyConnectCmd"></code><button type="button" class="btn sm" id="keyConnectCopy">Copy</button></div>
                   </li>
                   <li><b>Open your agent in a folder</b>
-                    <p class="tiny dimmer">In your project folder (or your home folder) run <code>claude</code> — Cursor and Codex work too.</p>
+                    <p class="tiny dimmer">In your project folder (or your home folder) run <code>claude</code>. Cursor and Codex work too.</p>
                     <div class="copy-line"><code class="mono" id="keyConnectRun"></code><button type="button" class="btn sm" id="keyConnectRunCopy">Copy</button></div>
                   </li>
                   <li><b>Ask it something</b>
@@ -192,12 +192,12 @@ const Gen = {
               <button type="button" class="btn" id="keyPasteBtn">Paste API key (OpenAI / Anthropic)</button>
               <div class="col" id="keyPasteForm" hidden>
                 <input type="password" id="keyInput" placeholder="sk-... or sk-ant-..." autocomplete="off" spellcheck="false">
-                <p class="tiny dimmer" style="margin:0">Stored only in this browser, sent straight to the provider — never to vibeos.sh.</p>
+                <p class="tiny dimmer" style="margin:0">Your key is stored only in this browser and sent straight to the provider, never to vibeos.sh.</p>
                 <button type="button" class="btn p sm" id="keySaveBtn">Save</button>
               </div>
               <button type="button" class="btn" id="keyCreateBtn">Create account</button>
               <p class="note" id="keyCreateNote" hidden style="margin:0">
-                Coming soon! <a href="/get-access">Subscribe to waitlist</a> to know it first.
+                Coming soon! <a href="/get-access">Join the waitlist</a> to be the first to know.
               </p>
               <div class="col" id="keyAccount" hidden>
                 <p class="note" id="keyAccountLine" style="margin:0"></p>
@@ -230,7 +230,7 @@ const Gen = {
         overlay.querySelector('#keyModalStep1').hidden = false;
         overlay.querySelector('#keyModalStep2').hidden = true;
         overlay.querySelector('#keyCreateNote').hidden = true;
-        overlay.querySelector('#keyModalSubtitle').textContent = 'Connect the one you already have, or sign in.';
+        overlay.querySelector('#keyModalSubtitle').textContent = 'Connect one you already use, or sign in.';
       };
       // The first door: an agent the person already pays for. Pairing mints a
       // token for this tab; the modal closes by itself the moment the agent

@@ -103,7 +103,7 @@ export function ChatApp(body, win) {
   // and does not exist on vibeos.sh — it read as an error on the hosted build.
   // Offer the two things that actually work, as a button rather than a chore.
   const readyLine = () =>
-    `Ask for anything. I build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM — whichever fits.<br><span class="tiny dimmer" id="model"></span>`;
+    `Ask for anything. I’ll build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM, whichever makes sense.<br><span class="tiny dimmer" id="model"></span>`;
   // Three shapes: a model is connected; no model but an agent drives the
   // desktop through vibeos-mcp (then this box is optional, not missing); or
   // nothing yet. The agent's name is the MCP client's own string: textContent.
@@ -111,8 +111,8 @@ export function ChatApp(body, win) {
   const paintIntro = () => {
     const agent = RemoteBridge.state === 'connected';
     const html = Gen.available ? readyLine()
-      : agent ? `<b class="part yes"></b> is connected through vibeos-mcp and drives this desktop.<br>
-         <span class="tiny dimmer">Type here — your messages reach the agent on its next tool call (get_mailbox). This box can also run a second model beside it.</span> <span class="row" style="margin-top:8px"><button class="btn sm" id="chatConnect">Connect a model here too</button></span>`
+      : agent ? `<b class="part yes"></b> is connected through vibeos-mcp and can drive this desktop.<br>
+         <span class="tiny dimmer">Type here and your messages get to the agent on its next tool call (get_mailbox). This box can also run a second model alongside it.</span> <span class="row" style="margin-top:8px"><button class="btn sm" id="chatConnect">Connect a model here too</button></span>`
       : `<b class="part">No model connected yet.</b> Connect one to generate apps and scripts from the chat.<br>
          <span class="row" style="margin-top:8px"><button class="btn p sm" id="chatConnect">Connect a model</button></span>`;
     if (introEl && introEl.isConnected) { introEl.innerHTML = html; }
@@ -149,7 +149,7 @@ export function ChatApp(body, win) {
     if (RemoteBridge.state === 'connected') {
       input.disabled = false;
       input.placeholder = agentOnly
-        ? `message ${RemoteBridge.detail || 'your agent'} — delivered on its next tool call`
+        ? `message ${RemoteBridge.detail || 'your agent'} — it’ll get this on its next tool call`
         : placeholder;
     }
   };
@@ -204,8 +204,8 @@ export function ChatApp(body, win) {
   // The id stays `addKeyNow`: the paint hook scrolls it into view by that name.
   const paintOffer = () => {
     const b = bubble('vibeos', `
-      <span class="part">No model is connected — generation needs one.</span>
-      <p class="tiny dimmer" style="margin:6px 0 8px">Connect and I'll build this for real. An agent you already pay for works — Claude Code, Cursor or Codex — with no API key.</p>
+      <span class="part">No model is connected, and building anything needs one.</span>
+      <p class="tiny dimmer" style="margin:6px 0 8px">Connect one and I’ll build this for real. An agent you already pay for works (Claude Code, Cursor or Codex), no API key needed.</p>
       <button class="btn p sm" id="addKeyNow">Connect a model</button>`);
     b.querySelector('#addKeyNow').onclick = () => { track('offer_connect_click'); Chat.retryWithKey(); };
     return b;
@@ -398,7 +398,7 @@ export function ChatApp(body, win) {
   // While a turn runs the box still takes a message — it reaches the model at
   // the turn's next step — and says so. Send stays enabled: nothing about the
   // composer changes but this line.
-  const STEERING = 'the agent is working — send anyway and it takes this at its next step';
+  const STEERING = 'the agent is working: send anyway and it’ll pick this up at its next step';
   const hint = () => {
     if (!Chat.ready) return;
     if (RemoteBridge.state === 'connected' && !Gen.available) return agentMode();

@@ -88,6 +88,7 @@ export async function paintDock(dock = document.getElementById('dock')) {
   const addIcon = (iconSrc, label, title, onclick, cls) => {
     const b = document.createElement('button');
     b.title = title;
+    b.setAttribute('aria-label', title);
     b.onclick = onclick;
     if (cls) b.className = cls;
     if (cls === 'dock-start') b.id = 'dockStart';
@@ -193,7 +194,7 @@ function bootSplash() {
       <div class="bs-bar" aria-hidden="true"><i></i><i></i><i></i></div>
       <p class="bs-status"></p>
     </div>
-    <p class="bs-hint">Linux keeps starting in the background. <button type="button" class="bs-skip">Skip</button></p>
+    <p class="bs-hint">Linux is still starting in the background. <button type="button" class="bs-skip">Skip</button></p>
     <div class="bs-welcome">
       <div class="bs-band"></div>
       <div class="bs-mid"><p class="bs-hello">welcome back.</p><img class="bs-pic" alt=""></div>
@@ -347,7 +348,7 @@ function startTray() {
   let lastName = signedIn ? agentLabel() : 'An agent';
   const sayOut = (name, revoked) => {
     signedIn = false;
-    balloon(name + ' has signed out', revoked ? 'The pairing was ended; it can no longer reach this desktop.'
+    balloon(name + ' has signed out', revoked ? 'The pairing was ended, so it can’t reach this desktop anymore.'
       : 'It disconnected. It can come back with the same pairing.');
   };
   const offAgent = RemoteBridge.on(guard('agent', state => {
@@ -361,7 +362,7 @@ function startTray() {
         signedIn = true;
         const resumed = firstIn && RemoteBridge.pairedHow === 'reload';
         firstIn = false;
-        if (!resumed) balloon(agentLabel() + ' has signed in', 'It can edit this desktop and run commands in its Linux machine. Settings › Capabilities ends it.');
+        if (!resumed) balloon(agentLabel() + ' has signed in', 'It can edit this desktop and run commands in its Linux machine. Settings › Capabilities ends the pairing.');
       }), nameBeat);
       return;
     }
@@ -378,7 +379,7 @@ function startTray() {
   // create_app: a balloon in every theme, the solitaire cascade in winxp.
   // A ui on a kernel forked before AppEvents existed simply has neither.
   const offApps = typeof AppEvents !== 'undefined' ? AppEvents.on(info => {
-    guard('app', () => balloon(info.title + ' is ready', 'Made just now — it is in the dock.'))();
+    guard('app', () => balloon(info.title + ' is ready', 'Made just now. It’s in the dock.'))();
     guard('cascade', () => { const c = UI.stable().cascadeWindow; if (c) c(info.el); })();
   }) : (console.warn('kernel has no AppEvents (a fork of kernel/agent.js older than the tray): no app balloons'), () => {});
 
@@ -430,7 +431,7 @@ const ASK_TIMING = { deskMs: 5000, silentMs: 60000, returnGapMs: 3600000, pollMs
 const ASK_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash';
 const ASK_COPY = {
   returner: "What brought you back to vibeOS? Leave your email and we'll ask you a couple of questions.",
-  silent: "Not sure what to do here? Tell us what you hoped for: leave your email and we'll ask you a couple of questions.",
+  silent: "Not sure what to do here? Tell us what you were hoping for: leave your email and we'll ask you a couple of questions.",
 };
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -549,10 +550,18 @@ function paintAsk(group) {
   send.className = 'btn p ask-send';
   send.textContent = 'Send';
   form.append(input, send);
+  // The other way to answer: the /talk interviewer, in a new tab, now.
+  const talk = document.createElement('a');
+  talk.className = 'ask-talk';
+  talk.href = new URL('/talk?from=in-app&group=' + encodeURIComponent(group), location.origin).href;
+  talk.target = '_blank';
+  talk.rel = 'noopener';
+  talk.textContent = 'or answer 5 quick questions now';
+  talk.onclick = () => track('ask_talk_click', { group });
   const note = document.createElement('p');
   note.className = 'ask-note';
   note.hidden = true;
-  el.append(head, form, note);
+  el.append(head, form, talk, note);
   document.body.appendChild(el);
   // Above whatever sits at the bottom, as the balloons are.
   const tops = [document.getElementById('dock'), document.getElementById('analyticsBar')]

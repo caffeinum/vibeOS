@@ -334,7 +334,7 @@
   [data-theme="winxp"] .ask-email { background: #ffffff; color: #000000; border: 1px solid #7f9db9; border-radius: 0; padding: 3px 5px; }
   [data-theme="winxp"] .ask-note { color: #000000; }
   [data-theme="winxp"] .ask-note.err { color: #c00000; }
-  [data-theme="winxp"] .ask-book { color: #0000ff; font-weight: 400; text-decoration: underline; }
+  [data-theme="winxp"] .ask-book, [data-theme="winxp"] .ask-talk { color: #0000ff; font-weight: 400; text-decoration: underline; }
   [data-theme="winxp"] .ask-x {
     width: 15px; height: 15px; padding: 0; display: grid; place-items: center; font-size: 12px;
     color: #4d4d4d; background: #ffffff; border: 1px solid #aca899; border-radius: 3px;
@@ -761,6 +761,8 @@
   .ask-note { margin: 0; color: var(--dim); overflow-wrap: anywhere; }
   .ask-note.err { color: var(--no); }
   .ask-book { color: var(--accent); font-weight: 600; }
+  .ask-talk { align-self: flex-start; color: var(--accent); font-weight: 600; text-decoration: none; }
+  .ask-talk:hover { text-decoration: underline; }
   /* The pairing-link dialog: its Remote Assistance header is winxp's. */
   .link-modal { display: flex; flex-direction: column; gap: 10px; }
   .link-modal h2 { margin-bottom: 0; }

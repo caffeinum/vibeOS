@@ -562,16 +562,16 @@ async function offerAgentOnFirstVisit() {
     try {
       if (!sessionStorage.getItem('vibeos-persist-hint')) {
         sessionStorage.setItem('vibeos-persist-hint', '1');
-        Chat.line('Using private browser storage for now. Settings › Workspace → Choose folder… saves apps and chat on your disk across sessions.');
+        Chat.line('Using private browser storage for now. To keep your apps and chat on disk across sessions, pick a folder in Settings › Workspace → Choose folder….');
       }
     } catch {}
   }
   if (window.__vibeosBoot.source === 'served' && window.__vibeosBoot.storedFailed) {
-    recoveryBar('Your edited OS did not finish booting last time, so this is the stock one.',
+    recoveryBar('Your edited OS didn’t finish booting last time, so you’re getting the stock one.',
                 'Fix the system/ files in your workspace (or delete them) and reload. Your files and apps are untouched.');
   }
   if (recovering) {
-    recoveryBar('The last boot did not finish, so this one skipped your saved theme.',
-                'Your theme is still stored. Set it again from Settings > Design, or ignore this.');
+    recoveryBar('The last boot didn’t finish, so this one skipped your saved theme.',
+                'Your theme is still stored. You can set it again in Settings › Design, or just ignore this.');
   }
 })();

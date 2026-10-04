@@ -265,9 +265,13 @@ const kernelBlobs = {};
 window.addEventListener('error', e => {
   const stack = e.error && e.error.stack;
   const foreign = e.filename ? !ownUrl(e.filename) : !stackUrls(stack).some(ownUrl);
+  // aleks: "no need to filter, its a real error". An error from outside
+  // vibeOS (an extension's content script) is still shown and logged for the
+  // agent, labelled as outside; it never counts against the boot.
   if (foreign) {
-    logError(e.message || 'error', 'third-party' + (e.filename ? ' ' + e.filename : ''), false);
-    console.warn('vibeOS: an error from outside vibeOS (an extension?) was not shown:', e.message, e.filename || stack || '');
+    const where = e.filename || stackUrls(stack)[0] || '';
+    logError(e.message || 'error', 'third-party' + (where ? ' ' + where : ''), true);
+    paintBar('An error from outside vibeOS.', (e.message || 'error') + (where ? ' (' + where + ')' : ' (no file: likely a browser extension)'));
     return;
   }
   if (!bootLife.verdict && !bootLife.error) bootLife.error = e.message || 'error';
@@ -284,8 +288,8 @@ window.addEventListener('unhandledrejection', e => {
   const text = (r && r.message) || String(r);
   const urls = stackUrls(r && r.stack);
   if (urls.length && !urls.some(ownUrl)) {
-    logError(text, 'third-party ' + urls[0], false);
-    console.warn('vibeOS: a rejection from outside vibeOS (an extension?) was not shown:', text, urls[0]);
+    logError(text, 'third-party ' + urls[0], true);
+    paintBar('An error from outside vibeOS.', text + ' (' + urls[0] + ')');
     return;
   }
   if (!bootLife.verdict && !bootLife.error) bootLife.error = text;

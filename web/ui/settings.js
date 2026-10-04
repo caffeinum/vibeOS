@@ -976,6 +976,7 @@ export function SettingsApp(body, win, opts) {
   // a detached node kept repainting until the window closed.
   const show = (tab) => {
     Windows.dispose(win);
+    if (opts) opts.tab = tab.id;
     [...nav.children].forEach(b => b.style.background = b.dataset.id === tab.id ? 'var(--sel)' : 'transparent');
     pane.innerHTML = '';
     pane.style.padding = '';
