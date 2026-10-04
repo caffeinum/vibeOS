@@ -14,8 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Vibe OS",
-  description: "Next.js app with Claude Code integration",
+  title: "vibeOS",
+  description:
+    "vibeOS (vibeos.sh) — AI-native browser desktop with a real Linux VM in WASM and agents that edit the system. Try the browser build at vibeos.sh/app.",
 };
 
 export default function RootLayout({
