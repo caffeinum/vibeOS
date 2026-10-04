@@ -1,0 +1,35 @@
+web/index.html
+  s_294fbce5a2392b::t_977dfcc395291a 268-270,272-274,291-292
+web/kernel/agent.js
+  s_294fbce5a2392b::t_03d5f6f278a571 164,175,195,200,233
+web/kernel/boot.js
+  s_294fbce5a2392b::t_c2c57c1ef4e812 565,570,574-575
+web/os.css
+  s_294fbce5a2392b::t_d39994f1f26907 337,764-765
+web/tools.js
+  s_294fbce5a2392b::t_da023e910e1aeb 80
+web/ui/chat.js
+  s_294fbce5a2392b::t_ed3fbf3684f654 106,114-115,152,207-208,401
+web/ui/dock.js
+  s_294fbce5a2392b::t_5a269b4a245c73 91,197,351,365,382,434,553-560,564
+web/ui/settings.js
+  s_294fbce5a2392b::t_28db117fb8c520 979
+web/ui/windows.js
+  s_294fbce5a2392b::t_40fb7214e21c08 516,538,590-594,628-645
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9810161267c5129dd4e7bd5e2b135984e06373d3",
+  "prompts": {},
+  "sessions": {
+    "s_294fbce5a2392b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_294fbce5a2392b",
+        "model": "unknown"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
