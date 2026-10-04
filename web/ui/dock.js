@@ -49,16 +49,16 @@ function mcpPill() {
   if (!paired && !(RemoteBridge.token && RemoteBridge.state === 'pairing')) return { suffix: '', agent: '', on: false, reconnecting: false, titleExtra: '' };
   const live = RemoteBridge.live();
   if (live) return { suffix: ' (mcp)', agent: name, on: true, reconnecting: false, titleExtra: ' ' + name + ' drives this desktop through vibeos-mcp with its own model.' };
-  return { suffix: ' (reconnecting)', agent: name, on: false, reconnecting: true, titleExtra: ' ' + name + ' is paired but the relay socket is down or redialing — tool calls may fail until it is back.' };
+  return { suffix: ' (reconnecting)', agent: name, on: false, reconnecting: true, titleExtra: ' ' + name + ' is paired, but the relay socket is down or redialing. Tool calls may fail until it’s back.' };
 }
 export function loginLine() {
   const mcp = mcpPill();
   const agent = mcp.agent;
   const via = mcp.agent ? (mcp.reconnecting && !Gen.available ? mcp.suffix : mcp.reconnecting ? ' (reconnecting)' : ' + mcp') : '';
   if (Gen.viaServer) return { text: 'Server · ' + (Gen.model || 'local') + via, on: true, warn: mcp.reconnecting, title: 'A local vibeOS server holds the model.' + (agent ? (mcp.reconnecting ? mcp.titleExtra : ' ' + agent + ' also drives this desktop through vibeos-mcp.') : '') };
-  if (Gen.provider === 'openai-codex') return { text: 'Codex · ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'Signed in with ChatGPT; the model is ' + Gen.model + (Gen.codexModel ? ' (set in Settings › Model)' : ' (the default)') + '. Tokens stay in this browser.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
-  if (Gen.key && Gen.provider) return { text: 'API key · ' + Gen.provider + ' ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'A pasted ' + Gen.provider + ' key, kept in this browser; the model is ' + Gen.model + '.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
-  if (agent) return { text: 'Agent · ' + agent + (mcp.reconnecting ? mcp.suffix : ' (mcp)'), on: mcp.on, warn: mcp.reconnecting, title: mcp.reconnecting ? mcp.titleExtra.slice(1) : agent + ' drives this desktop through vibeos-mcp with its own model; no model is connected here.' };
+  if (Gen.provider === 'openai-codex') return { text: 'Codex · ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'Signed in with ChatGPT. The model is ' + Gen.model + (Gen.codexModel ? ' (set in Settings › Model)' : ' (the default)') + '. Your tokens stay in this browser.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  if (Gen.key && Gen.provider) return { text: 'API key · ' + Gen.provider + ' ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'A pasted ' + Gen.provider + ' key, kept in this browser. The model is ' + Gen.model + '.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  if (agent) return { text: 'Agent · ' + agent + (mcp.reconnecting ? mcp.suffix : ' (mcp)'), on: mcp.on, warn: mcp.reconnecting, title: mcp.reconnecting ? mcp.titleExtra.slice(1) : agent + ' drives this desktop through vibeos-mcp with its own model. No model is connected here.' };
   return { text: 'no model', on: false, warn: false, title: 'No model connected. Click to connect one.' };
 }
 
@@ -77,7 +77,7 @@ export function paintMode() {
   document.getElementById('modeDot').className = 'dot' + (native ? '' : ' warn');
   document.getElementById('modePill').title = native
     ? 'Local vibeOS binary detected on 127.0.0.1:4571 — full capabilities.'
-    : 'No local binary. Browser capabilities only.';
+    : 'No local binary, so only what a browser can do.';
 }
 
 // The dock lists vibeOS, then the apps it has built, then Settings — the same

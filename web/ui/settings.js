@@ -13,7 +13,7 @@ function imageSwitch() {
         <button class="btn sm${id === current ? ' p' : ''}" id="img-${id}" ${id === current ? 'disabled' : ''}>${id === current ? 'running' : 'switch to'} ${im.label}</button>
         <span class="tiny dimmer">${im.blurb}${id === VM.image && id !== current ? ' · boots next time' : ''}</span>
       </div>`).join('')}
-    <span class="tiny dimmer">switching restarts the machine; packages you installed live in memory and go away with it</span>`;
+    <span class="tiny dimmer">switching restarts the machine. Packages you installed live in its memory, so they go away with it</span>`;
   if (VM.fallback) {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;gap:8px;align-items:baseline';
@@ -68,7 +68,7 @@ function snapshotBox() {
     const describe = s => `<b>${fmtMB(s.bytes)}</b> <span class="dimmer">(${fmtMB(s.rawBytes)} of machine state) · saved ${new Date(s.savedAt).toLocaleTimeString()} · in ${s.where}`;
     box.innerHTML = `
       <span class="small" id="snapText">${lookupError ? `<span class="no">no snapshot store: ${lookupError}</span>`
-        : snap && snap.corrupt ? `<span class="no">Snapshot in ${snap.where} is unusable: ${escHtml(snap.corrupt)}.</span> <span class="dimmer">The next boot will discard it and run the kernel; Forget does it now.</span>`
+        : snap && snap.corrupt ? `<span class="no">Snapshot in ${snap.where} is unusable: ${escHtml(snap.corrupt)}.</span> <span class="dimmer">The next boot will throw it away and boot fresh. Forget does that now.</span>`
         : snap ? `Snapshot ${describe(snap)}${last ? ' · ' + last.reason + ', ' + (last.ms / 1000).toFixed(1) + 's' : ''}${VM.restored ? ' · <b>this machine was restored from it</b>' : ''}</span>`
         : `<span class="dimmer">No snapshot of ${IMAGES[image].label} yet — one is taken ${VM.AUTO_SNAPSHOT_MS / 1000}s after a cold boot, and after every apt install.</span>`}</span>
       <button class="btn p sm" id="snapNow" ${VM.ready() ? '' : 'disabled'}>Snapshot now</button>
@@ -111,7 +111,7 @@ export function ConsoleApp(body, win) {
       const hint = document.createElement('div');
       hint.className = 'tiny dimmer';
       hint.style.cssText = 'padding:6px 10px;border-bottom:1px solid var(--barline)';
-      hint.textContent = 'Machine console — boot and kernel output. Run commands in the Terminal.';
+      hint.textContent = 'Machine console: boot and kernel output. To run commands, use the Terminal.';
       body.appendChild(hint);
       body.appendChild(imageSwitch());
       body.appendChild(snapshotBox());
@@ -120,7 +120,7 @@ export function ConsoleApp(body, win) {
     }
     body.style.padding = '14px';
     body.innerHTML = VM.state === 'unavailable'
-      ? `<h3>The VM isn't served here</h3><p class="small muted">Needs ~11 MB of assets this page cannot fetch cross-origin. Run it locally.</p>`
+      ? `<h3>The VM isn't served here</h3><p class="small muted">It needs about 11 MB of assets, and this page can’t fetch them cross-origin. Run it locally instead.</p>`
       : VM.state === 'failed'
         ? `<p class="no small">VM failed: ${VM.detail || 'unknown'}</p>`
         : `<p class="small muted">Starting the machine…</p>`;
@@ -516,13 +516,13 @@ export function WorkspaceApp(body) {
         ${!canPickDirectory ? `<div class="upsell" style="margin:10px 0">
             <b class="small">A real folder isn't available here</b>
             <p class="small muted" style="margin:6px 0 0">${inCrossOriginFrame
-              ? `This page is running <b>inside a cross-origin frame</b>, and every browser forbids
-                 file pickers there — nothing to do with vibeOS. Open the same page top-level
+              ? `This page is running <b>inside a cross-origin frame</b>, and browsers don’t allow
+                 file pickers there (that part isn’t vibeOS). Open the same page top-level
                  (or run it locally) and the picker works.`
-              : `This browser has no File System Access API — Firefox and Safari still don't ship it.`}
-              <br><br>You can still use everything below with <b>private browser storage</b>: same
-              code path, same files, but they live in this browser instead of on your disk — which
-              is exactly the case that needs an explicit export to reach the native build.</p>
+              : `This browser doesn’t have the File System Access API. Firefox and Safari still don’t ship it.`}
+              <br><br>You can still use everything below with <b>private browser storage</b>. It’s the
+              same code and the same files, they just live in this browser instead of on your disk,
+              so getting them to the native build takes an explicit export.</p>
           </div>` : ''}
         <div class="row" style="margin-top:10px">
           <button class="btn ${canPickDirectory ? 'p' : ''}" id="pick" ${canPickDirectory ? '' : 'disabled'}>Save to a folder…</button>
@@ -551,14 +551,14 @@ export function WorkspaceApp(body) {
         <b class="small">Take it with you</b>
         <p class="small muted" style="margin:6px 0 0">${Workspace.private
           ? `These ${apps.length} ${apps.length === 1 ? 'file lives' : 'files live'} in <b>private browser
-             storage</b>, not on your disk — so this is the case that <i>does</i> need an export to reach
-             the native build. Open the page top-level to write to a real folder instead.`
+             storage</b>, not on your disk, so getting them to the native build <i>does</i> take an
+             export. Open the page top-level to write to a real folder instead.`
           : `These are ${apps.length} plain ${apps.length === 1 ? 'file' : 'files'} on your disk. The native
-             build opens this same folder — no export, no account, no sync. Zip it, git it, move it.`}
+             build opens this same folder: no export, no account, no sync. Zip it, git it, move it.`}
         </p>
       </div>`;
     const list = body.querySelector('#list');
-    if (!apps.length && !unlisted.length) list.innerHTML = '<p class="small dimmer">No apps yet — build one in the Agent window.</p>';
+    if (!apps.length && !unlisted.length) list.innerHTML = '<p class="small dimmer">No apps yet. Ask for one in the vibeOS chat.</p>';
     // Every string on these cards — name, title, requires, reason — comes from
     // a file the guest can write, so none of it goes through innerHTML. A
     // filename of `<img src=x onerror=…>` in /mnt ran in-origin, next to the
@@ -672,8 +672,8 @@ export function CapsApp(body, win) {
   ];
   body.innerHTML = `
     <p class="small muted" style="margin-top:0">
-      Live probe of the current provider: <b>${CAP.label}</b>. The desktop asks this table what it
-      can do — it never branches on "is this a browser".
+      A live check of the current provider: <b>${CAP.label}</b>. The desktop asks this table what it
+      can do. It never asks “is this a browser?”
     </p>
     <table><thead><tr><th>Capability</th><th>Now</th><th>Notes</th></tr></thead><tbody>
     ${rows.map(([label, key, note]) => `<tr><td>${label}</td>
@@ -681,13 +681,13 @@ export function CapsApp(body, win) {
       <td class="dimmer tiny">${note}</td></tr>`).join('')}
     </tbody></table>
     <p class="note" style="margin-top:12px">
-      Everything marked <span class="no"><b>no</b></span> flips to yes when this same page is served
-      by the local vibeOS binary. The UI code does not change — only the provider behind it.
+      Everything marked <span class="no"><b>no</b></span> flips to yes when the local vibeOS binary
+      serves this same page. The UI code doesn’t change, only the provider behind it.
     </p>
     <h3 style="margin:18px 0 6px">Bring your own agent</h3>
     <p class="small muted" style="margin:0 0 8px">
       Claude Code, Cursor or Codex can drive this desktop through <b>vibeos-mcp</b> with their own
-      model and subscription, instead of a pasted key. Pair, then add the command to your agent.
+      model and subscription, so you don’t need to paste a key. Pair, then add the command to your agent.
     </p>
     <p class="small" id="mcpState" style="margin:0 0 8px"></p>
     <ol class="connect-steps" id="mcpCmd" hidden style="margin:0 0 10px">
@@ -696,7 +696,7 @@ export function CapsApp(body, win) {
         <div class="copy-line"><code class="mono" id="mcpCommand" style="user-select:all"></code><button class="btn sm" id="mcpCopy">copy</button></div>
       </li>
       <li><b>Open your agent in a folder</b>
-        <p class="tiny dimmer">In your project folder (or your home folder) run <code>claude</code> — Cursor and Codex work too.</p>
+        <p class="tiny dimmer">In your project folder (or your home folder) run <code>claude</code>. Cursor and Codex work too.</p>
         <div class="copy-line"><code class="mono" id="mcpRun"></code><button class="btn sm" id="mcpRunCopy">copy</button></div>
       </li>
       <li><b>Ask it something</b>
@@ -720,7 +720,7 @@ export function CapsApp(body, win) {
 function mcpPane(body, win) {
   const state = body.querySelector('#mcpState'), cmd = body.querySelector('#mcpCmd'), code = body.querySelector('#mcpCommand');
   const trust = body.querySelector('#mcpTrust'), pair = body.querySelector('#mcpPair'), retry = body.querySelector('#mcpRetry'), revoke = body.querySelector('#mcpRevoke'), copy = body.querySelector('#mcpCopy');
-  trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine; the relay sees the calls. The token is remembered in this browser for seven days — Forget this agent ends it, closing the tab does not. On the default relay, pairing stays up while keepalive pings succeed; a socket recycle reattaches the same token without starting over.';
+  trust.textContent = 'An agent with this token has root on this desktop: it can edit the OS source and run commands in the machine, and the relay sees every call. This browser remembers the token for seven days. Forget this agent ends it; closing the tab doesn’t. On the default relay the pairing stays up as long as keepalive pings get through, and when the socket is recycled the same token reattaches without starting over.';
   const refusal = RemoteBridge.refusal();
   let probe = null;
   // Which relay this tab is on, and the instance that answered. On the
@@ -733,10 +733,10 @@ function mcpPane(body, win) {
     state.textContent =
       refusal ? 'Pairing is refused here — ' + refusal
       : st === 'off' && probe && !probe.ok ? probe.reason
-      : st === 'off' ? 'No agent paired. Pairing mints a token for this tab.'
+      : st === 'off' ? 'No agent paired yet. Pairing makes a new token for this tab.'
       : st === 'pairing' ? 'Pairing — ' + d + '…'
       : st === 'waiting' ? 'Waiting for an agent: paste the command into your MCP client. Talk to your agent in its own window; it drives this desktop, and the built-in chat keeps working alongside it.' + inst()
-      : st === 'connected' ? d + ' is connected and driving this desktop (' + RemoteBridge.calls + ' call' + (RemoteBridge.calls === 1 ? '' : 's') + '). Type in vibeOS chat to reach it (get_mailbox on its next tool call).' + inst()
+      : st === 'connected' ? d + ' is connected and driving this desktop (' + RemoteBridge.calls + ' call' + (RemoteBridge.calls === 1 ? '' : 's') + '). Type in the vibeOS chat to reach it; it reads your message (get_mailbox) on its next tool call.' + inst()
         + (RemoteBridge.sampling ? ' ' + d + ' can power apps (sampling).' : ' ' + d + ' cannot power apps: its client does not support sampling.')
       : 'Not connected — ' + d;
     const hasToken = !!RemoteBridge.token;
@@ -917,11 +917,11 @@ export function AboutApp(body) {
           <td class="dimmer tiny">Blob URL + dynamic <code>import()</code>.</td></tr>
       <tr><td><b>Apps are real files you keep</b></td>
           <td class="${CAP.supports.files ? 'yes' : 'no'}"><b>${CAP.supports.files ? 'shown' : 'unavailable here'}</b></td>
-          <td class="dimmer tiny">Written to <code>vibeos/apps/*.js</code> on your disk, not browser storage.</td></tr>
+          <td class="dimmer tiny">Saved as <code>apps/*.js</code> in your workspace: a folder on your disk, or private browser storage until you pick one.</td></tr>
       <tr><td><b>A real Linux, and a bridge to your folder</b></td>
-          <td class="part"><b>local only</b></td>
-          <td class="dimmer tiny">v86 boots an actual x86 kernel; <code>create_file</code>/<code>read_file</code>
-              move bytes across its 9p mount. Needs the 11&nbsp;MB assets, so it only runs from a local server.</td></tr>
+          <td class="yes"><b>shown</b></td>
+          <td class="dimmer tiny">v86 boots an actual x86 kernel in this tab, and your workspace’s files show up in its
+              <code>/mnt</code> over a 9p mount.</td></tr>
       <tr><td><b>One UI, browser or native</b></td>
           <td class="part"><b>partial</b></td>
           <td class="dimmer tiny">Both providers implemented; the native daemon isn't built — it probes <code>127.0.0.1:4571</code> and finds nothing.</td></tr>
@@ -931,15 +931,14 @@ export function AboutApp(body) {
     <p class="small muted">
       Because it makes "download the binary and keep working" free. The apps were never in browser
       storage, so there is nothing to export, sync, or migrate — the native build opens the same
-      directory and finds the same files. Build a <i>terminal</i> in the Agent window to see the
-      other half: it saves fine, and refuses to run here, and says why.
+      directory and finds the same files.
     </p>
 
-    <h3 style="margin-top:16px">The boundary that does not move</h3>
+    <h3 style="margin-top:16px">The boundary that doesn’t move</h3>
     <p class="small muted">
       A tab can run a wasm shell, real workers, and websockets — more than people assume. What it
-      cannot do is reach <i>your</i> binaries, <i>your</i> processes, or files outside folders you
-      pick. So a browser vibeOS is a real computer; it just isn't <i>your</i> computer.
+      can’t do is reach <i>your</i> binaries, <i>your</i> processes, or files outside folders you
+      pick. So a browser vibeOS is a real computer. It just isn’t <i>your</i> computer.
     </p>
     <p class="note">Everything runs locally in your tab. Nothing is uploaded.</p>`;
 }
@@ -1006,9 +1005,8 @@ export function NetworkApp(body, win) {
     body.innerHTML = `
       <h3>Network</h3>
       <p class="small muted" style="margin-top:0">
-        The VM has no network unless you give it a relay. v86's <code>fetch</code> backend turns the
-        guest's HTTP requests into browser <code>fetch()</code> calls, and a CORS proxy makes those
-        reach the open internet.
+        The VM has no network unless you give it a relay. The relay speaks WISP: the guest’s
+        TCP connections travel to it over one WebSocket, and it opens them on the internet for you.
       </p>
       <div class="col" style="margin-bottom:10px">
         <input type="text" id="relay" placeholder="${NET_DEFAULT}" value="${on ? VM.relay : ''}" />
@@ -1034,23 +1032,23 @@ export function NetworkApp(body, win) {
       </p>
       ${VM.net === 'disconnected' ? '<button class="btn p sm" id="reconnect" style="margin-bottom:10px">Restart the machine</button>' : ''}
       <p class="note">
-        <b>Takes effect on the next VM start</b> — reload the page after changing it.
+        <b>This takes effect on the next VM start</b>, so reload the page after changing it.
         ${on ? 'On by default, through our own relay.' : 'Currently <b>off</b>: the guest can reach nothing.'}
       </p>
       <h3 style="margin-top:16px">What this does and does not give you</h3>
       <table><tbody>
-        <tr><td>Plain HTTP from the guest</td><td class="yes"><b>yes</b></td>
-            <td class="dimmer tiny">via the proxy, to allowlisted hosts</td></tr>
-        <tr><td>HTTPS / TLS from the guest</td><td class="no"><b>no</b></td>
-            <td class="dimmer tiny">the fetch backend speaks HTTP; TLS needs the <code>wisp</code> backend and a WISP server</td></tr>
-        <tr><td>Raw TCP, ssh, listening sockets</td><td class="no"><b>no</b></td>
-            <td class="dimmer tiny">same reason</td></tr>
+        <tr><td>HTTP and HTTPS from the guest</td><td class="yes"><b>yes</b></td>
+            <td class="dimmer tiny">curl, wget, apk and apt all go out through the relay</td></tr>
+        <tr><td>Outbound TCP (ssh, git)</td><td class="part"><b>some ports</b></td>
+            <td class="dimmer tiny">the relay allows ${NET_PORTS.join(', ')}</td></tr>
+        <tr><td>Listening sockets</td><td class="no"><b>no</b></td>
+            <td class="dimmer tiny">nothing on the internet can dial into the guest</td></tr>
         <tr><td>Arbitrary destinations</td><td class="part"><b>public only</b></td>
-            <td class="dimmer tiny">the relay refuses loopback, private ranges and odd ports, so the guest cannot reach our infrastructure</td></tr>
+            <td class="dimmer tiny">the relay refuses loopback and private ranges, so the guest can’t reach our infrastructure</td></tr>
         <tr><td>Staying connected</td><td class="part"><b>redials</b></td>
-            <td class="dimmer tiny">the relay is a serverless function and its socket closes at its max duration (800 s); the desktop redials in place — connections open at that moment are dropped, new ones work</td></tr>
+            <td class="dimmer tiny">the relay is a serverless function, and its socket closes at its max duration (800 s). The desktop redials in place: connections open at that moment drop, and new ones work</td></tr>
       </tbody></table>
-      ${hostedWisp ? `<p class="note" style="margin-top:10px"><b>Long downloads</b> (curl, apt, nvm source builds) can fail mid-transfer when the relay recycles (~13 min on vibeos.sh). The VM redials but open TCP does not resume — retry with <code>curl -C -</code> or run a self-hosted container where WISP is not capped at 800 s. See <code>docs/wisp-transport-longevity.md</code>.</p>` : ''}`;
+      ${hostedWisp ? `<p class="note" style="margin-top:10px"><b>Long downloads</b> (curl, apt, nvm source builds) can fail mid-transfer when the relay recycles (~13 min on vibeos.sh). The VM redials, but open TCP connections don’t resume. Retry with <code>curl -C -</code> or run a self-hosted container where WISP is not capped at 800 s. See <code>docs/wisp-transport-longevity.md</code>.</p>` : ''}`;
     // The reason carries exec errors and the guest's address: text, not html.
     const why = body.querySelector('.netWhy');
     if (why && VM.netError) why.textContent = ': ' + VM.netError;
@@ -1197,10 +1195,10 @@ function forkVersionText() {
   if (fork === undefined) return 'Still checking whether the served vibeOS has moved on since this copy was forked…';
   if (fork === null) return (window.__vibeosBoot.stored
     ? 'The version check could not run this boot (a served file was unreachable), so whether the served vibeOS has moved on is unknown. "Take the update" still sets your copy aside and boots the served one.'
-    : 'Running the served desktop; nothing is forked.');
+    : 'Running the served desktop. Nothing is forked.');
   if (fork.error) return 'Its version record could not be read: ' + fork.error + '. The served files are ' + fork.files.map(f => f + '=' + fork.served[f]).join(', ') + ' now; which version this copy came from is unknown.';
   const from = fork.files.map(f => f + ' from version ' + fork.base[f] + (fork.at[f] ? ' (' + fork.at[f].slice(0, 10) + ')' : '')).join(', ');
-  if (!fork.moved) return 'Forked: ' + from + '. That is still what vibeos.sh serves, so this copy is up to date with it.';
+  if (!fork.moved) return 'Forked: ' + from + '. That’s still what vibeos.sh serves, so this copy is up to date.';
   const now = fork.files.filter(f => fork.base[f] !== fork.served[f]).map(f => f + ' is ' + fork.served[f]).join(', ');
   return 'Forked: ' + from + '. vibeOS has moved since: ' + now + ' now' + (fork.dismissed ? ' (you chose to keep yours for this version)' : '') +
     '. Keep mine hides the notice until the next served change; Take the update sets each of your copies aside as system/<file>.bak and boots the served ones; Let agent update gives the connected agent your fork and the served copy to merge.';
@@ -1214,11 +1212,11 @@ export function ModelApp(body) {
         ${Gen.viaServer
           ? `A local server is holding the key. Model: <b>${Gen.model}</b>.`
           : Gen.key
-            ? `Using your own <b>${Gen.provider}</b> key, stored in this browser only and sent
+            ? `Using your own <b>${Gen.provider}</b> key. It’s stored only in this browser and sent
                straight to the provider. Model: <b>${Gen.model}</b>.`
             : Gen.oauth
               ? `Signed in with ChatGPT (<b>${Gen.provider}</b>). Model: <b>${Gen.model}</b>.`
-              : `No model connected — connect one in chat or paste a key here to generate.`}
+              : `No model connected yet. Connect one from the chat, or paste a key here.`}
       </p>
       <div class="row">
         <button class="btn p sm" id="setkey">${Gen.key || Gen.oauth ? 'Replace key' : 'Add a key'}</button>
