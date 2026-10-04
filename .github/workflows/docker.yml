@@ -37,8 +37,20 @@ jobs:
           # hardcoded, not ${{ github.repository }} — this repo has been renamed
           # once already and the published tag must not move when it happens again
           images: ghcr.io/caffeinum/vibeos
+          # NO `latest` from this workflow.
+          #
+          # `latest` on this package is the 2.0 self-contained image, published
+          # from caffeinum/vibeos-landing on a version tag. This workflow runs on
+          # EVERY push to main — the web mirror syncs several times a day — so the
+          # raw `latest` rule here re-pointed the shared tag at this repo's
+          # development container each time. Moving `latest` to 2.0 without
+          # removing this line would have been undone by the next web sync, and
+          # the only symptom would be strangers pulling a dev server again.
+          #
+          # sha tags stay: the image still gets built and published, so this
+          # workflow remains a real check on the repo, it just stops owning a
+          # name that points people at it.
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha
           # build-push-action applies these OVER the Dockerfile's LABELs, so the
           # Dockerfile is not the source of truth for anything listed here.
