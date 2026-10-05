@@ -1,0 +1,25 @@
+web/kernel/agent.js
+  s_b1a8ea82c703a0::t_5bc77b4e4236ac 514-521,523,525,527-540,543-545,559-560,571,573-579,581-582,588-590,594-595,597,599,611-626,628-631,635-640,642-646,648-650,652-654
+web/kernel/machine.js
+  s_b1a8ea82c703a0::t_8f9a435f48be99 173
+web/tools.js
+  s_b1a8ea82c703a0::t_42e83e93b21328 55,73
+web/ui/portal.js
+  s_b1a8ea82c703a0::t_d13b80877233a9 2-5,7,33,139,151,218-229,237,239,242,244-247,251,257,301
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3542b64fb2e6ed56a9f84b83f057143792a2b553",
+  "prompts": {},
+  "sessions": {
+    "s_b1a8ea82c703a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0ab0dec5-088e-4176-9aad-8d8047b5e1d6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
