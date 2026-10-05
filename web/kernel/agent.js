@@ -511,7 +511,105 @@ const Gen = {
     if (typeof j.text !== 'string') throw new Error('the codex proxy answered with no text');
     return j.text;
   },
+  // OpenAI Images API from the browser (CORS + the person's sk- key). Codex
+  // OAuth and Anthropic keys do not reach this endpoint — imageRefusal() says so.
+  IMAGE_MODEL: 'gpt-image-1',
+  IMAGE_SIZES: ['1024x1024', '1536x1024', '1024x1536'],
+  _imageInflight: null,
+  get forImageGen() { return this.provider === 'openai' && !!this.key && !this.viaServer; },
+  imageRefusal() {
+    if (this.forImageGen) return '';
+    if (this.provider === 'openai-codex' || (this.oauth?.accessToken && !this.key)) {
+      return 'Portal images need an OpenAI API key — ChatGPT/Codex sign-in does not cover image generation. Open Settings › Model and paste an sk-… key.';
+    }
+    if (this.provider === 'anthropic') return 'Image generation uses OpenAI. Paste an OpenAI API key in Settings › Model.';
+    if (this.viaServer) return 'Image generation needs a direct OpenAI API key in this browser (the demo server is not supported).';
+    return 'Paste an OpenAI API key in Settings › Model to generate portal images.';
+  },
+  closestImageSize(width, height) {
+    const w = Math.max(64, Math.round(width || 512));
+    const h = Math.max(64, Math.round(height || 512));
+    const r = w / h;
+    if (r > 1.15) return '1536x1024';
+    if (r < 0.87) return '1024x1536';
+    return '1024x1024';
+  },
+  async askImage(opts) {
+    if (!opts || typeof opts !== 'object') throw new Error('askImage: pass { prompt, size?, inputImage? }');
+    const prompt = typeof opts.prompt === 'string' ? opts.prompt.trim() : '';
+    if (!prompt) throw new Error('askImage: prompt must be a non-empty string');
+    if (!this.forImageGen) throw new Error(this.imageRefusal() || 'image generation unavailable');
+    let size = opts.size;
+    if (size !== undefined && !this.IMAGE_SIZES.includes(size)) {
+      throw new Error('askImage: size must be one of ' + this.IMAGE_SIZES.join(', '));
+    }
+    if (!size) size = this.closestImageSize(opts.width, opts.height);
+    const dedupe = size + '\0' + prompt.slice(0, 240);
+    if (this._imageInflight === dedupe) throw new Error('this image is already generating — wait for it to finish');
+    if (this._imageInflight) throw new Error('another image is generating — wait for it to finish');
+    this._imageInflight = dedupe;
+    const inputImage = opts.inputImage ? askImage(opts.inputImage).dataUrl : null;
+    try {
+      const out = inputImage
+        ? await this._openaiImageEdit(prompt, size, inputImage)
+        : await this._openaiImageGenerate(prompt, size);
+      track('app_image_call', { size, ok: true });
+      return Object.assign(out, { size });
+    } catch (e) {
+      track('app_image_call', { size, ok: false });
+      throw e;
+    } finally {
+      if (this._imageInflight === dedupe) this._imageInflight = null;
+    }
+  },
+  async _openaiImageGenerate(prompt, size) {
+    const r = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + this.key },
+      body: JSON.stringify({ model: this.IMAGE_MODEL, prompt, n: 1, size, response_format: 'b64_json' }),
+    });
+    return parseOpenAIImageResponse(r);
+  },
+  async _openaiImageEdit(prompt, size, dataUrl) {
+    const blob = dataUrlToBlob(dataUrl);
+    const fd = new FormData();
+    fd.append('model', this.IMAGE_MODEL);
+    fd.append('prompt', prompt);
+    fd.append('n', '1');
+    fd.append('size', size);
+    fd.append('response_format', 'b64_json');
+    fd.append('image', blob, 'portal.png');
+    const r = await fetch('https://api.openai.com/v1/images/edits', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + this.key },
+      body: fd,
+    });
+    return parseOpenAIImageResponse(r);
+  },
 };
+
+async function parseOpenAIImageResponse(r) {
+  let j;
+  try { j = await r.json(); } catch { j = {}; }
+  const msg = j.error?.message || j.error?.code || ('openai images ' + r.status);
+  if (!r.ok) {
+    if (/moderation|safety|policy/i.test(String(msg))) throw new Error('the image was refused by content moderation — try a different topic');
+    throw new Error(msg);
+  }
+  const b64 = j.data?.[0]?.b64_json;
+  if (!b64) throw new Error('openai answered with no image data');
+  const revised = j.data[0].revised_prompt;
+  return { dataUrl: 'data:image/png;base64,' + b64, revisedPrompt: typeof revised === 'string' ? revised : undefined };
+}
+
+function dataUrlToBlob(dataUrl) {
+  const m = String(dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) throw new Error('inputImage must be a base64 data url');
+  const bin = atob(m[2]);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Blob([u8], { type: m[1] || 'image/png' });
+}
 
 // One picture for Gen.ask, from a data url string or { dataUrl }: the three
 // transport shapes (Agent.userContent) want the media type and the bare

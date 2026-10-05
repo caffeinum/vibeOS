@@ -378,6 +378,11 @@ function createAppApi(provider, mount, title, requires = []) {
         if (closed) return Promise.reject(new Error('api.ai.generate: the window "' + title + '" is closed'));
         return Gen.ask(opts);
       },
+      image(opts) {
+        if (!requires.includes('ai')) return Promise.reject(new Error('this app did not declare // @requires ai — add ai to its // @requires header to call api.ai.image'));
+        if (closed) return Promise.reject(new Error('api.ai.image: the window "' + title + '" is closed'));
+        return Gen.askImage(opts);
+      },
     },
     onResize(fn) {
       resizeCb = fn;
@@ -592,6 +597,7 @@ export const BUILTIN_ICONS = {
   // A cog, not a crosshair: four ticks on a circle read as "target".
   settings: svgIcon('<g id="vibeos-icon-gear"><rect width="32" height="32" rx="7" fill="#6b7280"/><path fill="#fff" fill-rule="evenodd" d="M23.1 13.3L26.2 13.7L26.2 18.3L23.1 18.7L22.9 19.1L24.9 21.6L21.6 24.9L19.1 22.9L18.7 23.1L18.3 26.2L13.7 26.2L13.3 23.1L12.9 22.9L10.4 24.9L7.1 21.6L9.1 19.1L8.9 18.7L5.8 18.3L5.8 13.7L8.9 13.3L9.1 12.9L7.1 10.4L10.4 7.1L12.9 9.1L13.3 8.9L13.7 5.8L18.3 5.8L18.7 8.9L19.1 9.1L21.6 7.1L24.9 10.4L22.9 12.9ZM19.5 16a3.5 3.5 0 1 0-7 0a3.5 3.5 0 1 0 7 0Z"/></g>'),
   terminal: svgIcon('<g id="vibeos-icon-prompt"><rect width="32" height="32" rx="7" fill="#1e293b"/><path d="M8 10.5l6 5.5-6 5.5" fill="none" stroke="#4ade80" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><rect x="16" y="20" width="9" height="2.6" rx="1" fill="#4ade80"/></g>'),
+  portal: svgIcon('<g id="vibeos-icon-portal"><rect width="32" height="32" rx="7" fill="#7c3aed"/><ellipse cx="16" cy="16" rx="11" ry="8" fill="none" stroke="#fff" stroke-width="2"/><ellipse cx="16" cy="16" rx="5" ry="3.5" fill="#c4b5fd" opacity=".9"/></g>'),
 };
 
 export const ICONS = {
@@ -623,6 +629,7 @@ export function dockButtonContent(iconSrc, label) {
 export const SHELL = {
   chat:     { id: 'chat', title: 'vibeOS', badge: '', render: 'ChatApp', file: 'ui/chat.js', w: 580, h: 500, icon: BUILTIN_ICONS.chat },
   browser:  { id: 'browser', title: 'Browser', badge: 'proxied', render: 'BrowserApp', file: 'ui/browser.js', w: 820, h: 560, icon: BUILTIN_ICONS.browser },
+  portal:   { id: 'portal', title: 'Portal', badge: '', render: 'PortalApp', file: 'ui/portal.js', w: 560, h: 480, icon: BUILTIN_ICONS.portal },
   settings: { id: 'settings', title: 'Settings', badge: '', render: 'SettingsApp', file: 'ui/settings.js', w: 720, h: 480, icon: BUILTIN_ICONS.settings },
 };
 // One Settings window: a pill, the Terminal entry or a test asking for a tab
