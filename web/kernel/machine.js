@@ -170,7 +170,7 @@ const BrowserProvider = {
     process:  false,     // host processes; workers are a different thing
     get net() { return Net.available; },  // raw TCP through the relay (kernel/net.js): on whenever the relay is on, off with it
     get ai() { return Gen.forApps || Gen.viaAgent; },   // a model an app can call (kernel/agent.js Gen.ask): a pasted key, a ChatGPT login, or the connected agent's (MCP sampling)
-    get image() { return Gen.forImageGen; },   // OpenAI Images API (Gen.askImage): direct sk- key only
+    get image() { return Gen.forImageGen; },   // Gen.askImage: a pasted OpenAI key or a ChatGPT login
     usb:      'usb' in navigator,
     serial:   'serial' in navigator,
     hid:      'hid' in navigator,

@@ -1,8 +1,10 @@
 /* ui/portal.js — Continuum-style portals: generated stills you can step through.
-   A ui module (see ui/windows.js). Images call OpenAI directly (Gen.askImage);
-   click-to-explore uses Gen.ask for the next-scene prompt, then another image. */
+   A ui module (see ui/windows.js). Images come from Gen.askImage (a pasted
+   OpenAI key, or a ChatGPT login through /api/openai/images); click-to-explore
+   uses Gen.ask for the next-scene prompt, then another image. An image takes
+   a minute or two either way, so the status counts the seconds. */
 
-const COST_HINT = '~$0.04 per image (gpt-image-1, billed by OpenAI)';
+const costHint = () => Gen.imageCostHint();
 const RESIZE_MS = 800;
 
 export function portalTopicFromContext() {
@@ -28,7 +30,7 @@ export function openPortalPrompt(seed = '') {
   h.textContent = 'Open portal';
   const p = document.createElement('p');
   p.className = 'small dimmer';
-  p.textContent = 'A soft-edged window of generated art about a topic. ' + COST_HINT + '.';
+  p.textContent = 'A soft-edged window of generated art about a topic. Each image takes a minute or two and ' + (Gen.forImageGen ? costHint() : 'needs a ChatGPT sign-in or an OpenAI API key') + '.';
   const input = document.createElement('input');
   input.type = 'text';
   input.placeholder = 'What should this portal explore?';
@@ -134,6 +136,7 @@ export function PortalApp(body, el, opts = {}) {
   st.index = st.index ?? -1;
   st.busy = false;
   st.resizeTimer = null;
+  st.tick = null;
 
   body.innerHTML = '';
   const toolbar = document.createElement('div');
@@ -145,7 +148,7 @@ export function PortalApp(body, el, opts = {}) {
   topicInput.spellcheck = true;
   const hint = document.createElement('span');
   hint.className = 'tiny dimmer portal-cost';
-  hint.textContent = COST_HINT;
+  hint.textContent = Gen.forImageGen ? costHint() : '';
   const nav = document.createElement('div');
   nav.className = 'row portal-nav';
   nav.style.gap = '6px';
@@ -212,6 +215,18 @@ export function PortalApp(body, el, opts = {}) {
     fwd.disabled = true;
   };
 
+  // Elapsed seconds against what to expect: a minute-long wait behind a
+  // spinner reads as hung.
+  const startProgress = label => {
+    const t0 = Date.now();
+    const paint = () => setStatus(label + ' ' + Math.round((Date.now() - t0) / 1000) + ' s · ' + Gen.IMAGE_ETA);
+    clearInterval(st.tick);
+    paint();
+    st.tick = setInterval(paint, 1000);
+  };
+  const stopProgress = () => { clearInterval(st.tick); st.tick = null; };
+  Windows.onDispose(el, stopProgress);
+
   async function generateImage({ prompt, size, inputImage, reason }) {
     if (st.busy) return;
     if (!Gen.forImageGen) {
@@ -219,21 +234,27 @@ export function PortalApp(body, el, opts = {}) {
       try { track('portal_failed', { reason: 'no_key' }); } catch {}
       return;
     }
+    hint.textContent = costHint();
     setBusy(true);
-    setStatus(reason === 'resize' ? 'Redrawing for new size…' : 'Generating…');
+    startProgress(reason === 'resize' ? 'Redrawing for the new size…' : 'Generating…');
     try {
       const out = await Gen.askImage({ prompt, size, inputImage, width: frame.clientWidth, height: frame.clientHeight });
+      stopProgress();
       try { track('portal_generate', { reason: reason || 'open', size: out.size || size, ok: true }); } catch {}
-      pushHistory({ dataUrl: out.dataUrl, topic: st.topic, prompt, size: out.size || size });
-      setStatus('Tap the image to explore · ' + COST_HINT);
+      // `asked` is what a resize compares: the codex backend answers its own size.
+      pushHistory({ dataUrl: out.dataUrl, topic: st.topic, prompt, size: out.size || size, asked: out.asked || size });
+      const used = Number.isFinite(out.allowanceUsedPercent) ? ' · ' + out.allowanceUsedPercent + '% of today’s image allowance used' : '';
+      setStatus('Tap the image to explore' + used);
       rememberTopic(st.topic);
       paintRecent(list);
     } catch (e) {
+      stopProgress();
       const msg = e.message || String(e);
       setStatus(msg, true);
       try { track('portal_failed', { reason: msg.slice(0, 80) }); } catch {}
       try { track('portal_generate', { reason: reason || 'open', ok: false }); } catch {}
     } finally {
+      stopProgress();
       setBusy(false);
     }
   }
@@ -277,7 +298,7 @@ export function PortalApp(body, el, opts = {}) {
       if (!img.src || st.busy) return;
       const size = Gen.closestImageSize(frame.clientWidth, frame.clientHeight);
       const cur = st.history[st.index];
-      if (cur?.size === size) return;
+      if ((cur?.asked || cur?.size) === size) return;
       generateImage({
         prompt: buildImagePrompt(st.topic, 'resize'),
         size,
