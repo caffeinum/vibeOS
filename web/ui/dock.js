@@ -111,6 +111,8 @@ export async function paintDock(dock = document.getElementById('dock')) {
     addIcon(BUILTIN_ICONS.vibeos, '', 'vibeOS — ask for an app', () => focusOrOpen(SHELL.chat));
   }
   addIcon(BUILTIN_ICONS.browser, win95 ? 'Web' : '', 'Browser', () => focusOrOpen(SHELL.browser));
+  const openPortal = ui.openPortalPrompt || (() => focusOrOpen(SHELL.portal));
+  addIcon(BUILTIN_ICONS.portal, win95 ? 'Pt' : '', 'Portal — generated scene', () => openPortal(), 'dock-portal');
   addIcon(BUILTIN_ICONS.terminal, win95 ? 'CL' : '', 'Terminal', () => openSettings('terminal'));
 
   const live = dock.isConnected;
@@ -158,7 +160,8 @@ export function start() {
   const offSplash = bootSplash();
   const offTray = startTray();
   const offAsk = startAsk();
-  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offSplash(); offTray(); offAsk(); };
+  const offPortal = (UI.live().startPortalMenu || (() => () => {}))();
+  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offSplash(); offTray(); offAsk(); offPortal(); };
 }
 
 const winxp = () => document.documentElement.dataset.theme === 'winxp';
