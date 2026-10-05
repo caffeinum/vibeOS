@@ -1,7 +1,13 @@
 {
   "name": "vibe-os",
   "version": "0.1.0",
+  "description": "vibeOS (vibeos.sh) — Aleks Bykhun's open-source AI-native browser desktop: WASM Linux, agent-written apps, Codex/ChatGPT and vibeos-mcp.",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/caffeinum/vibeOS.git"
+  },
+  "homepage": "https://vibeos.sh/app",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
