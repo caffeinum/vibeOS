@@ -511,20 +511,38 @@ const Gen = {
     if (typeof j.text !== 'string') throw new Error('the codex proxy answered with no text');
     return j.text;
   },
-  // OpenAI Images API from the browser (CORS + the person's sk- key). Codex
-  // OAuth and Anthropic keys do not reach this endpoint — imageRefusal() says so.
+  /* Image generation, two ways. A pasted OpenAI key posts to the Images API
+     from the page (gpt-image-1; measured 2026-10-05: 67 s for one low-quality
+     1024x1024). A ChatGPT login posts to /api/openai/images/<op>, which
+     forwards to the codex backend's own images endpoints (gpt-image-2, the
+     plan's daily imagegen allowance; measured 31–138 s, and the size asked
+     for is not always honoured — the reply's own size is returned). A Free plan is
+     refused by the backend, in its words. Neither is quick, so both have a
+     long deadline and the portal shows elapsed time against IMAGE_ETA. */
   IMAGE_MODEL: 'gpt-image-1',
+  CODEX_IMAGE_MODEL: 'gpt-image-2',
   IMAGE_SIZES: ['1024x1024', '1536x1024', '1024x1536'],
+  IMAGE_TIMEOUT_MS: 240000,
   _imageInflight: null,
-  get forImageGen() { return this.provider === 'openai' && !!this.key && !this.viaServer; },
+  get imageVia() {
+    if (this.viaServer) return '';
+    if (this.provider === 'openai' && this.key) return 'key';
+    if (this.provider === 'openai-codex' && this.oauth?.accessToken && this.oauth?.accountId) return 'codex';
+    return '';
+  },
+  get forImageGen() { return !!this.imageVia; },
+  // What a person should expect to wait, and what it costs them.
+  get IMAGE_ETA() { return this.imageVia === 'codex' ? 'usually 1–2 min' : 'usually about a minute'; },
+  imageCostHint() {
+    return this.imageVia === 'codex'
+      ? 'uses your ChatGPT plan’s daily image allowance (gpt-image-2)'
+      : '~$0.01–0.04 per image (gpt-image-1, billed by OpenAI)';
+  },
   imageRefusal() {
     if (this.forImageGen) return '';
-    if (this.provider === 'openai-codex' || (this.oauth?.accessToken && !this.key)) {
-      return 'Portal images need an OpenAI API key — ChatGPT/Codex sign-in does not cover image generation. Open Settings › Model and paste an sk-… key.';
-    }
-    if (this.provider === 'anthropic') return 'Image generation uses OpenAI. Paste an OpenAI API key in Settings › Model.';
-    if (this.viaServer) return 'Image generation needs a direct OpenAI API key in this browser (the demo server is not supported).';
-    return 'Paste an OpenAI API key in Settings › Model to generate portal images.';
+    if (this.provider === 'anthropic') return 'Image generation uses OpenAI. Sign in with ChatGPT or paste an OpenAI API key in Settings › Model.';
+    if (this.viaServer) return 'Image generation needs a ChatGPT sign-in or an OpenAI API key in this browser (the demo server is not supported).';
+    return 'Sign in with ChatGPT or paste an OpenAI API key in Settings › Model to generate portal images.';
   },
   closestImageSize(width, height) {
     const w = Math.max(64, Math.round(width || 512));
@@ -538,7 +556,8 @@ const Gen = {
     if (!opts || typeof opts !== 'object') throw new Error('askImage: pass { prompt, size?, inputImage? }');
     const prompt = typeof opts.prompt === 'string' ? opts.prompt.trim() : '';
     if (!prompt) throw new Error('askImage: prompt must be a non-empty string');
-    if (!this.forImageGen) throw new Error(this.imageRefusal() || 'image generation unavailable');
+    const via = this.imageVia;
+    if (!via) throw new Error(this.imageRefusal() || 'image generation unavailable');
     let size = opts.size;
     if (size !== undefined && !this.IMAGE_SIZES.includes(size)) {
       throw new Error('askImage: size must be one of ' + this.IMAGE_SIZES.join(', '));
@@ -549,57 +568,90 @@ const Gen = {
     if (this._imageInflight) throw new Error('another image is generating — wait for it to finish');
     this._imageInflight = dedupe;
     const inputImage = opts.inputImage ? askImage(opts.inputImage).dataUrl : null;
+    const signal = AbortSignal.timeout(this.IMAGE_TIMEOUT_MS);
     try {
-      const out = inputImage
-        ? await this._openaiImageEdit(prompt, size, inputImage)
-        : await this._openaiImageGenerate(prompt, size);
-      track('app_image_call', { size, ok: true });
-      return Object.assign(out, { size });
+      const out = via === 'codex'
+        ? await this._codexImage(prompt, size, inputImage, signal)
+        : inputImage
+          ? await this._openaiImageEdit(prompt, size, inputImage, signal)
+          : await this._openaiImageGenerate(prompt, size, signal);
+      track('app_image_call', { size, via, ok: true });
+      return Object.assign({ size }, out, { asked: size });
     } catch (e) {
-      track('app_image_call', { size, ok: false });
+      track('app_image_call', { size, via, ok: false });
+      if (e?.name === 'TimeoutError') throw new Error('no image after ' + Math.round(this.IMAGE_TIMEOUT_MS / 1000) + ' s — the ' + (via === 'codex' ? 'ChatGPT' : 'OpenAI') + ' images backend did not answer; try again');
       throw e;
     } finally {
       if (this._imageInflight === dedupe) this._imageInflight = null;
     }
   },
-  async _openaiImageGenerate(prompt, size) {
+  // gpt-image-* always answers b64_json and refuses response_format
+  // ("Unknown parameter: 'response_format'", measured 2026-10-05).
+  async _openaiImageGenerate(prompt, size, signal) {
     const r = await fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + this.key },
-      body: JSON.stringify({ model: this.IMAGE_MODEL, prompt, n: 1, size, response_format: 'b64_json' }),
+      body: JSON.stringify({ model: this.IMAGE_MODEL, prompt, n: 1, size }),
+      signal,
     });
-    return parseOpenAIImageResponse(r);
+    return parseImageResponse(r, 'openai images');
   },
-  async _openaiImageEdit(prompt, size, dataUrl) {
+  async _openaiImageEdit(prompt, size, dataUrl, signal) {
     const blob = dataUrlToBlob(dataUrl);
     const fd = new FormData();
     fd.append('model', this.IMAGE_MODEL);
     fd.append('prompt', prompt);
     fd.append('n', '1');
     fd.append('size', size);
-    fd.append('response_format', 'b64_json');
     fd.append('image', blob, 'portal.png');
     const r = await fetch('https://api.openai.com/v1/images/edits', {
       method: 'POST',
       headers: { authorization: 'Bearer ' + this.key },
       body: fd,
+      signal,
     });
-    return parseOpenAIImageResponse(r);
+    return parseImageResponse(r, 'openai images');
+  },
+  // Low quality: the measured 107 s was low, and every image spends the
+  // plan's daily allowance.
+  async _codexImage(prompt, size, inputImage, signal) {
+    await this.ensureOAuthFresh();
+    const auth = VibeOSOAuth.oauthAuthHeaders(this.oauth);
+    if (!auth) throw new Error('no ChatGPT session — sign in again in Settings › Model');
+    const op = inputImage ? 'edits' : 'generations';
+    const r = await fetch('/api/openai/images/' + op, {
+      method: 'POST',
+      headers: Object.assign({ 'content-type': 'application/json' }, auth),
+      body: JSON.stringify(inputImage ? { prompt, images: [inputImage] } : { prompt, size, quality: 'low' }),
+      signal,
+    });
+    const out = await parseImageResponse(r, 'chatgpt images');
+    const used = Number(r.headers.get('x-codex-primary-used-percent'));
+    if (r.headers.has('x-codex-primary-used-percent') && Number.isFinite(used)) out.allowanceUsedPercent = used;
+    return out;
   },
 };
 
-async function parseOpenAIImageResponse(r) {
-  let j;
-  try { j = await r.json(); } catch { j = {}; }
-  const msg = j.error?.message || j.error?.code || ('openai images ' + r.status);
+// Status and the backend's own words on a failure: a JSON error, a FastAPI
+// detail, or a text body (Cloudflare's "error code: 1010").
+async function parseImageResponse(r, label) {
+  const text = await r.text();
+  let j = null;
+  try { j = JSON.parse(text); } catch {}
   if (!r.ok) {
-    if (/moderation|safety|policy/i.test(String(msg))) throw new Error('the image was refused by content moderation — try a different topic');
-    throw new Error(msg);
+    const d = j?.detail;
+    const msg = j?.error?.message || j?.error?.code || (typeof j?.error === 'string' ? j.error : '')
+      || (typeof d === 'string' ? d : d?.message) || j?.message || text.trim().slice(0, 200) || 'request failed';
+    if (/moderation|safety system|content policy/i.test(String(msg))) throw new Error('the image was refused by content moderation — try a different topic');
+    throw new Error(label + ' ' + r.status + ': ' + msg);
   }
-  const b64 = j.data?.[0]?.b64_json;
-  if (!b64) throw new Error('openai answered with no image data');
+  const b64 = j?.data?.[0]?.b64_json;
+  if (!b64) throw new Error(label + ' answered with no image data');
+  const format = j.output_format === 'jpeg' || j.output_format === 'webp' ? j.output_format : 'png';
   const revised = j.data[0].revised_prompt;
-  return { dataUrl: 'data:image/png;base64,' + b64, revisedPrompt: typeof revised === 'string' ? revised : undefined };
+  return Object.assign(
+    { dataUrl: 'data:image/' + format + ';base64,' + b64, revisedPrompt: typeof revised === 'string' ? revised : undefined },
+    typeof j.size === 'string' && /^\d+x\d+$/.test(j.size) ? { size: j.size } : {});
 }
 
 function dataUrlToBlob(dataUrl) {
