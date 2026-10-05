@@ -108,8 +108,10 @@ naming the command that fixes it.
 **Where the published image comes from.** `ghcr.io/caffeinum/vibeos` is built
 from the landing repo (private), not from the `Dockerfile` in this repo. So `docker compose up --build` here
 gives you the legacy app, not the desktop — use the `docker run` line above for
-that. `web/` is a byte-for-byte mirror of what that image and
-[vibeos.sh/app](https://vibeos.sh/app) serve.
+that. `web/` is the source of what that image and
+[vibeos.sh/app](https://vibeos.sh/app) serve: the landing repo pins this repo
+as a submodule and copies `web/` at build time, so a desktop change lands here
+first and reaches the site when the landing repo moves its pin.
 
 ## the legacy Next.js app (`src/`)
 
