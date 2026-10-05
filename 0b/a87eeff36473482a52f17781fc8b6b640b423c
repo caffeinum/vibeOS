@@ -1,0 +1,33 @@
+web/index.html
+  s_b1a8ea82c703a0::t_b439747a4ec297 320
+web/kernel/agent.js
+  s_b1a8ea82c703a0::t_5a8db2843eea5d 514-588,591-613
+web/kernel/machine.js
+  s_b1a8ea82c703a0::t_363c3e068d1094 173,201-202
+web/os.css
+  s_b1a8ea82c703a0::t_3b3dfaf4629392 785-808
+web/tools.js
+  s_b1a8ea82c703a0::t_8d21e36efba5a3 47,55,73
+web/ui/dock.js
+  s_b1a8ea82c703a0::t_2f97a3fd098e69 114-115,163-164
+web/ui/portal.js
+  s_b1a8ea82c703a0::t_5cebd7819d4d8b 1-363
+web/ui/windows.js
+  s_b1a8ea82c703a0::t_52df20b5f9860a 381-385,600,632
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0ba87eeff36473482a52f17781fc8b6b640b423c",
+  "prompts": {},
+  "sessions": {
+    "s_b1a8ea82c703a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0ab0dec5-088e-4176-9aad-8d8047b5e1d6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Aleksey Bykhun <theisease@gmail.com>"
+    }
+  }
+}
