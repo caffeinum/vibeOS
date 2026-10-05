@@ -1,6 +1,6 @@
 # vibeOS ([vibeos.sh](https://vibeos.sh/?ref=github-readme))
 
-**Aleks Bykhun’s AI-native browser desktop for Codex & ChatGPT agents** — a real i686 Linux VM in WebAssembly, a desktop shell (menu bar, dock, windows), and an agent that edits the system and writes apps on demand. One `docker run` gets you the same desktop locally, with nothing leaving your machine.
+**Aleks Bykhun’s AI-native browser desktop for Codex & ChatGPT agents** — a real i686 Linux VM in WebAssembly, a desktop shell (menu bar, dock, windows), and an agent that edits the system and writes apps on demand. One `docker run` gets you the same desktop locally, with no request to our servers.
 
 [vibeos.sh/app](https://vibeos.sh/app) · [source](https://github.com/caffeinum/vibeOS) · MIT · experimental
 
@@ -60,9 +60,12 @@ docker run -p 127.0.0.1:3000:3000 ghcr.io/caffeinum/vibeos
 `linux/amd64` + `linux/arm64`, ~625 MB. That is the same desktop as
 [vibeos.sh/app](https://vibeos.sh/app), served entirely from the container: the
 static page, both chunked Linux disks, the BusyBox ISO, the guest's networking,
-the agent relay and the CORS proxy. **No CDN, no account, no API key** — and
-there is a check that fails if *any* request leaves the container, websockets
-included.
+the agent relay and the CORS proxy. **No CDN, no account, no API key.** The check behind that
+fails if any request leaves the container *while the desktop boots*, websockets
+included — which is the claim that matters, because it is the claim the hosted
+page cannot make. Once you are using it, the guest's own traffic goes out
+through the container, and a model key you paste goes straight to your
+provider: both leave your machine, neither goes to us.
 
 Two things it does **not** do, because the honest version is shorter than the
 discovery:
@@ -75,7 +78,9 @@ discovery:
 - **It is not a sandbox.** By default the guest and the proxy reach your LAN and
   this host's services, deliberately — that is the point of running it locally.
   Link-local and cloud metadata addresses stay refused even so. The accurate
-  line is *"nothing leaves your box"*, not *"it cannot touch your machine"*.
+  line is *"nothing goes to our servers"* — not *"nothing leaves your box"*,
+  which the guest's own web traffic does, and not *"it cannot touch your
+  machine"*, which the LAN reach contradicts.
 
 No model key is needed or used by the server: you paste yours into the desktop
 and the browser calls your provider directly.
