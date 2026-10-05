@@ -13,7 +13,6 @@ Open **[vibeos.sh/app](https://vibeos.sh/app)** in a Chromium browser (Chrome, E
 | path | what it is |
 | --- | --- |
 | [`web/`](web/) | **Browser build** — static page + v86 WASM Linux (`web/README.md` has fetch/serve steps). This is what powers [vibeos.sh/app](https://vibeos.sh/app). |
-| [`src/`](src/) | **Legacy** — the original Next.js/tRPC app with an embedded Chromium. Not what the published image runs any more; see the note at the end. |
 
 The browser tab is the product most people mean by “vibeOS”: the guest runs `uname` for real; agents call tools like `vm_exec`, `edit_file`, and `create_app` against that stack. External agents (Claude Code, Cursor, Codex) can drive the same desktop through **[vibeos-mcp](https://github.com/caffeinum/vibeos-mcp)** — pairing instructions live in the app under **Settings → Capabilities**.
 
@@ -95,37 +94,20 @@ claude mcp add vibeos -- npx vibeos-mcp --token <token> --relay ws://localhost:3
 A bare `npx vibeos-mcp` link is refused by a self-hosted desktop, on purpose,
 naming the command that fixes it.
 
-## project structure
+## where the published image comes from
 
-```
-.
-├── web/                 # browser WASM desktop (v86 + agent kernel) — the product
-├── src/                 # legacy Next.js/tRPC app (see below)
-├── Dockerfile           # builds the legacy app, NOT the published image
-└── docker-compose.yml   # ditto
-```
-
-**Where the published image comes from.** `ghcr.io/caffeinum/vibeos` is built
-from the landing repo (private), not from the `Dockerfile` in this repo. So `docker compose up --build` here
-gives you the legacy app, not the desktop — use the `docker run` line above for
-that. `web/` is the source of what that image and
+`ghcr.io/caffeinum/vibeos` is built from the landing repo (private), not from
+this one. `web/` is the source of what that image and
 [vibeos.sh/app](https://vibeos.sh/app) serve: the landing repo pins this repo
 as a submodule and copies `web/` at build time, so a desktop change lands here
 first and reaches the site when the landing repo moves its pin.
 
-## the legacy Next.js app (`src/`)
+## the legacy Next.js app
 
-The original vibeOS: a Next.js server with tRPC, an embedded Chromium driven
-over CDP, terminals and agent chat. It still builds and still runs —
-
-```bash
-bun install && bun run dev    # http://localhost:3000
-```
-
-— and `ANTHROPIC_API_KEY` is the one environment variable it wants. It is not
-what `ghcr.io/caffeinum/vibeos` publishes any more and it is not where new work
-goes. Kept because it is the history of the project and some of it still works
-better than its replacement.
+The original vibeOS — a Next.js/tRPC server with an embedded Chromium driven
+over CDP, terminals and agent chat — lived in `src/` and was removed from
+`main`. It is preserved at the
+[`legacy-nextjs`](https://github.com/caffeinum/vibeOS/tree/legacy-nextjs) tag.
 
 ## license
 
