@@ -2760,6 +2760,40 @@ const AppEvents = {
   },
 };
 
+/* The research ask's agent cohort (ui/dock.js startAsk): has an agent DONE
+   something on this device, and is one working right now. Fed by
+   Agent.executeTool with the same doors as agent_did (builtin, mcp; guest is
+   the CLI in the machine and not an agent here) and the same DOING_TOOLS. The
+   first doing call that did not answer ok:false is stamped in localStorage
+   (vibeos-agent-did: {at, via}) and tracked once per device as
+   agent_first_did {via} — the exposure denominator for ask_shown
+   {group:'agent'}. agent_did itself stays the per-call north-star event.
+   Every agent call, reads included, moves lastAt, so the ask can wait for a
+   quiet tab instead of landing mid-turn. Storage that throws stamps nothing:
+   no cohort. */
+const AgentActivity = {
+  KEY: 'vibeos-agent-did',
+  lastAt: 0,
+  touch(via) { if (via !== 'guest') this.lastAt = Date.now(); },
+  did(via) {
+    if (via === 'guest' || this.first()) return;
+    try { localStorage.setItem(this.KEY, JSON.stringify({ at: Date.now(), via })); } catch { return; }
+    track('agent_first_did', { via });
+  },
+  // { at, via } of this device's first doing call, or null.
+  first() {
+    let raw = null;
+    try { raw = localStorage.getItem(this.KEY); } catch { return null; }
+    if (raw === null) return null;
+    try {
+      const v = JSON.parse(raw);
+      if (v && Number.isFinite(v.at) && typeof v.via === 'string') return v;
+    } catch {}
+    console.warn('AgentActivity: ' + this.KEY + ' is not {at, via} (' + raw.slice(0, 60) + '); ignored');
+    return null;
+  },
+};
+
 /* The pairing-link consent gate.
 
    Every string that can come from the link is textContent — the relay host
@@ -3214,8 +3248,13 @@ const Agent = {
      the next turn was told it had already read a file it had never seen, and
      told not to read it. Only Chat's own loops pass it. */
   async executeTool(call, onStatus, remember = false, via = 'builtin') {
+    AgentActivity.touch(via);
     const out = await this.runTool(call, onStatus, remember);
-    if (this.DOING_TOOLS.has(call.toolName) && !(out && out.ok === false)) track('agent_did', { tool: call.toolName, via });
+    AgentActivity.touch(via);
+    if (this.DOING_TOOLS.has(call.toolName) && !(out && out.ok === false)) {
+      track('agent_did', { tool: call.toolName, via });
+      AgentActivity.did(via);
+    }
     return out;
   },
 

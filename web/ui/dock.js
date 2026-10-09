@@ -413,7 +413,18 @@ function startTray() {
    - silent: this page's machine reached 'ready' and the chat has had no
      prompt (Chat.asked, the flag behind first_prompt) for silentMs (60 s)
      since — not while an agent drives the desktop through vibeos-mcp.
-   Both due: returner wins. Never over the key modal or the pairing dialog
+   - agent (2026-10-09, beads-tavc.2.3): an agent has DONE something on this
+     device — a pasted key's or a ChatGPT login's built-in agent, or a remote
+     one through vibeos-mcp, made a doing call (Agent.DOING_TOOLS, the same
+     line as agent_did) that did not fail (kernel AgentActivity, stamped in
+     localStorage). Asked agentMs (2 min)
+     after that first call, never mid-turn: not while Chat.running, and not
+     until no agent call has landed for quietMs. The card asks one line,
+     "What did you have your agent do here?", with an optional email, and
+     says we read the answers; the answer is redacted here (redactPrompt, the
+     first_prompt redactor) and again by the route, and kept in the vault
+     only. Tracked: ask_answered {group, has_email} — never the text.
+   Agent wins over returner, returner over silent. Never over the key modal or the pairing dialog
    (.key-modal-overlay), the recovery or fork bar, or the winxp boot splash:
    it waits until they are gone. Never on ?safe=1 / ?stock=1 / a recovery
    boot, and never where HexEvents.hosted() is false — the static mirror
@@ -430,10 +441,11 @@ function startTray() {
 // the operator chose not to share a calendar).
 export const RESEARCH_BOOKING_URL = '';
 const ASK_KEY = 'vibeos-research-ask', FIRST_SEEN_KEY = 'vibeos-first-seen';
-const ASK_TIMING = { deskMs: 5000, silentMs: 60000, returnGapMs: 3600000, pollMs: 1000 };
+const ASK_TIMING = { deskMs: 5000, silentMs: 60000, returnGapMs: 3600000, pollMs: 1000, agentMs: 120000, quietMs: 15000 };
 const ASK_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash';
 const ASK_COPY = {
   returner: "What brought you back to vibeOS? Leave your email and we'll ask you a couple of questions.",
+  agent: 'What did you have your agent do here? (one line)',
   silent: "Not sure what to do here? Tell us what you were hoping for: leave your email and we'll ask you a couple of questions.",
 };
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -474,15 +486,25 @@ function startAsk() {
   const returning = () => (seen !== null && now - seen >= t.returnGapMs) || (legacy && VM.state === 'ready' && !!VM.restored);
   let deskUp = false, silentDue = false, silentTimer = null, card = null, ended = false;
 
+  // An older kernel fork has no AgentActivity: no agent cohort there.
+  const agentKnown = typeof AgentActivity !== 'undefined';
+  const agentDue = () => {
+    if (!agentKnown) return false;
+    const did = AgentActivity.first();
+    const at = Date.now();
+    return !!did && at - did.at >= t.agentMs && !Chat.running && at - AgentActivity.lastAt >= t.quietMs;
+  };
   const pick = () => {
+    if (deskUp && agentDue()) return 'agent';
     if (deskUp && returning()) return 'returner';
     if (silentDue && !Chat.asked && RemoteBridge.state !== 'connected') return 'silent';
     return null;
   };
   // Nothing left that could still come true: the returner check has had its
   // chance (a legacy browser's machine may yet come back restored), and the
-  // silent one has fired empty or the person has typed.
-  const settled = () => deskUp && !returning() && !(legacy && VM.state !== 'ready')
+  // silent one has fired empty or the person has typed. An agent can start
+  // working at any moment, so with AgentActivity the page never settles.
+  const settled = () => !agentKnown && deskUp && !returning() && !(legacy && VM.state !== 'ready')
     && (Chat.asked || silentDue);
   const consider = () => {
     if (ended || card) return;
@@ -538,6 +560,7 @@ function paintAsk(group) {
   x.setAttribute('aria-label', 'Dismiss');
   x.textContent = '×';
   head.append(line, x);
+  if (group === 'agent') return paintAgentAsk(el, head, x);
   const form = document.createElement('form');
   form.className = 'ask-form';
   form.noValidate = true;
@@ -566,10 +589,7 @@ function paintAsk(group) {
   note.hidden = true;
   el.append(head, form, talk, note);
   document.body.appendChild(el);
-  // Above whatever sits at the bottom, as the balloons are.
-  const tops = [document.getElementById('dock'), document.getElementById('analyticsBar')]
-    .map(n => n && n.getBoundingClientRect()).filter(r => r && r.height > 0).map(r => r.top);
-  el.style.bottom = (innerHeight - Math.min(innerHeight, ...tops) + 16) + 'px';
+  placeAsk(el);
 
   let sent = false;
   const say = (text, err) => { note.hidden = false; note.className = 'ask-note' + (err ? ' err' : ''); note.textContent = text; };
@@ -609,6 +629,87 @@ function paintAsk(group) {
       book.textContent = 'Book 15 minutes';
       el.appendChild(book);
     }
+  };
+  return el;
+}
+
+// Place the card above whatever sits at the bottom, as the balloons are.
+function placeAsk(el) {
+  const tops = [document.getElementById('dock'), document.getElementById('analyticsBar')]
+    .map(n => n && n.getBoundingClientRect()).filter(r => r && r.height > 0).map(r => r.top);
+  el.style.bottom = (innerHeight - Math.min(innerHeight, ...tops) + 16) + 'px';
+}
+
+const AGENT_ANSWER_MAX = 200;
+// The first_prompt redactor (kernel/machine.js) when the kernel has it; the
+// route redacts again whatever arrives.
+const redactAnswer = text => typeof redactPrompt === 'function' ? redactPrompt(text) : String(text).replace(/\s+/g, ' ').trim().slice(0, AGENT_ANSWER_MAX);
+
+function paintAgentAsk(el, head, x) {
+  const group = 'agent';
+  const form = document.createElement('form');
+  form.className = 'ask-form ask-agent';
+  form.noValidate = true;
+  const answer = document.createElement('input');
+  answer.type = 'text';
+  answer.className = 'ask-answer';
+  answer.placeholder = 'e.g. had it build a calorie tracker';
+  answer.maxLength = AGENT_ANSWER_MAX;
+  answer.setAttribute('aria-label', 'What you had your agent do');
+  const email = document.createElement('input');
+  email.type = 'email';
+  email.className = 'ask-email';
+  email.placeholder = 'email, if we can ask a follow-up (optional)';
+  email.autocomplete = 'email';
+  email.maxLength = 320;
+  email.setAttribute('aria-label', 'Your email (optional)');
+  const send = document.createElement('button');
+  send.type = 'submit';
+  send.className = 'btn p ask-send';
+  send.textContent = 'Send';
+  form.append(answer, email, send);
+  const notice = document.createElement('p');
+  notice.className = 'ask-notice';
+  notice.textContent = 'We read these to decide what to build.';
+  const note = document.createElement('p');
+  note.className = 'ask-note';
+  note.hidden = true;
+  el.append(head, form, notice, note);
+  document.body.appendChild(el);
+  placeAsk(el);
+
+  let sent = false;
+  const say = (text, err) => { note.hidden = false; note.className = 'ask-note' + (err ? ' err' : ''); note.textContent = text; };
+  x.onclick = () => {
+    if (!sent) track('ask_dismissed', { group });
+    el.remove();
+  };
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const text = redactAnswer(answer.value);
+    if (!text) return say('Tell us in a few words, or close this.', true);
+    const mail = email.value.trim();
+    if (mail && (!EMAIL_SHAPE.test(mail) || mail.length > 320)) return say("That doesn't look like an email address. Leave it empty if you like.", true);
+    answer.disabled = email.disabled = send.disabled = true;
+    say('Sending…');
+    let res = null, body = {};
+    try {
+      res = await fetch('/api/waitlist', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(Object.assign({ source: 'in-app-ask', group, answer: text, path: location.pathname }, mail ? { email: mail } : {})),
+      });
+      body = await res.json().catch(() => ({}));
+    } catch (err) { console.warn('research ask: send failed', err); }
+    if (!res || !res.ok) {
+      answer.disabled = email.disabled = send.disabled = false;
+      return say(typeof body.error === 'string' ? body.error : "Couldn't send that. Try again in a moment.", true);
+    }
+    sent = true;
+    track('ask_answered', { group, has_email: !!mail });
+    form.remove();
+    notice.remove();
+    say(mail ? 'Thanks. We may write to ' + mail + ' with a follow-up.' : 'Thanks, that helps.');
   };
   return el;
 }

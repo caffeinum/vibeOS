@@ -331,7 +331,7 @@
     background: #ffffe1; border-right: 1px solid #000000; border-bottom: 1px solid #000000;
     transform: skewX(-30deg) rotate(45deg);
   }
-  [data-theme="winxp"] .ask-email { background: #ffffff; color: #000000; border: 1px solid #7f9db9; border-radius: 0; padding: 3px 5px; }
+  [data-theme="winxp"] .ask-email, [data-theme="winxp"] .ask-answer { background: #ffffff; color: #000000; border: 1px solid #7f9db9; border-radius: 0; padding: 3px 5px; }
   [data-theme="winxp"] .ask-note { color: #000000; }
   [data-theme="winxp"] .ask-note.err { color: #c00000; }
   [data-theme="winxp"] .ask-book, [data-theme="winxp"] .ask-talk { color: #0000ff; font-weight: 400; text-decoration: underline; }
@@ -753,7 +753,10 @@
   .ask-line { flex: 1; min-width: 0; margin: 0; overflow-wrap: anywhere; }
   .ask-x { flex: 0 0 auto; border: 0; background: transparent; padding: 0 2px; font-size: 15px; line-height: 1; color: var(--dim); cursor: pointer; }
   .ask-form { display: flex; gap: 6px; margin: 0; }
-  .ask-email {
+  .ask-agent { flex-wrap: wrap; }
+  .ask-agent .ask-answer { flex: 1 1 100%; }
+  .ask-notice { margin: 0; color: var(--dim); font-size: 11.5px; }
+  .ask-email, .ask-answer {
     flex: 1; min-width: 0; padding: 6px 8px; font: inherit; color: var(--text); background: var(--panel2);
     border: var(--border-w) solid var(--line2); border-radius: var(--radius-sm);
   }
