@@ -1262,7 +1262,7 @@ async function bridgeCall(call, event) {
   let result;
   // remember: false, spelled out — a read made by the guest CLI or a remote
   // agent is not the chat model's own, and must never reach its read memory.
-  try { result = await Agent.executeTool({ toolName: call.tool, input: call.input || {} }, null, false); }
+  try { result = await Agent.executeTool({ toolName: call.tool, input: call.input || {} }, null, false, event === 'mcp_call' ? 'mcp' : 'guest'); }
   catch (e) { result = { ok: false, error: e.message }; }
   if (event === 'guest_rpc') guestSystemNote(call, result);
   if (event === 'mcp_call') {
@@ -3199,12 +3199,27 @@ const Agent = {
     };
   },
 
+  // The north-star metric (beads-tavc.6): weekly devices where an agent did
+  // work on 2+ days. One `agent_did {tool, via}` per DOING call that did not
+  // answer ok:false — never its input, a path or a command (the same line as
+  // the first-prompt notice). Reads (read_desktop, read_file, list_files,
+  // search_file, list_apps) and the mailbox are not doing. `via` is the door:
+  // builtin (the chat's own loops), mcp (vibeos-mcp) or guest (the CLI in
+  // the machine), from bridgeCall's event name.
+  DOING_TOOLS: new Set(['vm_exec', 'write_file', 'edit_file', 'create_app', 'reload_os', 'reload_ui', 'web_fetch', 'web_search']),
+
   /* `remember` is the built-in tool loop's own flag, not a default: the same
      executeTool is the gate for the guest CLI and for a remote agent through
      bridgeCall, and a file THEY read was recorded as the chat model's own —
      the next turn was told it had already read a file it had never seen, and
      told not to read it. Only Chat's own loops pass it. */
-  async executeTool(call, onStatus, remember = false) {
+  async executeTool(call, onStatus, remember = false, via = 'builtin') {
+    const out = await this.runTool(call, onStatus, remember);
+    if (this.DOING_TOOLS.has(call.toolName) && !(out && out.ok === false)) track('agent_did', { tool: call.toolName, via });
+    return out;
+  },
+
+  async runTool(call, onStatus, remember) {
     const { toolName, input } = call;
     if (toolName === 'create_app') {
       const title = input.title || 'app';
