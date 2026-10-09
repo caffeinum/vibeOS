@@ -238,7 +238,27 @@ const UI = {
     this.stop = this.live().start();
     await deadline(paintDock(), UI_PAINT_MS, 'painting the dock');
     // The agent chat is not opened on first paint — Start (win95 taskbar) or
-    // another dock entry opens it when the person is ready.
+    // another dock entry opens it when the person is ready. So a stored chat
+    // (or window chrome) that cannot paint was found only when the person
+    // opened it: an empty window, no input, no bar, and no way to ask the
+    // agent to fix it. Paint it once into a chrome that is never put in the
+    // document, as reload_ui's trial does, and let the boot's fallback take
+    // over when it fails.
+    if (['ui/chat.js', 'ui/windows.js'].some(f => this.source[f] === 'stored')) {
+      await deadline(this.probeChat(), UI_PAINT_MS, 'painting the chat');
+    }
+  },
+  async probeChat() {
+    const api = this.live();
+    const rec = { id: 'probe-chat', spec: api.SHELL.chat, state: {}, el: null };
+    let el = null;
+    try {
+      const built = api.build(rec, {});
+      el = built.el;
+      await built.done;
+    } finally {
+      if (el) { try { Windows.dispose(el); } catch {} }
+    }
   },
 
   // The hot path: { ok, ... } for the tool, never a throw for a ui that is
