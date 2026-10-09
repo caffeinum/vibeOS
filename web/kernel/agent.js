@@ -1602,7 +1602,7 @@ const Desktop = {
     }
     if (i.window === undefined) return this.overview();
     const rec = this.find(i.window);
-    const body = rec.el.querySelector('.body');
+    const body = rec.el.querySelector('[data-body]') || rec.el.querySelector('.body');   // a renderer may rename the body's class (the chat's is chat-app)
     if (!body) throw new Error('the window "' + rec.spec.title + '" has no body');
     const head = { id: rec.id, app: this.appId(rec), title: String(rec.spec.title), minimized: rec.el.classList.contains('min') };
     return { ok: true, window: { ...head, ...(i.dom ? this.dom(body) : this.text(body)) } };

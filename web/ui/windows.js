@@ -48,7 +48,7 @@ function chrome(el) {
       <span class="title">${title}</span>
       ${badge ? html`<span class="badge">${badge}</span>` : nothing}
     </div>
-    <div class="body"></div>
+    <div class="body" data-body></div>
     <div class="resize" @mousedown=${e => resizeStart(e, el)}></div>`;
 }
 
@@ -134,7 +134,7 @@ export function build(rec, geom) {
   el.rec = rec;
   el.view = chrome;
   el.performUpdate();
-  if (!el.querySelector('.body')) throw new Error('build: the chrome rendered no body for "' + rec.spec.title + '"');
+  if (!bodyOf(el)) throw new Error('build: the chrome rendered no body for "' + rec.spec.title + '"');
   el.addEventListener('mousedown', () => Windows.raise(el), true);
   return { el, done: paint(rec, el) };
 }
@@ -142,8 +142,14 @@ export function build(rec, geom) {
 // Paint the record's content into a chrome. Not async, on purpose: a
 // renderer that throws synchronously throws out of here, and the promise is
 // only for a renderer that returns one.
+// The body by its data-body hook, never its class: a renderer may set
+// body.className (the chat sets 'chat-app'), and a lookup by .body then
+// found nothing — a failed reload_ui could not repaint the live chat, which
+// lost its subscription and never showed the refusal.
+function bodyOf(el) { return el.querySelector('[data-body]') || el.querySelector('.body'); }
+
 function paint(rec, el) {
-  const body = el.querySelector('.body');
+  const body = bodyOf(el);
   const result = renderer(rec.spec)(body, el, rec.spec.opts || {}, rec.state);
   return Promise.resolve(result);
 }
@@ -154,7 +160,7 @@ function paint(rec, el) {
 // with them.
 export function repaint(rec) {
   Windows.dispose(rec.el);
-  const body = rec.el.querySelector('.body');
+  const body = bodyOf(rec.el);
   body.innerHTML = '';
   body.className = 'body';
   body.removeAttribute('style');

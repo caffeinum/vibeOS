@@ -228,6 +228,10 @@ const Workspace = {
     const rel = String(path).replace(/^\/+/, '');
     if (rel === 'system/os.js' && String(text).trim()) return 'system/os.js is no longer loaded: the OS is system/kernel/*.js and system/ui/*.js now (see list_apps builtin sources). Edit those instead; an empty write retires this file.';
     if (!/^system\/(kernel|ui)\//.test(rel) || this.systemFile(rel)) return null;
+    // "Let agent update" writes the served text beside a fork as
+    // <file>.vibeos-served for the agent to merge from: data, never loaded.
+    const sidecar = rel.match(/^(system\/.+)\.vibeos-served$/);
+    if (sidecar && this.systemFile(sidecar[1])) return null;
     const dir = rel.split('/')[1];
     const loads = OS_FILES.filter(f => f.startsWith(dir + '/')).map(f => 'system/' + f).join(', ');
     return `${rel} is not a file the OS loads, so a copy there would never run. The ${dir} files are: ${loads}. A new module is an edit to one of those (a new function in the nearest file) rather than a new file.`;
