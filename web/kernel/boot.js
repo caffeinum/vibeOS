@@ -431,6 +431,29 @@ function watchLiveness() {
   decide(VM.state);
 }
 
+// A boot that finishes behind another tab says so in the tab's title
+// (beads-tavc.13.2). A hidden tab starves the boot, and a person who switched
+// away while it ran had no sign it was done: measured on prod, a boot hidden
+// at load was ready 20 s after the tab came back, after 240 s of nothing. The
+// title goes back the moment the tab is seen. No notification: that would be
+// a permission prompt on a first visit.
+const READY_TITLE = '\u25cf vibeOS: ready';
+function markReadyWhileHidden() {
+  const mark = () => {
+    if (document.visibilityState !== 'hidden' || document.title === READY_TITLE) return;
+    const was = document.title;
+    document.title = READY_TITLE;
+    const seen = () => {
+      if (document.visibilityState === 'hidden') return;
+      document.removeEventListener('visibilitychange', seen);
+      if (document.title === READY_TITLE) document.title = was;
+    };
+    document.addEventListener('visibilitychange', seen);
+  };
+  VM.on((s, transition) => { if (s === 'ready' && transition) mark(); });
+  if (VM.state === 'ready') mark();
+}
+
 (async () => {
   // The loader runs the kernel files in order whatever happened to the one
   // before, so a kernel file that failed to parse shows up here as its
@@ -527,6 +550,7 @@ function watchLiveness() {
   window.__vibeosOpenChat = () => focusOrOpen(UI.live().SHELL.chat);
   window.__vibeosOpenAgent = () => UI.live().openAgent();
   watchLiveness();
+  markReadyWhileHidden();
   // No key modal on a first visit (beads-tavc.13). The auto offer that went
   // live 2026-10-04 left 18% of devices that never touched it reaching
   // vm_ready, against 72-93% without it, and it showed no lift in
