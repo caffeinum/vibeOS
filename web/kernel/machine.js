@@ -83,6 +83,7 @@ const HexEvents = {
 // prompt's text is the one such prop (FirstPrompt below).
 function track(name, data, hexOnly) {
   try {
+    if (BootArm.EVENTS.has(name) && BootArm.arm) data = { ...data, arm: BootArm.arm };
     const evt = { name };
     if (data) evt.data = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)]));
     window.va && window.va('event', evt);
@@ -90,6 +91,34 @@ function track(name, data, hexOnly) {
     HexEvents.send(hexOnly ? { name, data: { ...evt.data, ...Object.fromEntries(Object.entries(hexOnly).map(([k, v]) => [k, String(v)])) } } : evt);
   } catch {}
 }
+
+// The boot-progress experiment (beads-tavc.14): people left a cold boot at a
+// median 15.5 s, watching a pill that said "vm starting…" and nothing else.
+// Arm b shows how far the boot is and that the chat works already; arm a is
+// the desktop as it was. One draw per browser, kept in localStorage — the
+// anonymous Hexclave id is an httpOnly cookie the page cannot hash, and a
+// stored coin is the same split. Only where the events go (the hosted page):
+// the mirror and the image have no arm and stay as they were, and so does a
+// browser whose storage throws, rather than a new draw on every visit.
+const BootArm = {
+  KEY: 'vibeos-boot-arm',
+  EVENTS: new Set(['app_open', 'vm_ready', 'vm_left_booting', 'boot_progress_shown', 'boot_start_now_click']),
+  _arm: undefined,
+  get arm() {
+    if (this._arm !== undefined) return this._arm;
+    this._arm = null;
+    if (!HexEvents.hosted()) return null;
+    try {
+      let arm = localStorage.getItem(this.KEY);
+      if (arm !== 'a' && arm !== 'b') {
+        arm = crypto.getRandomValues(new Uint8Array(1))[0] & 1 ? 'b' : 'a';
+        localStorage.setItem(this.KEY, arm);
+      }
+      this._arm = arm;
+    } catch {}
+    return this._arm;
+  },
+};
 
 // The text of the first prompt a browser ever sends, so we learn what people
 // try to build (operator-approved, beads-2taw). Only where HexEvents records
@@ -262,6 +291,12 @@ const IMAGES = {
     // The same budget as the bundled image: 20-40 s measured, and a laptop on
     // battery with the tab in the background is slower by more than 2x.
     memoryMB: 128, bootTimeoutMs: 120000,
+    // What the boot's progress is measured against (VM.progress): the guest
+    // instructions a cold boot runs to the prompt, and the seconds it usually
+    // takes. Measured on prod 2026-10-10, Chrome, host load ~10: 2695, 2700
+    // and 2702 M instructions in 16.5-18.5 s. busybox 502 M twice in 7.8 s;
+    // debian-4 12.7 G (the counter wrapped twice) in 75 s.
+    bootInstructions: 2.7e9, typicalSeconds: 20,
     preflight: ALPINE_BASE + 'bzImage',
     warm: ALPINE_BASE + 'boot.txt',
     config: () => ({
@@ -294,6 +329,7 @@ const IMAGES = {
   busybox: {
     id: 'busybox', label: 'BusyBox', blurb: 'tiny: bundled 7 MB ISO, boots in about 10 s, no package manager',
     memoryMB: 64, bootTimeoutMs: 120000,
+    bootInstructions: 5.0e8, typicalSeconds: 10,
     config: () => ({ cdrom: { url: V86_ASSETS + 'linux4.iso' } }),
     dhcp: 'udhcpc -i eth0 -n -q 2>&1 | tail -1',
     ip: "ifconfig eth0 | grep -o 'inet addr:[0-9.]*' | cut -d: -f2",
@@ -318,6 +354,7 @@ const IMAGES = {
   debian: {
     id: 'debian', label: 'Debian', blurb: 'full: streamed 1 GB disk, apt works, slow — 70 to 90 s to a shell, longer on a busy machine',
     memoryMB: 256, bootTimeoutMs: 360000,
+    bootInstructions: 1.27e10, typicalSeconds: 80,
     preflight: DEBIAN_BASE + 'bzImage',
     warm: DEBIAN_BASE + 'boot.txt',
     config: () => ({
@@ -1093,16 +1130,45 @@ const VM = {
   // Cold: run the kernel and wait for the shell prompt on the serial console.
   async coldBoot(image) {
     this.construct(image, true);
-    await new Promise((res, rej) => {
-      const t0 = Date.now();
-      const tick = setInterval(() => {
-        if (/~[%#$] $/.test(this.serial) || /~[%#$] /.test(this.serial.slice(-40))) {
-          clearInterval(tick); res();
-        } else if (Date.now() - t0 > image.bootTimeoutMs) {
-          clearInterval(tick); rej(Object.assign(new Error('the VM never reached a shell prompt'), { fallbackReason: 'timeout' }));
-        }
-      }, 500);
-    });
+    let ran = 0, last = 0;
+    const measure = () => {
+      let now = last;
+      try { now = this.emu.get_instruction_counter() >>> 0; } catch {}
+      ran += (now - last) >>> 0; last = now;
+      this.setProgress({ image: image.id, ran, percent: image.bootInstructions ? Math.min(99, Math.floor(ran / image.bootInstructions * 100)) : null });
+    };
+    measure();
+    try {
+      await new Promise((res, rej) => {
+        const t0 = Date.now();
+        const tick = setInterval(() => {
+          if (/~[%#$] $/.test(this.serial) || /~[%#$] /.test(this.serial.slice(-40))) {
+            clearInterval(tick); res();
+          } else if (Date.now() - t0 > image.bootTimeoutMs) {
+            clearInterval(tick); rej(Object.assign(new Error('the VM never reached a shell prompt'), { fallbackReason: 'timeout' }));
+          } else measure();
+        }, 500);
+      });
+    } finally { this.setProgress(null); }
+  },
+
+  // How far a cold boot is, from the guest's own work: the instructions it
+  // has run against what that image's boot runs to the prompt
+  // (IMAGES[].bootInstructions — deterministic to 0.3% over three alpine
+  // boots). Not the chunk downloads: the boot.txt prefetch lands every chunk
+  // in 1-2 s and the boot is CPU-bound after that, so a download bar would
+  // read 100% at 2 s and then sit. Capped at 99 until the prompt; null for an
+  // image with no measured total — never a guessed one. 0 while the
+  // kernel and initrd download, before the CPU runs. v86's counter is 32-bit
+  // (debian wraps it twice), hence the deltas. null outside a cold boot — a
+  // restore is 0.3-5 s and has no measure. Its own listeners, not VM.on: the
+  // state listeners do work on every emit, and this ticks twice a second.
+  progress: null,
+  progressListeners: new Set(),
+  onProgress(fn) { this.progressListeners.add(fn); return () => this.progressListeners.delete(fn); },
+  setProgress(p) {
+    this.progress = p;
+    this.progressListeners.forEach(fn => { try { fn(p); } catch (e) { console.warn('boot progress listener:', e); } });
   },
 
   // Warm: the same machine config, the CPU held until the state is in, then

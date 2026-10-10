@@ -14,7 +14,8 @@ export function paintVM() {
   txt.textContent = dropped ? 'network dropped' : redialing ? 'reconnecting…'
     : VM.fallback && (VM.state === 'ready' || VM.state === 'booting') ? fallbackLine()
     : VM.state === 'ready' && VM.restored ? `${VM.bootedImage} restored`
-    : VM.state === 'ready' ? `${VM.bootedImage} ready` : VM_LABEL[VM.state];
+    : VM.state === 'ready' ? `${VM.bootedImage} ready`
+    : VM.state === 'booting' && bootArmB() && VM.progress && VM.progress.percent !== null ? `starting… ${VM.progress.percent}%` : VM_LABEL[VM.state];
   dot.className = 'dot' + (dropped || redialing ? ' warn' : VM.state === 'ready' ? '' :
                            VM.state === 'booting' ? ' warn' : ' off');
   const bootNote = () => VM.bootedImage === 'debian' ? 'Booting Debian — streams the disk as it goes, a few minutes.'
@@ -157,11 +158,13 @@ export function start() {
     new Date().toLocaleTimeString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
   tick();
   const clock = setInterval(tick, 1000);
+  const offProgress = VM.onProgress ? VM.onProgress(() => { if (bootArmB()) paintVM(); }) : () => {};
   const offSplash = bootSplash();
+  const offBootCard = startBootCard();
   const offTray = startTray();
   const offAsk = startAsk();
   const offPortal = (UI.live().startPortalMenu || (() => () => {}))();
-  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offSplash(); offTray(); offAsk(); offPortal(); };
+  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offProgress(); offSplash(); offBootCard(); offTray(); offAsk(); offPortal(); };
 }
 
 const winxp = () => document.documentElement.dataset.theme === 'winxp';
@@ -243,6 +246,93 @@ function bootSplash() {
   const themeWatch = new MutationObserver(() => { if (!winxp()) end(); });
   themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   const cap = setTimeout(welcome, SPLASH_MS);
+  return end;
+}
+
+/* ---------- the boot card (beads-tavc.14, arm b) ---------------------------
+
+   People left a cold boot at a median 15.5 s, watching a pill that said
+   "vm starting…" and nothing else, while the chat already worked. Arm b
+   shows how far the boot is — VM.progress, the guest's own instructions
+   against what the image's boot runs, never a timer — and one line that the
+   agent can be asked now, with a button that opens the chat. Not a modal and
+   nothing opens by itself: the auto key modal is what cut boots in tavc.13.
+   Shown on the page's first cold boot (a restore has no progress and takes
+   seconds), gone at 'ready', 'failed' or the ×. Arm a is the desktop as it
+   was; the arm is BootArm's (kernel/machine.js), and an older kernel fork
+   without it shows nothing. */
+const bootArmB = () => typeof BootArm !== 'undefined' && BootArm.arm === 'b';
+
+function startBootCard() {
+  if (window.__vibeosBootCardDecided) return () => {};
+  window.__vibeosBootCardDecided = true;
+  if (!bootArmB() || !VM.onProgress) return () => {};
+  let el = null, line = null, bar = null, ended = false;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    offProgress(); offVM();
+    if (el) el.remove();
+  };
+  const paint = p => {
+    if (!el) show();
+    const typical = IMAGES[p.image].typicalSeconds;
+    line.textContent = 'Starting Linux…' + (p.percent === null ? '' : ` ${p.percent}%`) + (typical ? `, usually about ${typical} s` : '');
+    bar.parentNode.hidden = p.percent === null;
+    bar.style.width = (p.percent || 0) + '%';
+  };
+  const show = () => {
+    el = document.createElement('div');
+    el.id = 'bootCard';
+    el.className = 'boot-card';
+    el.setAttribute('role', 'status');
+    el.style.cssText = 'position:fixed;left:14px;z-index:7900';
+    const top = document.getElementById('menubar');
+    el.style.top = ((top ? top.getBoundingClientRect().bottom : 0) + 10) + 'px';
+    const head = document.createElement('div');
+    head.className = 'ask-head';
+    line = document.createElement('p');
+    line.className = 'ask-line boot-line';
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'ask-x';
+    x.title = 'Close';
+    x.setAttribute('aria-label', 'Dismiss');
+    x.textContent = '×';
+    x.onclick = end;
+    head.append(line, x);
+    const rail = document.createElement('div');
+    rail.className = 'boot-bar';
+    bar = document.createElement('i');
+    rail.appendChild(bar);
+    const now = document.createElement('div');
+    now.className = 'boot-now';
+    const say = document.createElement('p');
+    say.className = 'ask-note';
+    say.textContent = 'You can start now: ask the agent for an app while Linux boots.';
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'btn p boot-go';
+    go.textContent = 'Open the chat';
+    go.onclick = () => {
+      track('boot_start_now_click');
+      now.remove();
+      const ui = UI.live();
+      ui.focusOrOpen(ui.SHELL.chat);
+    };
+    now.append(say, go);
+    el.append(head, rail, now);
+    document.body.appendChild(el);
+    track('boot_progress_shown');
+  };
+  const offProgress = VM.onProgress(p => {
+    try { if (p) paint(p); } catch (e) { console.warn('boot card:', e); end(); }
+  });
+  // A fallback to busybox is a second cold boot under the same card; only
+  // the machine's own end ends it.
+  const offVM = VM.on(state => { if (state === 'ready' || state === 'failed' || state === 'unavailable') end(); });
+  if (VM.progress) paint(VM.progress);
+  else if (VM.state === 'ready' || VM.state === 'failed' || VM.state === 'unavailable') end();
   return end;
 }
 
@@ -442,7 +532,7 @@ function startTray() {
 export const RESEARCH_BOOKING_URL = '';
 const ASK_KEY = 'vibeos-research-ask', FIRST_SEEN_KEY = 'vibeos-first-seen';
 const ASK_TIMING = { deskMs: 5000, silentMs: 60000, returnGapMs: 3600000, pollMs: 1000, agentMs: 120000, quietMs: 15000 };
-const ASK_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash';
+const ASK_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash, #bootCard';
 const ASK_COPY = {
   returner: "What brought you back to vibeOS? Leave your email and we'll ask you a couple of questions.",
   agent: 'What did you have your agent do here? (one line)',
