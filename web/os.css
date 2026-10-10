@@ -322,7 +322,7 @@
   [data-theme="winxp"] .balloon-x:hover { color: #ffffff; background: #e34a1b; border-color: #a72d0c; }
 
   /* The research ask is a balloon too, its tail pointing down at Start. */
-  [data-theme="winxp"] .ask-card {
+  [data-theme="winxp"] .ask-card, [data-theme="winxp"] .boot-card {
     background: #ffffe1; color: #000000; border: 1px solid #000000; border-radius: 8px;
     box-shadow: 2px 3px 4px rgba(0, 0, 0, .3); font: 12px/1.4 Tahoma, "Segoe UI", sans-serif;
   }
@@ -742,7 +742,7 @@
   .balloon-x { flex: 0 0 auto; border: 0; background: transparent; padding: 0 2px; font-size: 15px; line-height: 1; color: var(--dim); }
   /* The research ask (ui/dock.js startAsk): one line, an email field and
      Send, bottom-left above the dock; winxp dresses it as a balloon. */
-  .ask-card {
+  .ask-card, .boot-card {
     display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 32px));
     padding: 12px 12px 12px 14px; font-size: 12.5px; line-height: 1.45;
     background: var(--panel); color: var(--text);
@@ -766,6 +766,11 @@
   .ask-book { color: var(--accent); font-weight: 600; }
   .ask-talk { align-self: flex-start; color: var(--accent); font-weight: 600; text-decoration: none; }
   .ask-talk:hover { text-decoration: underline; }
+  /* The boot card (ui/dock.js startBootCard): the research ask's box, top
+     right under the menubar, with the boot's progress as a bar. */
+  .boot-bar { height: 4px; border-radius: 2px; overflow: hidden; background: var(--panel2); }
+  .boot-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s linear; }
+  .boot-now { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
   /* The pairing-link dialog: its Remote Assistance header is winxp's. */
   .link-modal { display: flex; flex-direction: column; gap: 10px; }
   .link-modal h2 { margin-bottom: 0; }
