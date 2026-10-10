@@ -780,6 +780,27 @@ class RelaySocket {
   }
 }
 
+// How long this page has spent hidden (beads-tavc.13). A background tab gets
+// a sliver of the CPU, so a boot left behind another tab does not finish:
+// measured on prod, an alpine boot hidden 2 s after load was not ready after
+// 240 s and was ready 20 s after the tab came back. vm_ready carries the
+// hidden time of its boot, and a page left mid-boot says how long it waited
+// and how much of that it spent hidden, so the funnel can tell a starved
+// boot from a bounce.
+const Hidden = {
+  ms: 0,
+  since: document.visibilityState === 'hidden' ? performance.now() : null,
+  total() { return Math.round(this.ms + (this.since === null ? 0 : performance.now() - this.since)); },
+};
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { if (Hidden.since === null) Hidden.since = performance.now(); }
+  else if (Hidden.since !== null) { Hidden.ms += performance.now() - Hidden.since; Hidden.since = null; }
+});
+window.addEventListener('pagehide', () => {
+  if (VM.state !== 'booting') return;
+  track('vm_left_booting', { ms: Date.now() - VM.bootStarted, hidden_ms: Hidden.total() - VM.bootHiddenFrom });
+});
+
 const VM = {
   state: 'off',
   net: '',                 // '' = no relay, 'connecting' (lease or relay dial pending), 'no lease', then the link: connected | reconnecting | disconnected | unwatched
@@ -1143,6 +1164,7 @@ const VM = {
     this.bootedImage = id;
     this.set('booting');
     this.bootStarted = Date.now();
+    this.bootHiddenFrom = Hidden.total();
     this.store = null; this.storeError = ''; this.restored = false; this.restoredFrom = null;
     this.keptSnapshot = false; this.restoreError = ''; this.snapshotError = ''; this._written = new Set();
     this.ttyState = ''; this.ttyError = ''; this.ttyMs = 0; this.ttyRestore = '';
@@ -1221,7 +1243,7 @@ const VM = {
       // Announced once. A second set('ready') used to sit inside the relay
       // block below, and everything that runs on 'ready' ran twice.
       this.set('ready');
-      track('vm_ready', { seconds: Math.round(this.bootSeconds), image: this.bootedImage, restored: this.restored });
+      track('vm_ready', { seconds: Math.round(this.bootSeconds), image: this.bootedImage, restored: this.restored, hidden_ms: Hidden.total() - this.bootHiddenFrom });
       // Not in boot's failure path: the machine is up whether or not lo came
       // up, and a timeout or a Terminal Ctrl-C landing on this exec used to
       // flip a ready machine to 'failed'.
