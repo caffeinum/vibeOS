@@ -4005,6 +4005,7 @@ const Chat = {
         }
         finish();
       } catch (e) {
+        if (this.leaving()) { finish(); return; }
         failure = e.message;
         giveBack();
         this.failed(failure, remember);
@@ -4027,6 +4028,7 @@ const Chat = {
     try {
       source = await Gen.generate(text, prior, undefined, images); live = true;
     } catch (e) {
+      if (this.leaving()) { finish(); return; }
       failure = e.message;
       giveBack();
       this.failed(failure, remember);
@@ -4046,6 +4048,14 @@ const Chat = {
   failed(failure, remember) {
     remember(false, 'the request failed: ' + failure);
     trackFailure(failure);
+  },
+  // reload_os (and Take the update) replace the page while the loop's next
+  // model request is in flight, and the reload aborts it: "Failed to fetch"
+  // landed in this catch 0.5-0.8 s later and was tracked as gen_failed_network
+  // after every reload_os on prod. A page leaving on purpose has no failure to
+  // report or record; the next boot fills the turn with the reload note.
+  leaving() {
+    return !!window.__vibeosIntentionalUnload;
   },
 
   // The model the next request goes out as when the override is cleared:
