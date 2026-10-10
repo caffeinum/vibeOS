@@ -767,7 +767,7 @@
   .ask-talk { align-self: flex-start; color: var(--accent); font-weight: 600; text-decoration: none; }
   .ask-talk:hover { text-decoration: underline; }
   /* The boot card (ui/dock.js startBootCard): the research ask's box, top
-     left under the menubar, with the boot's progress as a bar. */
+     right under the menubar, with the boot's progress as a bar. */
   .boot-bar { height: 4px; border-radius: 2px; overflow: hidden; background: var(--panel2); }
   .boot-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s linear; }
   .boot-now { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }

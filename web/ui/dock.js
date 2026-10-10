@@ -258,7 +258,8 @@ function bootSplash() {
    agent can be asked now, with a button that opens the chat. Not a modal and
    nothing opens by itself: the auto key modal is what cut boots in tavc.13.
    Shown on the page's first cold boot (a restore has no progress and takes
-   seconds), gone at 'ready', 'failed' or the ×. Arm a is the desktop as it
+   seconds), gone at 'ready', 'failed' or the ×. Top right: the chat opens
+   on the left. Arm a is the desktop as it
    was; the arm is BootArm's (kernel/machine.js), and an older kernel fork
    without it shows nothing. */
 const bootArmB = () => typeof BootArm !== 'undefined' && BootArm.arm === 'b';
@@ -286,7 +287,7 @@ function startBootCard() {
     el.id = 'bootCard';
     el.className = 'boot-card';
     el.setAttribute('role', 'status');
-    el.style.cssText = 'position:fixed;left:14px;z-index:7900';
+    el.style.cssText = 'position:fixed;right:14px;z-index:7900';
     const top = document.getElementById('menubar');
     el.style.top = ((top ? top.getBoundingClientRect().bottom : 0) + 10) + 'px';
     const head = document.createElement('div');
@@ -316,7 +317,10 @@ function startBootCard() {
     go.textContent = 'Open the chat';
     go.onclick = () => {
       track('boot_start_now_click');
-      now.remove();
+      // From here it is a progress line over a desktop in use: clicks go
+      // through it, so it never takes a window's title bar on a narrow screen.
+      now.remove(); x.remove();
+      el.style.pointerEvents = 'none';
       const ui = UI.live();
       ui.focusOrOpen(ui.SHELL.chat);
     };
