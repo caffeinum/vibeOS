@@ -253,7 +253,7 @@ const Gen = {
             : state === 'waiting' ? 'waiting for your agent…'
             : state === 'pairing' ? detail || 'pairing…'
             : state === 'error' ? detail : '';
-          if (state === 'connected') { track('key_added', { via: 'mcp', ...src }); finish(); }
+          if (state === 'connected') { track('key_added', { via: 'mcp', ...src }); AgentActivity.connected('mcp'); finish(); }
         };
         offBridge = RemoteBridge.on(paint); paint(RemoteBridge.state, RemoteBridge.detail);
       };
@@ -283,7 +283,7 @@ const Gen = {
       overlay.querySelector('#keySaveBtn').onclick = () => {
         const k = overlay.querySelector('#keyInput').value.trim();
         this.saveKey(k);
-        if (k) track('key_added', { via: 'paste', ...src });
+        if (k) { track('key_added', { via: 'paste', ...src }); AgentActivity.connected('key'); }
         finish();
       };
       // One probe per modal, started on open so a signed-in person sees who
@@ -333,6 +333,7 @@ const Gen = {
           });
           this.saveOAuth(tokens);
           track('key_added', { via: 'codex', ...src });
+          AgentActivity.connected('key');
           finish();
         } catch (e) {
           if (slot.querySelector('#oauthPanel')) {
@@ -2647,7 +2648,7 @@ const RemoteBridge = {
     // WHICH path produced this pairing. Without it the link experiment reads
     // as a number that cannot be attributed: a rise in mcp_paired could be new
     // people the link reached, or the same people who would have used the pane.
-    if (this.state !== 'connected') track('mcp_paired', { how: this.pairedHow || 'unknown' });
+    if (this.state !== 'connected') { track('mcp_paired', { how: this.pairedHow || 'unknown' }); AgentActivity.connected('mcp'); }
     this.set('connected', label);
     // A link pairing lands with no pane open: the person accepted a dialog,
     // it closed, and nothing on screen said the handover happened (the pane
@@ -2779,6 +2780,35 @@ const AgentActivity = {
     if (via === 'guest' || this.first()) return;
     try { localStorage.setItem(this.KEY, JSON.stringify({ at: Date.now(), via })); } catch { return; }
     track('agent_first_did', { via });
+  },
+  // The research ask's doors (beads-tavc.2.11). A device that connected a
+  // model (key_added: a pasted key or a ChatGPT login) or paired an agent
+  // (mcp_paired, or key_added via the modal's agent pairing) is stamped once,
+  // first door wins, in vibeos-agent-door: {at, door}. door() is what the ask
+  // reads: 'agent' once an agent DID something here, else the stamp, else
+  // what is connected right now — a device that connected before the stamp
+  // existed still counts while its key or its pairing is there.
+  DOOR_KEY: 'vibeos-agent-door',
+  connected(door) {
+    try {
+      if (localStorage.getItem(this.DOOR_KEY) !== null) return;
+      localStorage.setItem(this.DOOR_KEY, JSON.stringify({ at: Date.now(), door }));
+    } catch {}
+  },
+  door() {
+    if (this.first()) return 'agent';
+    let raw = null;
+    try { raw = localStorage.getItem(this.DOOR_KEY); } catch {}
+    if (raw !== null) {
+      try {
+        const v = JSON.parse(raw);
+        if (v && (v.door === 'key' || v.door === 'mcp')) return v.door;
+      } catch {}
+      console.warn('AgentActivity: ' + this.DOOR_KEY + ' is not {at, door} (' + raw.slice(0, 60) + '); ignored');
+    }
+    if (Gen.forApps) return 'key';
+    if (RemoteBridge.state === 'connected') return 'mcp';
+    return null;
   },
   // { at, via } of this device's first doing call, or null.
   first() {

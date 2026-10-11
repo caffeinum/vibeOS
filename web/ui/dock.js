@@ -493,8 +493,9 @@ function startTray() {
    User research, not a feature (2026-10-03, approved by vibeos-yc: we had
    never talked to a user). A small card, bottom-left above the dock, asking
    for an email so we can ask a couple of questions; it promises no call.
-   At most once per browser,
-   ever: `vibeos-research-ask` is written before the card is painted, and a
+   At most once per browser per ask,
+   ever: `vibeos-research-ask` (the email card) or `vibeos-research-ask-agent`
+   is written before the card is painted, and a
    browser whose storage throws never sees it. Two groups:
 
    - returner: this is not the browser's first visit. `vibeos-first-seen`
@@ -517,7 +518,15 @@ function startTray() {
      "What did you have your agent do here?", with an optional email, and
      says we read the answers; the answer is redacted here (redactPrompt, the
      first_prompt redactor) and again by the route, and kept in the vault
-     only. Tracked: ask_answered {group, has_email} — never the text.
+     only. Tracked: ask_answered {group, door, has_email} — never the text.
+     Since 2026-10-11 (beads-tavc.2.11) it has its own key
+     (vibeos-research-ask-agent, once per browser; an earlier email card no
+     longer blocks it) and three doors (AgentActivity.door): agent (an agent
+     did something here, the line above), key (a model was connected) and
+     mcp (an agent was paired), the last two asking "What did you want the
+     agent to do here?". Every door waits readyMs (60 s) after this page's
+     machine was ready — never during the boot. door rides ask_shown,
+     ask_dismissed, ask_answered and the lead record.
    Agent wins over returner, returner over silent. Never over the key modal or the pairing dialog
    (.key-modal-overlay), the recovery or fork bar, or the winxp boot splash:
    it waits until they are gone. Never on ?safe=1 / ?stock=1 / a recovery
@@ -526,7 +535,8 @@ function startTray() {
    no /api, so nothing is probed there.
    The email goes to /api/waitlist (source 'in-app-ask' + the group), which
    keeps it in the Hexclave data vault and copies it to getwaitlist. Tracked:
-   ask_shown / ask_dismissed / ask_email with {group} — never the email.
+   ask_shown / ask_dismissed / ask_email with {group} (+ door for the agent
+   ask) — never the email.
    Every string is textContent. window.__vibeosAskTiming overrides
    ASK_TIMING field by field (scripts/e2e/research-ask.mjs shortens them).
    One decision per page (__vibeosAskDecided, like the splash): a reload_ui
@@ -534,12 +544,13 @@ function startTray() {
 // A calendar link for the thank-you state; empty, so no link (2026-10-03:
 // the operator chose not to share a calendar).
 export const RESEARCH_BOOKING_URL = '';
-const ASK_KEY = 'vibeos-research-ask', FIRST_SEEN_KEY = 'vibeos-first-seen';
-const ASK_TIMING = { deskMs: 5000, silentMs: 60000, returnGapMs: 3600000, pollMs: 1000, agentMs: 120000, quietMs: 15000 };
+const ASK_KEY = 'vibeos-research-ask', AGENT_ASK_KEY = 'vibeos-research-ask-agent', FIRST_SEEN_KEY = 'vibeos-first-seen';
+const ASK_TIMING = { deskMs: 5000, silentMs: 60000, returnGapMs: 3600000, pollMs: 1000, agentMs: 120000, quietMs: 15000, readyMs: 60000 };
 const ASK_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash, #bootCard';
 const ASK_COPY = {
   returner: "What brought you back to vibeOS? Leave your email and we'll ask you a couple of questions.",
   agent: 'What did you have your agent do here? (one line)',
+  want: 'What did you want the agent to do here? (one line)',
   silent: "Not sure what to do here? Tell us what you were hoping for: leave your email and we'll ask you a couple of questions.",
 };
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -573,47 +584,67 @@ function startAsk() {
   if (seen === null) {
     try { store.setItem(FIRST_SEEN_KEY, String(now)); } catch { return () => {}; }
   }
-  if (store.getItem(ASK_KEY) !== null) return () => {};
+  // Two asks, each once per browser: the email card (returner/silent) under
+  // ASK_KEY, the agent ask under its own key. They shared ASK_KEY until
+  // 2026-10-11 (beads-tavc.2.11), so a silent card seen first meant no
+  // agent ask ever — and the agent cohort is the one we most wanted to hear.
+  // A browser that already got the agent ask under the shared key ('agent …')
+  // has had both.
+  const asked = store.getItem(ASK_KEY);
+  const legacyAgent = asked !== null && asked.startsWith('agent ');
+  const emailDone = asked !== null;
+  const agentDone = legacyAgent || store.getItem(AGENT_ASK_KEY) !== null;
+  if (emailDone && agentDone) return () => {};
 
   const t = { ...ASK_TIMING, ...(window.__vibeosAskTiming || {}) };
   const legacy = raw === null;
   const returning = () => (seen !== null && now - seen >= t.returnGapMs) || (legacy && VM.state === 'ready' && !!VM.restored);
   let deskUp = false, silentDue = false, silentTimer = null, card = null, ended = false;
+  let readyAt = VM.state === 'ready' ? Date.now() : 0;
 
-  // An older kernel fork has no AgentActivity: no agent cohort there.
-  const agentKnown = typeof AgentActivity !== 'undefined';
-  const agentDue = () => {
-    if (!agentKnown) return false;
-    const did = AgentActivity.first();
+  // The agent ask's door (AgentActivity.door): 'agent' once an agent did
+  // something here, 'key' or 'mcp' for a device that connected a model or
+  // paired an agent. Asked readyMs after this page's machine was ready (never
+  // during the boot), never mid-turn, and for the agent door agentMs after
+  // its first doing call. An older kernel fork has no AgentActivity.door: no
+  // agent ask there.
+  const agentKnown = typeof AgentActivity !== 'undefined' && typeof AgentActivity.door === 'function';
+  const agentDoor = () => {
+    if (!agentKnown || agentDone || !readyAt) return null;
     const at = Date.now();
-    return !!did && at - did.at >= t.agentMs && !Chat.running && at - AgentActivity.lastAt >= t.quietMs;
+    if (at - readyAt < t.readyMs || Chat.running || at - AgentActivity.lastAt < t.quietMs) return null;
+    const door = AgentActivity.door();
+    if (door === 'agent' && at - AgentActivity.first().at < t.agentMs) return null;
+    return door;
   };
   const pick = () => {
-    if (deskUp && agentDue()) return 'agent';
-    if (deskUp && returning()) return 'returner';
-    if (silentDue && !Chat.asked && RemoteBridge.state !== 'connected') return 'silent';
+    const door = deskUp && agentDoor();
+    if (door) return { group: 'agent', door };
+    if (emailDone) return null;
+    if (deskUp && returning()) return { group: 'returner' };
+    if (silentDue && !Chat.asked && RemoteBridge.state !== 'connected') return { group: 'silent' };
     return null;
   };
   // Nothing left that could still come true: the returner check has had its
   // chance (a legacy browser's machine may yet come back restored), and the
   // silent one has fired empty or the person has typed. An agent can start
   // working at any moment, so with AgentActivity the page never settles.
-  const settled = () => !agentKnown && deskUp && !returning() && !(legacy && VM.state !== 'ready')
-    && (Chat.asked || silentDue);
+  const settled = () => (!agentKnown || agentDone) && deskUp
+    && (emailDone || (!returning() && !(legacy && VM.state !== 'ready') && (Chat.asked || silentDue)));
   const consider = () => {
     if (ended || card) return;
     if (document.readyState !== 'complete') return;
     if (!HexEvents.hosted()) return end();
     if (document.querySelector(ASK_BLOCKERS)) return;
-    const group = pick();
-    if (group) return show(group);
+    const choice = pick();
+    if (choice) return show(choice);
     if (settled()) end();
   };
   const armSilent = () => {
     if (silentTimer || VM.state !== 'ready') return;
     silentTimer = setTimeout(() => { silentDue = true; consider(); }, t.silentMs);
   };
-  const offVM = VM.on(() => { armSilent(); consider(); });
+  const offVM = VM.on(() => { if (VM.state === 'ready' && !readyAt) readyAt = Date.now(); armSilent(); consider(); });
   armSilent();
   const deskTimer = setTimeout(() => { deskUp = true; consider(); }, t.deskMs);
   const poll = setInterval(consider, t.pollMs);
@@ -624,17 +655,17 @@ function startAsk() {
     offVM(); clearTimeout(deskTimer); clearTimeout(silentTimer); clearInterval(poll);
   }
 
-  function show(group) {
-    try { store.setItem(ASK_KEY, group + ' ' + new Date().toISOString()); } catch { return end(); }
+  function show({ group, door }) {
+    try { store.setItem(door ? AGENT_ASK_KEY : ASK_KEY, (door || group) + ' ' + new Date().toISOString()); } catch { return end(); }
     end();
-    card = paintAsk(group);
-    track('ask_shown', { group });
+    card = paintAsk(group, door);
+    track('ask_shown', door ? { group, door } : { group });
   }
 
   return () => { end(); if (card) card.remove(); };
 }
 
-function paintAsk(group) {
+function paintAsk(group, door) {
   const el = document.createElement('div');
   el.id = 'researchAsk';
   el.className = 'ask-card';
@@ -646,7 +677,7 @@ function paintAsk(group) {
   head.className = 'ask-head';
   const line = document.createElement('p');
   line.className = 'ask-line';
-  line.textContent = ASK_COPY[group];
+  line.textContent = ASK_COPY[door === 'key' || door === 'mcp' ? 'want' : group];
   const x = document.createElement('button');
   x.type = 'button';
   x.className = 'ask-x';
@@ -654,7 +685,7 @@ function paintAsk(group) {
   x.setAttribute('aria-label', 'Dismiss');
   x.textContent = '×';
   head.append(line, x);
-  if (group === 'agent') return paintAgentAsk(el, head, x);
+  if (group === 'agent') return paintAgentAsk(el, head, x, door);
   const form = document.createElement('form');
   form.className = 'ask-form';
   form.noValidate = true;
@@ -739,15 +770,16 @@ const AGENT_ANSWER_MAX = 200;
 // route redacts again whatever arrives.
 const redactAnswer = text => typeof redactPrompt === 'function' ? redactPrompt(text) : String(text).replace(/\s+/g, ' ').trim().slice(0, AGENT_ANSWER_MAX);
 
-function paintAgentAsk(el, head, x) {
+function paintAgentAsk(el, head, x, door) {
   const group = 'agent';
+  el.dataset.door = door;
   const form = document.createElement('form');
   form.className = 'ask-form ask-agent';
   form.noValidate = true;
   const answer = document.createElement('input');
   answer.type = 'text';
   answer.className = 'ask-answer';
-  answer.placeholder = 'e.g. had it build a calorie tracker';
+  answer.placeholder = door === 'agent' ? 'e.g. had it build a calorie tracker' : 'e.g. build me a calorie tracker';
   answer.maxLength = AGENT_ANSWER_MAX;
   answer.setAttribute('aria-label', 'What you had your agent do');
   const email = document.createElement('input');
@@ -775,7 +807,7 @@ function paintAgentAsk(el, head, x) {
   let sent = false;
   const say = (text, err) => { note.hidden = false; note.className = 'ask-note' + (err ? ' err' : ''); note.textContent = text; };
   x.onclick = () => {
-    if (!sent) track('ask_dismissed', { group });
+    if (!sent) track('ask_dismissed', { group, door });
     el.remove();
   };
   form.onsubmit = async e => {
@@ -791,7 +823,7 @@ function paintAgentAsk(el, head, x) {
       res = await fetch('/api/waitlist', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(Object.assign({ source: 'in-app-ask', group, answer: text, path: location.pathname }, mail ? { email: mail } : {})),
+        body: JSON.stringify(Object.assign({ source: 'in-app-ask', group, door, answer: text, path: location.pathname }, mail ? { email: mail } : {})),
       });
       body = await res.json().catch(() => ({}));
     } catch (err) { console.warn('research ask: send failed', err); }
@@ -800,7 +832,7 @@ function paintAgentAsk(el, head, x) {
       return say(typeof body.error === 'string' ? body.error : "Couldn't send that. Try again in a moment.", true);
     }
     sent = true;
-    track('ask_answered', { group, has_email: !!mail });
+    track('ask_answered', { group, door, has_email: !!mail });
     form.remove();
     notice.remove();
     say(mail ? 'Thanks. We may write to ' + mail + ' with a follow-up.' : 'Thanks, that helps.');
