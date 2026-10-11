@@ -620,7 +620,9 @@ function startAsk() {
   const pick = () => {
     const door = deskUp && agentDoor();
     if (door) return { group: 'agent', door };
-    if (emailDone) return null;
+    // An eligible device waits for its agent ask rather than taking the
+    // email card in the meantime: agent wins over returner and silent.
+    if (emailDone || (agentKnown && !agentDone && AgentActivity.door())) return null;
     if (deskUp && returning()) return { group: 'returner' };
     if (silentDue && !Chat.asked && RemoteBridge.state !== 'connected') return { group: 'silent' };
     return null;
