@@ -58,6 +58,12 @@ export function loginLine() {
   const via = mcp.agent ? (mcp.reconnecting && !Gen.available ? mcp.suffix : mcp.reconnecting ? ' (reconnecting)' : ' + mcp') : '';
   if (Gen.viaServer) return { text: 'Server · ' + (Gen.model || 'local') + via, on: true, warn: mcp.reconnecting, title: 'A local vibeOS server holds the model.' + (agent ? (mcp.reconnecting ? mcp.titleExtra : ' ' + agent + ' also drives this desktop through vibeos-mcp.') : '') };
   if (Gen.provider === 'openai-codex') return { text: 'Codex · ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'Signed in with ChatGPT. The model is ' + Gen.model + (Gen.codexModel ? ' (set in Settings › Model)' : ' (the default)') + '. Your tokens stay in this browser.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  if (Gen.provider === 'hosted' && typeof Hosted !== 'undefined') {
+    const low = Hosted.credits < Hosted.HEADROOM;
+    return { text: 'Hosted · ' + Hosted.credits + ' credits' + via, on: !low && !Hosted.paused, warn: low || Hosted.paused,
+             title: 'vibeOS hosted AI (' + Gen.model + ') on your account. A step needs up to about ' + Hosted.HEADROOM + ' credits of headroom'
+               + (Hosted.grantPaused ? '; free credits are paused this month, paid ones still work' : '') + '.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  }
   if (Gen.key && Gen.provider) return { text: 'API key · ' + Gen.provider + ' ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'A pasted ' + Gen.provider + ' key, kept in this browser. The model is ' + Gen.model + '.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
   if (agent) return { text: 'Agent · ' + agent + (mcp.reconnecting ? mcp.suffix : ' (mcp)'), on: mcp.on, warn: mcp.reconnecting, title: mcp.reconnecting ? mcp.titleExtra.slice(1) : agent + ' drives this desktop through vibeos-mcp with its own model. No model is connected here.' };
   return { text: 'no model', on: false, warn: false, title: 'No model connected. Click to connect one.' };
