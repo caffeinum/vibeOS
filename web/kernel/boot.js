@@ -410,9 +410,12 @@ const LIVENESS_EXEC_MS = 30000;
 // browsers, bots and a month near Hexclave's replay quota.
 const REPLAY_KEY = 'vibeos-replay';
 
-function startReplayWhenIdle() {
+function startReplayWhenIdle(tries = 0) {
   const inject = () => {
-    if (navigator.webdriver || !HexEvents.hosted()) return;
+    if (navigator.webdriver || !HexEvents.hosted() || HexEvents.state === 'off') return;
+    // A replay joins the Hexclave user the browser's first event mints; until
+    // that post has answered there is no user, and the server says no.
+    if (HexEvents.state !== 'on') { if (tries < 30) setTimeout(() => startReplayWhenIdle(tries + 1), 2000); return; }
     try {
       let arm = localStorage.getItem(REPLAY_KEY);
       if (arm !== 'on' && arm !== 'off') {
