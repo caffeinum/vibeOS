@@ -31,7 +31,7 @@ function paintAnalyticsBar() {
   const msg = document.createElement('span');
   msg.className = 'analytics-msg';
   msg.appendChild(document.createTextNode(
-    'This hosted build stores analytics about how you use vibeOS. If you\u2019d rather not, '));
+    'This hosted build stores analytics about how you use vibeOS, which may include a masked recording of the screen. If you\u2019d rather not, '));
   const link = document.createElement('a');
   link.href = OPEN_SOURCE_URL;
   link.target = '_blank';
@@ -403,6 +403,34 @@ window.addEventListener('beforeunload', (e) => {
 // stock would change nothing. No timer: a slow boot is not a broken one, and
 // the loader's pagehide rule covers a person who leaves before the answer.
 const LIVENESS_EXEC_MS = 30000;
+// Session replay (beads-tavc.3.2): the hosted page only, half of browsers
+// (drawn once, kept in vibeos-replay), and never on the boot's clock: it is
+// injected after the desktop painted, the page loaded and the browser went
+// idle. replay.js (served-only) holds the masking; the server refuses team
+// browsers, bots and a month near Hexclave's replay quota.
+const REPLAY_KEY = 'vibeos-replay';
+
+function startReplayWhenIdle() {
+  const inject = () => {
+    if (navigator.webdriver || !HexEvents.hosted()) return;
+    try {
+      let arm = localStorage.getItem(REPLAY_KEY);
+      if (arm !== 'on' && arm !== 'off') {
+        arm = crypto.getRandomValues(new Uint8Array(1))[0] & 1 ? 'on' : 'off';
+        localStorage.setItem(REPLAY_KEY, arm);
+      }
+      if (arm !== 'on') return;
+    } catch { return; }
+    const s = document.createElement('script');
+    s.src = BASE + 'replay.js';
+    s.async = true;
+    document.head.appendChild(s);
+  };
+  const idle = () => window.requestIdleCallback ? requestIdleCallback(inject, { timeout: 10000 }) : setTimeout(inject, 2000);
+  if (document.readyState === 'complete') idle();
+  else addEventListener('load', idle, { once: true });
+}
+
 function watchLiveness() {
   bootPainted();
   const forked = () => window.__vibeosBoot.source === 'stored';
@@ -551,6 +579,7 @@ function markReadyWhileHidden() {
   window.__vibeosOpenAgent = () => UI.live().openAgent();
   watchLiveness();
   markReadyWhileHidden();
+  startReplayWhenIdle();
   // No key modal on a first visit (beads-tavc.13). The auto offer that went
   // live 2026-10-04 left 18% of devices that never touched it reaching
   // vm_ready, against 72-93% without it, and it showed no lift in
