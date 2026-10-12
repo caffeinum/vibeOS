@@ -203,11 +203,19 @@ export function ChatApp(body, win) {
   };
   // The id stays `addKeyNow`: the paint hook scrolls it into view by that name.
   const paintOffer = () => {
+    // Hosted AI on and nobody signed in: trying it free is the first way
+    // out (pm's spec 16.1 §5a), the rule after the free credits said before
+    // sign-up, with connecting your own under it.
+    const tryFree = typeof Hosted !== 'undefined' && Hosted.enabled && !Hosted.signedIn;
     const b = bubble('vibeos', `
       <span class="part">No model is connected, and building anything needs one.</span>
-      <p class="tiny dimmer" style="margin:6px 0 8px">Connect one and I’ll build this for real. An agent you already pay for works (Claude Code, Cursor or Codex), no API key needed.</p>
-      <button class="btn p sm" id="addKeyNow">Connect a model</button>`);
+      ${tryFree ? `<p class="tiny dimmer" style="margin:6px 0 8px">Try it free: sign up and get 500 credits on our model. Free credits are for trying it; after them, keep going with Pro.</p>
+      <div class="row" style="gap:6px"><button class="btn p sm" id="tryFreeNow">Try it free</button><button class="btn sm" id="addKeyNow">Connect a model</button></div>`
+      : `<p class="tiny dimmer" style="margin:6px 0 8px">Connect one and I’ll build this for real. An agent you already pay for works (Claude Code, Cursor or Codex), no API key needed.</p>
+      <button class="btn p sm" id="addKeyNow">Connect a model</button>`}`);
     b.querySelector('#addKeyNow').onclick = () => { track('offer_connect_click'); Chat.retryWithKey(); };
+    const tf = b.querySelector('#tryFreeNow');
+    if (tf) tf.onclick = () => { track('try_free_click', { from: 'offer' }); location.href = Account.SIGNUP; };
     return b;
   };
   // A model reply that failed: the provider's words (a slice of a proxy's
@@ -229,15 +237,26 @@ export function ChatApp(body, win) {
     const to = Chat.defaultModel();
     // Hosted AI out of credits or paused: the ways out, on the last failure
     // only — top up or subscribe on /account, or bring your own model.
-    const billing = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused');
+    // needs-pro (free credits used, bring-your-own locked) offers the same
+    // purchases but not "your own key": that is what it locked.
+    const billing = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused' || t.hosted === 'needs-pro');
+    const ownKey = billing && t.hosted !== 'needs-pro';
     const b = bubble('vibeos', '<span class="no" id="failure"></span>'
       + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : '')
-      + (billing ? '<div class="row chat-failure-actions"><a class="btn sm p" id="hostedTopUp" href="/account" target="_blank" rel="noopener">Top up or subscribe</a><button class="btn sm" id="hostedOwnKey">Use my own key or agent</button></div>'
-        + '<p class="tiny dimmer" style="margin:4px 0 0">Purchases are final. Pro renews monthly until you cancel; cancelling stops the next renewal and you keep your credits.</p>' : ''), null, 'chat-failure');
+      + (billing ? '<div class="row chat-failure-actions"><button class="btn sm p" id="hostedPro">Subscribe: $20/mo</button><button class="btn sm" id="hostedTopUp">Top up 500 for $5</button>'
+        + (ownKey ? '<button class="btn sm" id="hostedOwnKey">Use my own key or agent</button>' : '') + '</div>'
+        + '<p class="tiny dimmer" id="hostedFinal" style="margin:4px 0 0"></p><p class="no tiny" id="hostedBuyErr" hidden style="margin:4px 0 0"></p>' : ''), null, 'chat-failure');
     b.querySelector('#failure').textContent = t.failure;
     if (billing) {
-      b.querySelector('#hostedTopUp').onclick = () => track('hosted_topup_click', { code: t.hosted });
-      b.querySelector('#hostedOwnKey').onclick = () => { track('hosted_own_key_click', { code: t.hosted }); void Gen.askForKey(); };
+      b.querySelector('#hostedFinal').textContent = Hosted.FINAL_LINE;
+      const buy = product => async () => {
+        try { await Hosted.checkout(product); }
+        catch (e) { const err = b.querySelector('#hostedBuyErr'); err.textContent = e.message; err.hidden = false; }
+      };
+      b.querySelector('#hostedPro').onclick = buy('pro');
+      b.querySelector('#hostedTopUp').onclick = buy('topup');
+      const own = b.querySelector('#hostedOwnKey');
+      if (own) own.onclick = () => { track('hosted_own_key_click', { code: t.hosted }); void Gen.askForKey(); };
     }
     const btn = b.querySelector('#resetModel');
     if (!btn) return;
