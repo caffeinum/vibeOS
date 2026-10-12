@@ -227,8 +227,18 @@ export function ChatApp(body, win) {
   const paintFailure = (t, i) => {
     const last = i === lastFailure() && !Chat.running;
     const to = Chat.defaultModel();
-    const b = bubble('vibeos', '<span class="no" id="failure"></span>' + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : ''), null, 'chat-failure');
+    // Hosted AI out of credits or paused: the ways out, on the last failure
+    // only — top up or subscribe on /account, or bring your own model.
+    const billing = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused');
+    const b = bubble('vibeos', '<span class="no" id="failure"></span>'
+      + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : '')
+      + (billing ? '<div class="row chat-failure-actions"><a class="btn sm p" id="hostedTopUp" href="/account" target="_blank" rel="noopener">Top up or subscribe</a><button class="btn sm" id="hostedOwnKey">Use my own key or agent</button></div>'
+        + '<p class="tiny dimmer" style="margin:4px 0 0">Purchases are final. Pro renews monthly until you cancel; cancelling stops the next renewal and you keep your credits.</p>' : ''), null, 'chat-failure');
     b.querySelector('#failure').textContent = t.failure;
+    if (billing) {
+      b.querySelector('#hostedTopUp').onclick = () => track('hosted_topup_click', { code: t.hosted });
+      b.querySelector('#hostedOwnKey').onclick = () => { track('hosted_own_key_click', { code: t.hosted }); void Gen.askForKey(); };
+    }
     const btn = b.querySelector('#resetModel');
     if (!btn) return;
     btn.textContent = 'Reset model to ' + to + ' and retry';

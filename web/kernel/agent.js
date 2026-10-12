@@ -58,6 +58,61 @@ const Account = {
 };
 Account.noteNewAccount();
 
+/* Hosted AI (beads-tavc.16.3): the built-in agent on vibeOS's own model for a
+   signed-in person, paid in credits (500 free at sign-up). The route
+   (/api/hosted/generate) meters every step on the server; this holds what
+   the desktop shows — on or off here, signed in or not, the balance — read
+   once at load from /api/hosted and updated from every step's reply. A
+   pasted key and a ChatGPT login stay free and win (Gen._setProvider puts
+   hosted last). `enabled` is the server's HOSTED_AI_ENABLED: off, nothing
+   hosted is offered anywhere. The static mirror has no /api (404) and the
+   container answers enabled: false. */
+const Hosted = {
+  STATUS: '/api/hosted',
+  GENERATE: '/api/hosted/generate',
+  // A step needs this much headroom at most (the route's worst case: a full
+  // prompt plus 16k output tokens at the output price, x100 x2), so a balance
+  // under it reads as low, not as a bug.
+  HEADROOM: 50,
+  enabled: false, signedIn: false, balance: null, grantPaused: false, paused: false, pro: false, model: '',
+  get active() { return this.enabled && this.signedIn; },
+  get credits() { return this.balance ? Math.max(0, this.balance.spendable) : 0; },
+  async refresh() {
+    let r;
+    try { r = await fetch(this.STATUS, { credentials: 'same-origin', cache: 'no-store' }); }
+    catch (e) { console.warn('hosted AI status:', e && e.message); return; }
+    if (r.status === 404) return;
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || typeof j.enabled !== 'boolean') { console.error('hosted AI status answered ' + r.status + ':', j); return; }
+    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: j.model || '' });
+    Gen.setProvider();
+    Gen.emit();
+  },
+  // One step, or one api.ai ask. A refusal (out of credits, paused, another
+  // turn running, signed out) throws with its `hostedCode`, in the server's words.
+  async step(body) {
+    const r = await fetch(this.GENERATE, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await jsonOf(r, 'hosted AI');
+    if (j.balance) { this.balance = j.balance; Gen.emit(); }
+    if (r.ok && typeof j.credits === 'number') track('credits_spent', { model: this.model });
+    if (!r.ok) {
+      track('hosted_refused', { code: String(j.code || r.status).slice(0, 40) });
+      throw Object.assign(new Error(j.error || ('hosted AI answered ' + r.status)), { hostedCode: j.code || 'failed' });
+    }
+    return j;
+  },
+  // A turn that ends holding its lease (the step budget ran out, a tool threw
+  // between steps) lets it go, or the next message waits out the 2 min hold.
+  async release(lease) {
+    try { await this.step({ release: lease }); }
+    catch (e) { console.warn('hosted AI: the turn lease was not released (it expires in 2 min):', e.message); }
+  },
+};
+
 const Gen = {
   available: false,
   token: (location.hash.match(/token=([^&]+)/) || [])[1] || '',
@@ -121,6 +176,12 @@ const Gen = {
       this.available = true;
       return;
     }
+    if (Hosted.active) {
+      this.provider = 'hosted';
+      this.model = Hosted.model.replace(/^[a-z]+\//, '');
+      this.available = true;
+      return;
+    }
     this.provider = '';
     this.model = '';
     this.available = false;
@@ -164,6 +225,10 @@ const Gen = {
           <p class="small dimmer" id="keyModalSubtitle" style="margin:0">Connect one you already use, or sign in.</p>
           <div class="key-modal-actions col">
             <div class="col" id="keyModalStep1">
+              <div class="col" id="keyTryFree" hidden>
+                <button type="button" class="btn p" id="keyTryFreeBtn">Try it free: 500 credits</button>
+                <p class="tiny dimmer" style="margin:0">Sign up and the built-in agent runs on our model. Free credits are for trying it; after them, keep going with Pro.</p>
+              </div>
               <button type="button" class="btn p" id="keyConnectBtn">Connect your agent</button>
               <div class="col" id="keyConnectPanel" hidden>
                 <ol class="connect-steps">
@@ -297,6 +362,14 @@ const Gen = {
         overlay.querySelector('#keyAccount').hidden = false;
       };
       account.then(a => { if (a.available && a.signedIn) paintSignedIn(a); });
+      // Hosted AI on, not signed in: trying it is the first way in, and it
+      // takes Create account's place (pm's spec 16.1 §5b).
+      if (Hosted.enabled && !Hosted.signedIn) {
+        overlay.querySelector('#keyTryFree').hidden = false;
+        overlay.querySelector('#keyConnectBtn').className = 'btn';
+        overlay.querySelector('#keyCreateBtn').hidden = true;
+        overlay.querySelector('#keyTryFreeBtn').onclick = () => { track('try_free_click', src); location.href = Account.SIGNUP; };
+      }
       overlay.querySelector('#keyCreateBtn').onclick = async () => {
         track('create_account_click');
         const btn = overlay.querySelector('#keyCreateBtn');
@@ -372,6 +445,9 @@ const Gen = {
       } catch {}
     }
     this.loadKey();
+    // Not awaited: a signed-in person's hosted model arrives a beat after
+    // the boot, announced through Gen.on like any other model change.
+    void Hosted.refresh();
     return this.available;
   },
 
@@ -418,7 +494,7 @@ const Gen = {
       if (src.startsWith('```')) src = src.split('\n').slice(1).join('\n').replace(/```\s*$/, '').trim();
       return src;
     }
-    if (this.oauth) return Agent.run(prompt, history, onStatus, images, steer);
+    if (this.oauth || this.provider === 'hosted') return Agent.run(prompt, history, onStatus, images, steer);
     throw new Error('no model configured');
   },
 
@@ -452,6 +528,7 @@ const Gen = {
       text = provider === 'anthropic' ? await this.askAnthropic(system, prompt, images, maxTokens)
            : provider === 'openai' ? await this.askOpenAI(system, prompt, images, maxTokens)
            : provider === 'openai-codex' ? await this.askCodex(system, prompt, images, maxTokens)
+           : provider === 'hosted' ? await this.askHosted(system, prompt, images, maxTokens)
            : provider === 'mcp-sampling' ? await this.askAgent(system, prompt, images, maxTokens, json)
            : (() => { throw new Error('no model connected'); })();
     } catch (e) {
@@ -503,6 +580,12 @@ const Gen = {
   // MCP client declared the sampling capability (the want frame says).
   get viaAgent() { return RemoteBridge.state === 'connected' && RemoteBridge.sampling; },
   samplingRefusal(agent) { return samplingRefusal(agent); },
+  // Hosted AI with { ask }: one metered step, no tools, answered { text }.
+  async askHosted(system, prompt, images, maxTokens) {
+    const j = await Hosted.step({ ask: { system, maxTokens }, messages: [{ role: 'user', content: Agent.userContent('sdk', prompt, images) }] });
+    if (typeof j.text !== 'string') throw new Error('hosted AI answered with no text');
+    return j.text;
+  },
   // The codex proxy (app/api/openai/generate) with { ask }: the route runs
   // the same generateText with no tools and this system, and answers { text }.
   async askCodex(system, prompt, images, maxTokens) {
@@ -3075,6 +3158,7 @@ const Agent = {
   },
 
   async callServer(body) {
+    if (Gen.provider === 'hosted') return Hosted.step(body);
     await Gen.ensureOAuthFresh();
     const auth = VibeOSOAuth.oauthAuthHeaders(Gen.oauth);
     if (!auth) throw new Error('no oauth session');
@@ -3541,18 +3625,32 @@ const Agent = {
       { role: 'user', content: this.userContent('sdk', prompt, images) },
     ];
     const created = [];
-    let lastText = '';
+    // Hosted AI holds one turn per account: the first step's reply carries
+    // the lease, every later step sends it back, the last step's reply drops
+    // it. A turn that ends any other way lets it go here.
+    let lease = null;
+    try {
+      return await this.runSteps(messages, onStatus, steer, created, l => { lease = l; });
+    } finally {
+      if (lease) Hosted.release(lease);
+    }
+  },
 
+  async runSteps(messages, onStatus, steer, created, setLease) {
+    let lastText = '', lease = null;
     for (let step = 0; step < this.MAX_STEPS; step++) {
       const note = this.stepNote(step);
       if (note) onStatus?.(this.stepStatus(step));
       // As `note`, not a system message inside `messages`: the AI SDK takes
       // one there but warns about it on every request ("Use the system option
       // instead"), and the route already has a system string to append to.
+      const hosted = Gen.provider === 'hosted';
       const body = Object.assign({ image: VM.bootedImage || VM.image, messages },
         note ? { note } : {},
-        Gen.codexModel ? { model: Gen.codexModel } : {});
+        !hosted && Gen.codexModel ? { model: Gen.codexModel } : {},
+        hosted && lease ? { lease } : {});
       const j = await this.callServer(body);
+      if (hosted) { lease = j.lease || null; setLease(lease); }
       lastText = j.text || '';
 
       if (!j.toolCalls || !j.toolCalls.length) {
@@ -3998,9 +4096,9 @@ const Chat = {
     // Both paths are the agent now. Signing in with ChatGPT proxies through
     // vibeos.sh; a pasted key talks to the provider from this page. Same
     // tools, same prompt, same loop.
-    if (Gen.available && (Gen.oauth || Gen.key)) {
+    if (Gen.available && (Gen.oauth || Gen.key || Gen.provider === 'hosted')) {
       try {
-        const result = Gen.oauth
+        const result = Gen.oauth || Gen.provider === 'hosted'
           ? await Gen.generate(text, prior, onStatus, images, steer)
           : await Agent.runWithKey(text, prior, onStatus, images, steer);
         live = true;
@@ -4037,6 +4135,9 @@ const Chat = {
       } catch (e) {
         if (this.leaving()) { finish(); return; }
         failure = e.message;
+        // A hosted refusal (out of credits, paused) gets the way out painted
+        // under it: Top up / Subscribe, or your own key or agent.
+        if (e.hostedCode) reply.hosted = e.hostedCode;
         giveBack();
         this.failed(failure, remember);
         finish();
@@ -4092,7 +4193,7 @@ const Chat = {
   // the Codex default for a ChatGPT login, the kernel's own line for a
   // pasted key (Gen.codexModel never applied there). Empty with no model.
   defaultModel() {
-    if (!Gen.available) return '';
+    if (!Gen.available || Gen.provider === 'hosted') return '';   // hosted runs one model: nothing to reset
     return Gen.provider === 'openai-codex' ? VibeOSOAuth.CODEX_MODEL : Gen.model;
   },
   // The button on a failed turn: clear Settings › Model (vibeos-codex-model)
