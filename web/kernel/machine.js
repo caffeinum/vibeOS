@@ -1243,6 +1243,7 @@ const VM = {
       this.watchRelay();
 
       this.screen = document.createElement('div');
+      this.screen.className = 'vm-screen'; // replay.js blocks it: the machine's screen is never recorded
       this.screen.tabIndex = 0;
       this.screen.style.cssText = 'background:#000;height:100%;overflow:auto;outline:none';
       this.screen.innerHTML = `<div style="white-space:pre;font:14px/1.15 'JetBrains Mono',monospace;color:var(--titletext);padding:6px"></div><canvas style="display:none"></canvas>`;
