@@ -21,14 +21,11 @@ function historyWindow(history) {
 }
 
 /* A vibeOS account (Hexclave, served by the Next app — never in this tree).
-   /api/account/me answers { signedIn, email?, displayName? } from the
-   session cookie. The static mirror has no /api (404) and the container has
-   no accounts (503): either is `available: false`, remembered for the page,
-   and the modal keeps the waitlist note. /auth/sign-up runs the hosted
+   Who is signed in comes from /api/hosted (Hosted below); the connect card's
+   Get 500 free credits is the sign-up door. /auth/sign-up runs the hosted
    sign-up and comes back to /app; it leaves `vibeos-account-new` in
    sessionStorage when the account is younger than the trip, read once here. */
 const Account = {
-  ME: '/api/account/me',
   SIGNUP: '/auth/sign-up?next=/app',
   NEW_FLAG: 'vibeos-account-new',
   FROM_FLAG: 'vibeos-signup-from',
@@ -38,21 +35,6 @@ const Account = {
     track('try_free_click', { from });
     try { sessionStorage.setItem(this.FROM_FLAG, 'try_free'); } catch {}
     location.href = this.SIGNUP;
-  },
-  absent: false,
-  async me() {
-    if (this.absent) return { available: false };
-    let r;
-    try { r = await fetch(this.ME, { credentials: 'same-origin', cache: 'no-store' }); }
-    catch (e) { console.warn('account probe failed:', e && e.message); return { available: false }; }
-    if (r.status === 404 || r.status === 503) { this.absent = true; return { available: false }; }
-    if (!r.ok) { console.warn(`account probe answered ${r.status}`); return { available: false }; }
-    const body = await r.json().catch(() => null);
-    if (!body || typeof body.signedIn !== 'boolean') {
-      console.error('account probe answered something that is not { signedIn }:', body);
-      return { available: false };
-    }
-    return { available: true, signedIn: body.signedIn, email: body.email ?? null, displayName: body.displayName ?? null };
   },
   // 'new' | 'existing' | '': how this page came back from the sign-up trip,
   // for the welcome (Welcome below, once /api/hosted says who is signed in).
@@ -419,9 +401,11 @@ const Welcome = {
   shown: false,
   maybe() {
     if (this.shown || !Account.returned || !Hosted.signedIn) return;
+    // The ui is not up yet: boot.js calls this again once the chat can open.
+    if (typeof window.__vibeosOpenChat !== 'function') return;
     this.shown = true;
     const fresh = Account.returned === 'new';
-    if (typeof window.__vibeosOpenChat === 'function') window.__vibeosOpenChat();
+    window.__vibeosOpenChat();
     Chat.line(fresh ? "You're in! You have 500 free credits. Try asking for an app." : `Welcome back! You have ${Hosted.credits} credits.`);
     if (fresh) track('credits_welcome_shown');
     Connect.emit(fresh ? 'welcome' : 'welcome-back');
