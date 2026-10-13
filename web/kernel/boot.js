@@ -579,6 +579,8 @@ function markReadyWhileHidden() {
   // Open the agent chat (and offer connect/login when no model is here).
   // Exposed for e2e and for Start; Browser and Settings need no model.
   window.__vibeosOpenChat = () => focusOrOpen(UI.live().SHELL.chat);
+  // Back from sign-up: /api/hosted may have answered before the chat could open.
+  Welcome.maybe();
   window.__vibeosOpenAgent = () => UI.live().openAgent();
   watchLiveness();
   markReadyWhileHidden();

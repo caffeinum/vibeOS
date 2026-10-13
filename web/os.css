@@ -771,6 +771,20 @@
   .boot-bar { height: 4px; border-radius: 2px; overflow: hidden; background: var(--panel2); }
   .boot-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s linear; }
   .boot-now { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  /* The login flow (ui/chat.js connect card, ui/dock.js credits banner and
+     Pro pill; beads-tavc.16.11). */
+  .connect-card { gap: 8px; padding: 12px; margin: 0 0 8px; border: var(--border-w) solid var(--line2); border-radius: var(--radius-ctl); background: var(--panel); }
+  .connect-card .connect-title { font-size: 13px; }
+  .connect-card.pulse { animation: connect-pulse .6s ease-out 2; }
+  @keyframes connect-pulse { 0% { box-shadow: 0 0 0 0 var(--accent); } 100% { box-shadow: 0 0 0 8px transparent; } }
+  .connect-options { gap: 8px; }
+  .chat-zero { gap: 8px; align-items: center; margin: 0 0 8px; }
+  .credits-banner { position: fixed; left: 50%; transform: translateX(-50%); z-index: 7800; display: flex; gap: 10px; align-items: center;
+    max-width: calc(100vw - 32px); padding: 8px 10px 8px 14px; font-size: 12.5px; background: var(--panel); color: var(--text);
+    border: var(--border-w) solid var(--line2); border-radius: var(--radius-ctl); box-shadow: var(--shadow-win); animation: balloon-in .18s ease-out; }
+  .credits-banner-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pro-pill { cursor: pointer; }
+  @media (max-width: 480px) { .pro-pill .pro-long { display: none; } .credits-banner-text { display: none; } }
   /* The pairing-link dialog: its Remote Assistance header is winxp's. */
   .link-modal { display: flex; flex-direction: column; gap: 10px; }
   .link-modal h2 { margin-bottom: 0; }

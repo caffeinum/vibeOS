@@ -1147,7 +1147,7 @@ function DesignAppRender(body, rerender) {
     if (take) take.onclick = () => window.__vibeosFork.take().catch(e => recoveryBar('Could not take the update.', e.message));
     if (agent) agent.onclick = () => {
       if (!window.__vibeosFork.agentAvailable()) {
-        if (typeof Gen !== 'undefined' && Gen.askForKey) Gen.askForKey();
+        if (typeof Gen !== 'undefined' && Gen.askForKey) Gen.askForKey({ from: 'settings' });
         else recoveryBar('No agent connected.', 'Add a model in Settings › Model or pair an agent in Settings › Capabilities.');
         return;
       }
@@ -1206,7 +1206,7 @@ function forkVersionText() {
 
 /* Hosted AI (beads-tavc.16.3), above the rest of the Model pane: the
    balance by source, the plan, the last 20 metered steps (time, model,
-   credits: no prompt or reply text exists to show) and Subscribe / Top up.
+   credits: no prompt or reply text exists to show) and Subscribe (no top-up since tavc.16.11).
    Signed out with hosted AI on: Try it free. Every value from the server is
    textContent. */
 function paintHosted(body) {
@@ -1261,8 +1261,8 @@ function paintHosted(body) {
   };
   // Buying only while the server has purchases on (PURCHASES_ENABLED).
   if (Hosted.purchases) {
-    if (!Hosted.pro) buy('hostedSubscribe', 'Subscribe: $20/mo, 3000 credits a month', 'pro', true);
-    buy('hostedTopUp', 'Top up 500 for $5', 'topup', Hosted.pro);
+    // Subscribe only: no top-up anywhere (aleks, beads-tavc.16.11).
+    if (!Hosted.pro) buy('hostedSubscribe', 'Subscribe: $20/mo, 3,000 credits every month', 'pro', true);
     box.appendChild(row);
     p(Hosted.FINAL_LINE, 'tiny dimmer');
     box.appendChild(err);
@@ -1324,7 +1324,20 @@ export function ModelApp(body) {
       </p>`;
     paintHosted(body);
     body.addEventListener('hosted-repaint', render, { once: true });
-    body.querySelector('#setkey').onclick = async () => { await Gen.askForKey(); render(); };
+    // Your own key, ChatGPT or an agent, in this pane: the connect card's
+    // Other options (Connect.buildOptions), since with hosted AI connected the
+    // chat's card is gone and there is no other place to add one.
+    body.querySelector('#setkey').onclick = () => {
+      let slot = body.querySelector('#modelOptions');
+      if (slot) return;
+      slot = document.createElement('div');
+      slot.id = 'modelOptions';
+      slot.style.margin = '10px 0';
+      body.querySelector('#setkey').closest('.row').after(slot);
+      const undo = Connect.buildOptions(slot);
+      Windows.onDispose(body.closest('.win') || body, undo);
+      const off = Gen.on(() => { off(); render(); });
+    };
     const c = body.querySelector('#clear');
     if (c) c.onclick = () => { Gen.saveKey(''); render(); };
     const co = body.querySelector('#clearoauth');

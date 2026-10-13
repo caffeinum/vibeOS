@@ -833,9 +833,15 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { if (Hidden.since === null) Hidden.since = performance.now(); }
   else if (Hidden.since !== null) { Hidden.ms += performance.now() - Hidden.since; Hidden.since = null; }
 });
+// The mark is for the page that set it: the one the person comes back to starts clean.
+try { sessionStorage.removeItem('vibeos-left-for-signup'); } catch {}
 window.addEventListener('pagehide', () => {
   if (VM.state !== 'booting') return;
-  track('vm_left_booting', { ms: Date.now() - VM.bootStarted, hidden_ms: Hidden.total() - VM.bootHiddenFrom });
+  // signup: the person left through the connect card's sign-up, which throws
+  // the boot away on purpose (beads-tavc.16.11); the boot A/B reads those apart.
+  let signup = false;
+  try { signup = sessionStorage.getItem('vibeos-left-for-signup') === '1'; } catch {}
+  track('vm_left_booting', { ms: Date.now() - VM.bootStarted, hidden_ms: Hidden.total() - VM.bootHiddenFrom, ...(signup ? { signup: true } : {}) });
 });
 
 const VM = {
