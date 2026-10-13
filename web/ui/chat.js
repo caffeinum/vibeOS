@@ -224,7 +224,7 @@ export function ChatApp(body, win) {
     // Out of credits, or bring-your-own locked at 0 (needs-pro): the paywall
     // has the price and the terms; this line only points at it. Paused (the
     // month's budget) keeps "your own key or agent" as the way on.
-    const billing = last && (t.hosted === 'out-of-credits' || t.hosted === 'needs-pro');
+    const billing = last && Hosted.purchases && (t.hosted === 'out-of-credits' || t.hosted === 'needs-pro');
     const ownKey = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused');
     const b = bubble('vibeos', '<span class="no" id="failure"></span>'
       + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : '')
