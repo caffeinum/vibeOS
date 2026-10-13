@@ -160,9 +160,9 @@ const Hosted = {
   },
   // One step, or one api.ai ask. A refusal (out of credits, paused, another
   // turn running, signed out) throws with its `hostedCode`, in the server's words.
-  async step(body) {
+  async step(body, { keepalive = false } = {}) {
     const r = await fetch(this.GENERATE, {
-      method: 'POST', credentials: 'same-origin',
+      method: 'POST', credentials: 'same-origin', keepalive,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
@@ -206,10 +206,25 @@ const Hosted = {
   },
   // A turn that ends holding its lease (the step budget ran out, a tool threw
   // between steps) lets it go, or the next message waits out the 2 min hold.
-  // `turn` is the token the last step answered with.
+  // `turn` is the token the last step answered with. keepalive, because the
+  // turn that ends in reload_os releases 400 ms before the page goes.
   async release(turn) {
-    try { await this.step({ release: turn }); }
+    if (this.liveTurn === turn) this.liveTurn = null;
+    try { await this.step({ release: turn }, { keepalive: true }); }
     catch (e) { console.warn('hosted AI: the turn lease was not released (it expires in 2 min):', e.message); }
+  },
+  // The lease of the turn in flight, for a page that goes away mid-turn (a
+  // hand reload, a closed tab): pagehide lets it go, or the next page's first
+  // message is refused "another turn is already running" for 2 min.
+  liveTurn: null,
+  releaseOnLeave() {
+    const turn = this.liveTurn;
+    if (!turn) return;
+    this.liveTurn = null;
+    try {
+      fetch(this.GENERATE, { method: 'POST', credentials: 'same-origin', keepalive: true,
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ release: turn }) }).catch(() => {});
+    } catch {}
   },
 };
 
@@ -2934,6 +2949,7 @@ const RemoteBridge = {
   unload() {},
 };
 window.addEventListener('pagehide', () => RemoteBridge.unload());
+window.addEventListener('pagehide', () => Hosted.releaseOnLeave());
 
 /* A window app was created and its window opened: the ui's tray balloon
    and the winxp cascade listen here. Decoration only, so a listener that
@@ -3753,7 +3769,7 @@ const Agent = {
         !hosted && Gen.codexModel ? { model: Gen.codexModel } : {},
         hosted ? Object.assign({ provider: Hosted.choice }, turn ? { turn } : {}) : {});
       const j = await this.callServer(body);
-      if (hosted) { turn = j.turn || null; setTurn(turn); Hosted.noteStep(j); }
+      if (hosted) { turn = j.turn || null; setTurn(turn); Hosted.liveTurn = turn; Hosted.noteStep(j); }
       lastText = j.text || '';
 
       if (!j.toolCalls || !j.toolCalls.length) {
@@ -3761,9 +3777,11 @@ const Agent = {
       }
 
       const toolResults = [];
+      let reloading = false;
       for (const call of j.toolCalls) {
         const output = await this.executeTool(call, onStatus, true);
         if (call.toolName === 'create_app') created.push(output);
+        if (call.toolName === 'reload_os' && output && output.ok !== false) reloading = true;
         toolResults.push({
           type: 'tool-result',
           toolCallId: call.toolCallId,
@@ -3775,6 +3793,12 @@ const Agent = {
       if (j.finishReason !== 'tool-calls') {
         return { text: lastText, created, steps: step + 1 };
       }
+      // reload_os replaces the page 400 ms from now: the turn ends here, as
+      // its result tells the model. A next step would be cut off mid-flight
+      // (charged, its reply never read) and the turn would never finish — no
+      // release, no hosted_turn. Ending it lets run() release the lease and
+      // the chat record the turn before the page goes.
+      if (reloading) return { text: lastText, created, steps: step + 1, reloading: true };
 
       messages = [...messages, ...(j.responseMessages || []), { role: 'tool', content: toolResults },
                   ...this.steerMessages('sdk', steer && step + 1 < this.MAX_STEPS ? steer() : [])];
@@ -4218,6 +4242,9 @@ const Chat = {
           : await Agent.runWithKey(text, prior, onStatus, images, steer);
         live = true;
         if (Gen.provider === 'hosted') Hosted.turnDone(undefined, vmAtStart);
+        // reload_os ended the turn (the loop stopped there): the reply stays
+        // blank in the log for the next boot to fill with the reload note.
+        if (result.reloading) { finish(); return; }
         // What history remembers of the turn: the reply, else what was
         // built. A refused create_app built nothing, so a turn that only
         // refused is remembered as the refusal, never as the title alone.
