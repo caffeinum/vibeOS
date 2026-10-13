@@ -215,7 +215,7 @@ export function ChatApp(body, win) {
       <button class="btn p sm" id="addKeyNow">Connect a model</button>`}`);
     b.querySelector('#addKeyNow').onclick = () => { track('offer_connect_click'); Chat.retryWithKey(); };
     const tf = b.querySelector('#tryFreeNow');
-    if (tf) tf.onclick = () => { track('try_free_click', { from: 'offer' }); location.href = Account.SIGNUP; };
+    if (tf) tf.onclick = () => Account.trySignUp('offer');
     return b;
   };
   // A model reply that failed: the provider's words (a slice of a proxy's
@@ -241,20 +241,25 @@ export function ChatApp(body, win) {
     // purchases but not "your own key": that is what it locked.
     const billing = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused' || t.hosted === 'needs-pro');
     const ownKey = billing && t.hosted !== 'needs-pro';
+    // Buying only while the server has purchases on (PURCHASES_ENABLED).
+    const buy = billing && Hosted.purchases;
     const b = bubble('vibeos', '<span class="no" id="failure"></span>'
       + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : '')
-      + (billing ? '<div class="row chat-failure-actions"><button class="btn sm p" id="hostedPro">Subscribe: $20/mo</button><button class="btn sm" id="hostedTopUp">Top up 500 for $5</button>'
-        + (ownKey ? '<button class="btn sm" id="hostedOwnKey">Use my own key or agent</button>' : '') + '</div>'
-        + '<p class="tiny dimmer" id="hostedFinal" style="margin:4px 0 0"></p><p class="no tiny" id="hostedBuyErr" hidden style="margin:4px 0 0"></p>' : ''), null, 'chat-failure');
+      + (billing ? '<div class="row chat-failure-actions">'
+        + (buy ? '<button class="btn sm p" id="hostedPro">Subscribe: $20/mo</button><button class="btn sm" id="hostedTopUp">Top up 500 for $5</button>' : '')
+        + (ownKey ? '<button class="btn sm' + (buy ? '' : ' p') + '" id="hostedOwnKey">Use my own key or agent</button>' : '') + '</div>'
+        + (buy ? '<p class="tiny dimmer" id="hostedFinal" style="margin:4px 0 0"></p><p class="no tiny" id="hostedBuyErr" hidden style="margin:4px 0 0"></p>' : '') : ''), null, 'chat-failure');
     b.querySelector('#failure').textContent = t.failure;
-    if (billing) {
+    if (buy) {
       b.querySelector('#hostedFinal').textContent = Hosted.FINAL_LINE;
-      const buy = product => async () => {
-        try { await Hosted.checkout(product); }
+      const checkout = product => async () => {
+        try { await Hosted.checkout(product, 'card'); }
         catch (e) { const err = b.querySelector('#hostedBuyErr'); err.textContent = e.message; err.hidden = false; }
       };
-      b.querySelector('#hostedPro').onclick = buy('pro');
-      b.querySelector('#hostedTopUp').onclick = buy('topup');
+      b.querySelector('#hostedPro').onclick = checkout('pro');
+      b.querySelector('#hostedTopUp').onclick = checkout('topup');
+    }
+    if (billing) {
       const own = b.querySelector('#hostedOwnKey');
       if (own) own.onclick = () => { track('hosted_own_key_click', { code: t.hosted }); void Gen.askForKey(); };
     }
