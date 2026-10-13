@@ -39,6 +39,7 @@ const Account = {
   // 'new' | 'existing' | '': how this page came back from the sign-up trip,
   // for the welcome (Welcome below, once /api/hosted says who is signed in).
   returned: '',
+  reported: false,
   noteNewAccount() {
     let fresh = false;
     try { fresh = sessionStorage.getItem(this.NEW_FLAG) === '1'; if (fresh) sessionStorage.removeItem(this.NEW_FLAG); } catch {}
@@ -146,6 +147,13 @@ const Hosted = {
       models: Array.isArray(j.models) ? j.models : [], defaultProvider: typeof j.defaultProvider === 'string' ? j.defaultProvider : 'openai' });
     // This read landed the sign-up grant: once per account (the server grants once).
     if (j.granted === true) track('credits_granted', { plan: 'grant' });
+    // Back from the sign-up trip, with an account or without (Back from the
+    // hosted page): the step between try_free_click and account_created that
+    // was invisible (tavc.16.14). Once per page.
+    if (Account.returned && !Account.reported) {
+      Account.reported = true;
+      track('sign_up_returned', { account: !!j.signedIn });
+    }
     Welcome.maybe();
     Paywall.resume();
     Gen.setProvider();
@@ -234,7 +242,9 @@ const Connect = {
   COPY: {
     title: 'Connect a model to start',
     primary: 'Get 500 free credits',
-    under: 'Sign up with GitHub, Google or email. No card needed.',
+    // Google and GitHub run on Hexclave's shared keys until our own OAuth apps
+    // exist, so their screens name the provider, not vibeOS (tavc.16.14).
+    under: "You'll sign in with email, Google or GitHub. Google and GitHub show our auth provider's name for now. No card needed.",
     other: 'Other options',
     fine: "Signed in, your own key or agent needs Pro after the free credits. Signed out, it's always free.",
     leaving: 'Taking you to sign up…',
