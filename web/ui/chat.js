@@ -43,7 +43,7 @@ export function renderMd(el, text) {
 }
 
 // The window paints Chat (kernel/agent.js) and nothing else: every bubble
-// comes from Chat.turns, Chat.running, Chat.notes and Chat.offer, so a
+// comes from Chat.turns, Chat.running and Chat.notes, so a
 // reload_ui — or a close and reopen — paints the same conversation back,
 // turn in flight included. Every model, tool or guest string lands through
 // textContent or renderMd: a refused title, a card, a reply are never markup.
@@ -57,6 +57,8 @@ export function ChatApp(body, win) {
   body.innerHTML = `
     <div id="log" class="chat-log"></div>
     <div id="composer" class="chat-composer">
+      <div id="connectCard" class="connect-card col" hidden></div>
+      <div id="zeroLine" class="chat-zero row" hidden></div>
       <div id="chips" class="chat-chips row" hidden></div>
       <div class="chat-composer-row row">
         <button class="btn sm chat-attach" id="attach" type="button" title="attach an image" aria-label="attach an image"></button>
@@ -113,8 +115,7 @@ export function ChatApp(body, win) {
     const html = Gen.available ? readyLine()
       : agent ? `<b class="part yes"></b> is connected through vibeos-mcp and can drive this desktop.<br>
          <span class="tiny dimmer">Type here and your messages get to the agent on its next tool call (get_mailbox). This box can also run a second model alongside it.</span> <span class="row" style="margin-top:8px"><button class="btn sm" id="chatConnect">Connect a model here too</button></span>`
-      : `<b class="part">No model connected yet.</b> Connect one to generate apps and scripts from the chat.<br>
-         <span class="row" style="margin-top:8px"><button class="btn p sm" id="chatConnect">Connect a model</button></span>`;
+      : `Ask for anything. I’ll build a <b>window</b> for the desktop, or a <b>script</b> that runs inside the VM. <span class="tiny dimmer">Connect a model below to start.</span>`;
     if (introEl && introEl.isConnected) { introEl.innerHTML = html; }
     else introEl = bubble('vibeos', html);
     // The id is whatever the pane stored: text, like every model string.
@@ -122,7 +123,7 @@ export function ChatApp(body, win) {
     if (model) model.textContent = Gen.model;
     if (agent && !Gen.available) introEl.querySelector('b').textContent = RemoteBridge.detail || 'your agent';
     const connectBtn = introEl.querySelector('#chatConnect');
-    if (connectBtn) connectBtn.onclick = async () => { await Gen.askForKey(); paintIntro(); };
+    if (connectBtn) connectBtn.onclick = async () => { await Gen.askForKey({ from: 'intro' }); paintIntro(); };
   };
   // The intro follows the bridge: the onboarding modal closes itself when an
   // agent connects, and the chat behind it must not keep saying "no model".
@@ -201,23 +202,6 @@ export function ChatApp(body, win) {
       };
     }
   };
-  // The id stays `addKeyNow`: the paint hook scrolls it into view by that name.
-  const paintOffer = () => {
-    // Hosted AI on and nobody signed in: trying it free is the first way
-    // out (pm's spec 16.1 §5a), the rule after the free credits said before
-    // sign-up, with connecting your own under it.
-    const tryFree = typeof Hosted !== 'undefined' && Hosted.enabled && !Hosted.signedIn;
-    const b = bubble('vibeos', `
-      <span class="part">No model is connected, and building anything needs one.</span>
-      ${tryFree ? `<p class="tiny dimmer" style="margin:6px 0 8px">Try it free: sign up and get 500 credits on our model. Free credits are for trying it; after them, keep going with Pro.</p>
-      <div class="row" style="gap:6px"><button class="btn p sm" id="tryFreeNow">Try it free</button><button class="btn sm" id="addKeyNow">Connect a model</button></div>`
-      : `<p class="tiny dimmer" style="margin:6px 0 8px">Connect one and I’ll build this for real. An agent you already pay for works (Claude Code, Cursor or Codex), no API key needed.</p>
-      <button class="btn p sm" id="addKeyNow">Connect a model</button>`}`);
-    b.querySelector('#addKeyNow').onclick = () => { track('offer_connect_click'); Chat.retryWithKey(); };
-    const tf = b.querySelector('#tryFreeNow');
-    if (tf) tf.onclick = () => Account.trySignUp('offer');
-    return b;
-  };
   // A model reply that failed: the provider's words (a slice of a proxy's
   // HTML error page, an interstitial — text, never markup), nothing built,
   // and a button that clears Settings › Model and sends the same prompt as
@@ -237,32 +221,21 @@ export function ChatApp(body, win) {
     const to = Chat.defaultModel();
     // Hosted AI out of credits or paused: the ways out, on the last failure
     // only — top up or subscribe on /account, or bring your own model.
-    // needs-pro (free credits used, bring-your-own locked) offers the same
-    // purchases but not "your own key": that is what it locked.
-    const billing = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused' || t.hosted === 'needs-pro');
-    const ownKey = billing && t.hosted !== 'needs-pro';
-    // Buying only while the server has purchases on (PURCHASES_ENABLED).
-    const buy = billing && Hosted.purchases;
+    // Out of credits, or bring-your-own locked at 0 (needs-pro): the paywall
+    // has the price and the terms; this line only points at it. Paused (the
+    // month's budget) keeps "your own key or agent" as the way on.
+    const billing = last && (t.hosted === 'out-of-credits' || t.hosted === 'needs-pro');
+    const ownKey = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused');
     const b = bubble('vibeos', '<span class="no" id="failure"></span>'
       + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : '')
-      + (billing ? '<div class="row chat-failure-actions">'
-        + (buy ? '<button class="btn sm p" id="hostedPro">Subscribe: $20/mo</button><button class="btn sm" id="hostedTopUp">Top up 500 for $5</button>' : '')
-        + (ownKey ? '<button class="btn sm' + (buy ? '' : ' p') + '" id="hostedOwnKey">Use my own key or agent</button>' : '') + '</div>'
-        + (buy ? '<p class="tiny dimmer" id="hostedFinal" style="margin:4px 0 0"></p><p class="no tiny" id="hostedBuyErr" hidden style="margin:4px 0 0"></p>' : '') : ''), null, 'chat-failure');
+      + (billing || ownKey ? '<div class="row chat-failure-actions">'
+        + (billing ? '<button class="btn sm p" id="hostedPro">Subscribe</button>' : '')
+        + (ownKey ? '<button class="btn sm" id="hostedOwnKey">Use my own key or agent</button>' : '') + '</div>' : ''), null, 'chat-failure');
     b.querySelector('#failure').textContent = t.failure;
-    if (buy) {
-      b.querySelector('#hostedFinal').textContent = Hosted.FINAL_LINE;
-      const checkout = product => async () => {
-        try { await Hosted.checkout(product, 'card'); }
-        catch (e) { const err = b.querySelector('#hostedBuyErr'); err.textContent = e.message; err.hidden = false; }
-      };
-      b.querySelector('#hostedPro').onclick = checkout('pro');
-      b.querySelector('#hostedTopUp').onclick = checkout('topup');
-    }
-    if (billing) {
-      const own = b.querySelector('#hostedOwnKey');
-      if (own) own.onclick = () => { track('hosted_own_key_click', { code: t.hosted }); void Gen.askForKey(); };
-    }
+    const pro = b.querySelector('#hostedPro');
+    if (pro) pro.onclick = () => Paywall.open('zero_credits');
+    const own = b.querySelector('#hostedOwnKey');
+    if (own) own.onclick = () => { track('hosted_own_key_click', { code: t.hosted }); openSettings('model'); };
     const btn = b.querySelector('#resetModel');
     if (!btn) return;
     btn.textContent = 'Reset model to ' + to + ' and retry';
@@ -285,8 +258,7 @@ export function ChatApp(body, win) {
       return;
     }
     if (t.said) renderMd(bubble('vibeos', '<span></span>').querySelector('span'), t.said);
-    if (Chat.offer && Chat.offer.reply === t) paintOffer();
-    else if (t.failure === 'no model configured') {
+    if (t.failure === 'no model configured') {
       const d = bubble('vibeos', '<span class="no" id="failure"></span>');
       d.querySelector('#failure').textContent = 'no model connected — connect a model to generate';
       return;
@@ -336,7 +308,12 @@ export function ChatApp(body, win) {
       chip.className = 'btn sm example';
       chip.type = 'button';
       chip.textContent = text;
-      chip.onclick = () => { track('chip_click', { i: EXAMPLE_PROMPTS.indexOf(text), model: Gen.available ? 'yes' : 'no' }); input.value = text; send(); };
+      // Not connected: the chip fills the box and nothing sends (the card is the next step).
+      chip.onclick = () => {
+        track('chip_click', { i: EXAMPLE_PROMPTS.indexOf(text), model: Gen.available ? 'yes' : 'no' });
+        input.value = text;
+        if (Connect.connected) send(); else { Connect.keep(text); input.focus(); }
+      };
       row.appendChild(chip);
     }
     log.appendChild(row);
@@ -461,15 +438,104 @@ export function ChatApp(body, win) {
     if (type === 'loaded') enable();
     hint();
     paint();
-    // Raise the chat and scroll the connect offer into view.
-    if (type === 'done' && Chat.offer && Chat.offer.reply === data.reply) {
-      UI.live().raise(win);
-      const offer = log.querySelector('#addKeyNow');
-      if (offer) offer.scrollIntoView({ block: 'nearest' });
-    }
   });
   Windows.onDispose(win, off);
   Windows.onDispose(win, RemoteBridge.on(paint));
+
+  /* The connect card (beads-tavc.16.11 S2): above the composer while nothing
+     is connected, gone for good once something is. The words are
+     Connect.COPY's (vibeos-writer's). Without hosted AI on this server (the
+     mirror, the image) there is no free-credits button: the card opens on
+     the other options. */
+  const card = body.querySelector('#connectCard'), zero = body.querySelector('#zeroLine'), sendBtn = body.querySelector('#send');
+  let optionsUndo = null;
+  const paintConnect = () => {
+    const on = !Connect.connected;
+    sendBtn.textContent = on ? Connect.COPY.send : 'Send';
+    if (!on) {
+      if (optionsUndo) { optionsUndo(); optionsUndo = null; }
+      card.hidden = true; card.textContent = '';
+    } else if (card.hidden || !card.firstChild) {
+      card.hidden = false;
+      const hosted = Hosted.enabled;
+      card.innerHTML = `<b class="connect-title"></b>
+        ${hosted ? '<button type="button" class="btn p" id="connectFree"></button><p class="tiny dimmer connect-under" style="margin:0"></p>' : ''}
+        <button type="button" class="btn sm" id="connectOther"></button>
+        ${hosted ? '<p class="tiny dimmer connect-fine" style="margin:0"></p>' : ''}
+        <p class="small connect-leaving" hidden style="margin:0"></p>
+        <div class="connect-options-slot"></div>`;
+      card.querySelector('.connect-title').textContent = Connect.COPY.title;
+      card.querySelector('#connectOther').textContent = Connect.COPY.other;
+      if (hosted) {
+        card.querySelector('#connectFree').textContent = Connect.COPY.primary;
+        card.querySelector('.connect-under').textContent = Connect.COPY.under;
+        card.querySelector('.connect-fine').textContent = Connect.COPY.fine;
+        card.querySelector('#connectFree').onclick = () => {
+          const leaving = card.querySelector('.connect-leaving');
+          leaving.textContent = Connect.COPY.leaving + (VM.state === 'ready' ? '' : ' ' + Connect.COPY.booting);
+          leaving.hidden = false;
+          card.querySelector('#connectFree').disabled = true;
+          Connect.keep(input.value);
+          setTimeout(() => Connect.signUp('card'), 600);
+        };
+      }
+      card.querySelector('#connectOther').onclick = () => Connect.expand();
+      if (!hosted || Connect.expanded) expandOptions();
+    }
+    const zeroOn = Hosted.active && Gen.provider === 'hosted' && !Hosted.pro && Hosted.credits <= 0 || Hosted.byoLocked;
+    if (zeroOn && zero.hidden) {
+      zero.innerHTML = '<span class="small"></span><button type="button" class="btn sm p" id="zeroSubscribe">Subscribe</button>';
+      zero.firstChild.textContent = "You've used all your free credits. Pro adds 3,000 credits every month.";
+      zero.querySelector('#zeroSubscribe').onclick = () => Paywall.open('zero_credits');
+    }
+    zero.hidden = !zeroOn;
+  };
+  const expandOptions = () => {
+    const slot = card.querySelector('.connect-options-slot');
+    if (!slot || slot.firstChild) return;
+    optionsUndo = Connect.buildOptions(slot);
+    const other = card.querySelector('#connectOther');
+    if (other) other.hidden = true;
+  };
+  const pulse = () => {
+    if (card.hidden) return;
+    card.classList.remove('pulse'); void card.offsetWidth; card.classList.add('pulse');
+    card.scrollIntoView({ block: 'nearest' });
+  };
+  // Confetti over this window for a new account (none under reduced motion).
+  const confetti = () => {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const cv = document.createElement('canvas');
+    cv.className = 'confetti';
+    const r = win.getBoundingClientRect();
+    cv.width = r.width; cv.height = r.height;
+    cv.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;pointer-events:none;z-index:7500`;
+    document.body.appendChild(cv);
+    const g = cv.getContext('2d'), colors = ['#ff5c8a', '#ffd23f', '#3ec1d3', '#7c5cff', '#4cd964'];
+    const bits = Array.from({ length: 90 }, () => ({ x: Math.random() * r.width, y: -20 - Math.random() * r.height * 0.5, vx: (Math.random() - 0.5) * 3, vy: 2 + Math.random() * 3, s: 4 + Math.random() * 5, c: colors[Math.floor(Math.random() * colors.length)], a: Math.random() * 6 }));
+    const t0 = performance.now();
+    const frame = t => {
+      g.clearRect(0, 0, cv.width, cv.height);
+      for (const b of bits) { b.x += b.vx; b.y += b.vy; b.vy += 0.05; b.a += 0.1; g.save(); g.translate(b.x, b.y); g.rotate(b.a); g.fillStyle = b.c; g.fillRect(-b.s / 2, -b.s / 4, b.s, b.s / 2); g.restore(); }
+      if (t - t0 < 1800) requestAnimationFrame(frame); else cv.remove();
+    };
+    requestAnimationFrame(frame);
+  };
+  Windows.onDispose(win, Connect.on(type => {
+    if (type === 'expand') expandOptions();
+    if (type === 'open') { paintConnect(); pulse(); }
+    if (type === 'welcome' || type === 'welcome-back') {
+      if (!input.value && Connect.held()) input.value = Connect.held();
+      paintConnect();
+      if (type === 'welcome') confetti();
+    }
+  }));
+  Windows.onDispose(win, Gen.on(paintConnect));
+  Windows.onDispose(win, RemoteBridge.on(paintConnect));
+  // Typed while nothing is connected: kept across the sign-up trip.
+  input.addEventListener('input', () => { if (!Connect.connected) Connect.keep(input.value); });
+  if (!input.value && Connect.held()) input.value = Connect.held();
+  paintConnect();
   paint();
   paintChips();
   setTimeout(() => input.focus(), 50);

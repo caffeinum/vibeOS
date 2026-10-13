@@ -196,7 +196,7 @@ export function focusOrOpen(spec) {
 export async function openAgent() {
   focusOrOpen(SHELL.chat);
   if (!Gen.available && RemoteBridge.state !== 'connected') {
-    try { await Gen.askForKey(); } catch {}
+    try { await Gen.askForKey({ from: 'start' }); } catch {}
   }
 }
 // The chat card's Open and Settings › Workspace. A window is usually already
@@ -534,7 +534,7 @@ function renderUpsell(mount, missing) {
     // so in the package's own words (the agent's name is the client's).
     const why = mount.querySelector('#upsellWhy');
     if (RemoteBridge.state === 'connected' && !RemoteBridge.sampling) { why.textContent = Gen.samplingRefusal(RemoteBridge.agentName); why.hidden = false; }
-    mount.querySelector('#upsellConnect').onclick = () => Gen.askForKey();
+    mount.querySelector('#upsellConnect').onclick = () => Gen.askForKey({ from: 'upsell' });
     return;
   }
   // net is neither the machine's nor the native build's: it is the relay,

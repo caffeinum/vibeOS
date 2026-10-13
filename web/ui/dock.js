@@ -155,7 +155,7 @@ export function start() {
   paintVM(); paintWorkspace(); paintMode(); paintLogin();
   document.getElementById('wsPill').onclick = () => openSettings('workspace');
   const login = document.getElementById('loginPill');
-  if (login) login.onclick = () => { if (Gen.available) openSettings('model'); else Gen.askForKey(); };
+  if (login) login.onclick = () => { if (Gen.available) openSettings('model'); else Gen.askForKey({ from: 'pill' }); };
   document.getElementById('lxPill').onclick = () => {
     if (VM.state === 'off' || VM.state === 'failed') VM.boot();
     openSettings('console');
@@ -167,10 +167,12 @@ export function start() {
   const offProgress = VM.onProgress ? VM.onProgress(() => { if (bootArmB()) paintVM(); }) : () => {};
   const offSplash = bootSplash();
   const offBootCard = startBootCard();
+  const offBanner = startCreditsBanner();
+  const offPro = startProButton();
   const offTray = startTray();
   const offAsk = startAsk();
   const offPortal = (UI.live().startPortalMenu || (() => () => {}))();
-  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offProgress(); offSplash(); offBootCard(); offTray(); offAsk(); offPortal(); };
+  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offProgress(); offSplash(); offBootCard(); offBanner(); offPro(); offTray(); offAsk(); offPortal(); };
 }
 
 const winxp = () => document.documentElement.dataset.theme === 'winxp';
@@ -344,6 +346,72 @@ function startBootCard() {
   if (VM.progress) paint(VM.progress);
   else if (VM.state === 'ready' || VM.state === 'failed' || VM.state === 'unavailable') end();
   return end;
+}
+
+/* ---------- the credits banner (beads-tavc.16.11 B) --------------------------
+
+   "Try the agent free" from the first second of the boot, top-centre under
+   the menubar: prominent, never blocking, never taking focus (nothing here
+   calls focus(), and it is a status, not a dialog). The same in BOTH tavc.14
+   arms — the boot A/B stays readable because neither arm differs by it. Its
+   button opens the chat at the connect card; it does not redirect, since a
+   redirect mid-boot throws the boot away (the card's own button does that,
+   and says so). Hidden while anything is connected or an account is signed
+   in, on ?safe=1 / ?stock=1 / a recovery boot, and for this page after ×.
+   Only where hosted AI is on (Hosted.enabled). */
+function startCreditsBanner() {
+  if (window.__vibeosCreditsBannerDecided) return () => {};
+  window.__vibeosCreditsBannerDecided = true;
+  const boot = window.__vibeosBoot || {};
+  if (boot.safe || boot.stock || boot.recovering) return () => {};
+  if (typeof Hosted === 'undefined' || typeof Connect === 'undefined') return () => {};
+  let el = null, dismissed = false, told = false;
+  const want = () => !dismissed && Hosted.enabled && !Hosted.signedIn && !Connect.connected;
+  const show = () => {
+    el = document.createElement('div');
+    el.id = 'creditsBanner';
+    el.className = 'credits-banner';
+    el.setAttribute('role', 'status');
+    const menubar = document.getElementById('menubar');
+    el.style.top = ((menubar ? menubar.getBoundingClientRect().bottom : 0) + 8) + 'px';
+    el.innerHTML = '<span class="credits-banner-text"></span><button type="button" class="btn p sm" id="bannerFree"></button><button type="button" class="ask-x" id="bannerX" aria-label="Dismiss">×</button>';
+    el.querySelector('.credits-banner-text').textContent = '✨ Try the agent free. No card needed.';
+    el.querySelector('#bannerFree').textContent = 'Get 500 free credits';
+    el.querySelector('#bannerFree').onclick = () => { track('try_free_click', { from: 'banner' }); Connect.open('banner'); };
+    el.querySelector('#bannerX').onclick = () => { dismissed = true; track('credits_banner_dismiss'); sync(); };
+    document.body.appendChild(el);
+    if (!told) { told = true; track('credits_banner_shown', { arm: (typeof BootArm !== 'undefined' && BootArm.arm) || 'none' }); }
+  };
+  const sync = () => {
+    if (want() && !el) show();
+    else if (!want() && el) { el.remove(); el = null; }
+  };
+  const offs = [Gen.on(sync), RemoteBridge.on(sync)];
+  sync();
+  return () => { offs.forEach(off => off()); if (el) el.remove(); };
+}
+
+/* [ Unlock MCP ✨Pro ] in the menubar, beside the model pill, for everyone
+   who is not Pro (beads-tavc.16.11 M); "✨Pro" under 480 px (os.css). A click
+   opens the paywall with the MCP line first — which says own MCP servers are
+   coming soon and that connecting Claude Code or Codex without an account
+   stays free, so the label never reads as "pairing needs Pro". */
+function startProButton() {
+  if (typeof Hosted === 'undefined' || typeof Paywall === 'undefined') return () => {};
+  const login = document.getElementById('loginPill');
+  if (!login) return () => {};
+  const btn = document.createElement('button');
+  btn.id = 'proPill';
+  btn.type = 'button';
+  btn.className = 'pill pro-pill';
+  btn.innerHTML = '<span class="pro-long">Unlock MCP </span><span>✨Pro</span>';
+  btn.hidden = true;
+  btn.onclick = () => { track('pro_menubar_click'); Paywall.open('menubar'); };
+  login.after(btn);
+  const sync = () => { btn.hidden = !(Hosted.enabled && !Hosted.pro); };
+  const off = Gen.on(sync);
+  sync();
+  return () => { off(); btn.remove(); };
 }
 
 /* ---------- tray balloons -------------------------------------------------

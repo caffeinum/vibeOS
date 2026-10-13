@@ -54,16 +54,26 @@ const Account = {
     }
     return { available: true, signedIn: body.signedIn, email: body.email ?? null, displayName: body.displayName ?? null };
   },
+  // 'new' | 'existing' | '': how this page came back from the sign-up trip,
+  // for the welcome (Welcome below, once /api/hosted says who is signed in).
+  returned: '',
   noteNewAccount() {
     let fresh = false;
     try { fresh = sessionStorage.getItem(this.NEW_FLAG) === '1'; if (fresh) sessionStorage.removeItem(this.NEW_FLAG); } catch {}
-    if (!fresh) return;
+    if (!fresh) {
+      // Back from the card's sign-up into an account that already existed.
+      try {
+        if (sessionStorage.getItem(this.FROM_FLAG) === 'try_free') { this.returned = 'existing'; sessionStorage.removeItem(this.FROM_FLAG); }
+      } catch {}
+      return;
+    }
     // The insights script is deferred and the kernel can run before it has
     // defined window.va; track() drops an event with no va.
     // Which door the sign-up came through (beads-tavc.16.7): Try it free
     // marks the tab before it leaves (Account.trySignUp); anything else is other.
     let from = 'other';
     try { if (sessionStorage.getItem(this.FROM_FLAG) === 'try_free') from = 'try_free'; sessionStorage.removeItem(this.FROM_FLAG); } catch {}
+    this.returned = 'new';
     if (window.va || document.readyState === 'complete') track('account_created', { from });
     else addEventListener('load', () => track('account_created', { from }), { once: true });
   },
@@ -137,8 +147,7 @@ const Hosted = {
   // The chat's paywall card, said once where the refusal is recorded (the
   // chat repaints the card on every event, so the paint is not the place).
   paywall(code) {
-    const reason = code === 'out-of-credits' ? 'zero_credits' : code === 'needs-pro' ? 'byo_needs_pro' : '';
-    if (reason) track('paywall_shown', { reason });
+    if (code === 'out-of-credits' || code === 'needs-pro') Paywall.open('zero_credits');
   },
   PRO_LINE: "You've used your free credits. Pro ($20/mo, 3000 credits a month, they roll over) keeps the AI going, with ours or your own key or agent.",
   FINAL_LINE: 'Purchases are final. Pro renews monthly until you cancel; cancelling stops the next renewal and you keep your credits.',
@@ -155,6 +164,8 @@ const Hosted = {
       models: Array.isArray(j.models) ? j.models : [], defaultProvider: typeof j.defaultProvider === 'string' ? j.defaultProvider : 'openai' });
     // This read landed the sign-up grant: once per account (the server grants once).
     if (j.granted === true) track('credits_granted', { plan: 'grant' });
+    Welcome.maybe();
+    Paywall.resume();
     Gen.setProvider();
     Gen.emit();
   },
@@ -225,6 +236,261 @@ const Hosted = {
       fetch(this.GENERATE, { method: 'POST', credentials: 'same-origin', keepalive: true,
         headers: { 'content-type': 'application/json' }, body: JSON.stringify({ release: turn }) }).catch(() => {});
     } catch {}
+  },
+};
+
+/* The login flow (beads-tavc.16.11; pm's final spec, vibeos-writer's copy).
+   One connect card in the chat replaces the key modal at every entry point:
+   [ Get 500 free credits ] (the sign-up redirect) first, [ Other options ]
+   (a pasted key, ChatGPT, Claude Code or Codex) behind it. The composer stays
+   typeable but cannot send until something is connected; the text is held
+   in sessionStorage across the sign-up round trip and put back, never sent
+   by itself. Once anything is connected the card is gone for good. The ui
+   (ui/chat.js) paints it from here; this holds the state and the panel. */
+const Connect = {
+  HELD_KEY: 'vibeos-held-prompt',
+  COPY: {
+    title: 'Connect a model to start',
+    primary: 'Get 500 free credits',
+    under: 'Sign up with GitHub, Google or email. No card needed.',
+    other: 'Other options',
+    fine: "Signed in, your own key or agent needs Pro after the free credits. Signed out, it's always free.",
+    leaving: 'Taking you to sign up…',
+    booting: 'Linux is still starting, so it will start over when you come back.',
+    send: 'Connect to send',
+    footer: 'Without an account, your own key or agent is free. A pasted key stays in this browser.',
+  },
+  get connected() { return Gen.available || RemoteBridge.state === 'connected'; },
+  // `from`: where the person came from (send | pill | intro | upsell | settings
+  // | banner | other); `pulses` counts asks, so the card can pulse on each.
+  from: '', pulses: 0, expanded: false,
+  listeners: new Set(),
+  on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
+  emit(type) { this.listeners.forEach(fn => { try { fn(type); } catch (e) { console.error('Connect listener failed:', e); } }); },
+  // Opens (or raises) the chat at the card. Resolves once something connects.
+  open(from) {
+    if (!this.connected) {
+      track('connect_card_shown', { from });
+      this.from = from; this.pulses++;
+      if (typeof window.__vibeosOpenChat === 'function') window.__vibeosOpenChat();
+      this.emit('open');
+    }
+    return this.whenConnected();
+  },
+  whenConnected() {
+    if (this.connected) return Promise.resolve(true);
+    return new Promise(resolve => {
+      const check = () => { if (this.connected) { offG(); offR(); resolve(true); } };
+      const offG = Gen.on(check), offR = RemoteBridge.on(check);
+    });
+  },
+  // A send with nothing connected: the text stays (held), the card pulses.
+  hold(text) {
+    track('held_prompt', { has_text: !!text });
+    this.keep(text);
+    this.open('send');
+  },
+  keep(text) { try { text ? sessionStorage.setItem(this.HELD_KEY, text) : sessionStorage.removeItem(this.HELD_KEY); } catch {} },
+  held() { try { return sessionStorage.getItem(this.HELD_KEY) || ''; } catch { return ''; } },
+  // The big button: the redirect, marked so the return knows the door, and so
+  // a boot left mid-way is counted as a sign-up (vm_left_booting signup:true).
+  signUp(from) {
+    try { sessionStorage.setItem('vibeos-left-for-signup', '1'); } catch {}
+    Account.trySignUp(from);
+  },
+  expand() { if (!this.expanded) { this.expanded = true; track('other_options_click'); this.emit('expand'); } },
+
+  // [ Other options ], built into whatever element the card hands it: what
+  // the key modal held (connect your agent, ChatGPT, a pasted key), with the
+  // same element ids, so a suite or a fork that drives them by id still does.
+  buildOptions(root) {
+    const src = { from: 'card' };
+    root.innerHTML = `
+      <div class="col connect-options">
+        <div class="row" style="gap:6px">
+          <input type="password" id="keyInput" placeholder="Paste an OpenAI or Anthropic key" autocomplete="off" spellcheck="false" style="flex:1;min-width:0">
+          <button type="button" class="btn p sm" id="keySaveBtn">Connect</button>
+        </div>
+        <button type="button" class="btn sm" id="keyLoginBtn">Log in with ChatGPT</button>
+        <div id="keyOAuthSlot"></div>
+        <p class="note oauth-error" id="keyOAuthError" hidden style="margin:0;color:var(--no)"></p>
+        <button type="button" class="btn sm" id="keyConnectBtn">Connect Claude Code or Codex</button>
+        <div class="col" id="keyConnectPanel" hidden>
+          <ol class="connect-steps">
+            <li><b>Install vibeOS in your agent</b>
+              <p class="tiny dimmer">Paste this into your terminal:</p>
+              <div class="copy-line"><code class="mono" id="keyConnectCmd"></code><button type="button" class="btn sm" id="keyConnectCopy">Copy</button></div>
+            </li>
+            <li><b>Open your agent in a folder</b>
+              <p class="tiny dimmer">In your project folder (or your home folder) run <code>claude</code>. Cursor and Codex work too.</p>
+              <div class="copy-line"><code class="mono" id="keyConnectRun"></code><button type="button" class="btn sm" id="keyConnectRunCopy">Copy</button></div>
+            </li>
+            <li><b>Ask it something</b>
+              <div class="col connect-prompts" id="keyConnectPrompts"></div>
+            </li>
+          </ol>
+          <span class="tiny dimmer" id="keyConnectState"></span>
+        </div>
+        <p class="note" id="keyConnectError" hidden style="margin:0;color:var(--no)"></p>
+        <p class="tiny dimmer" id="connectFooter" style="margin:0"></p>
+      </div>`;
+    const q = sel => root.querySelector(sel);
+    q('#connectFooter').textContent = this.COPY.footer;
+    let offBridge = null;
+    const done = () => { if (offBridge) offBridge(); };
+    q('#keyConnectBtn').onclick = async () => {
+      track('connect_agent_click', src);
+      const btn = q('#keyConnectBtn'), panel = q('#keyConnectPanel'), err = q('#keyConnectError'), cmd = q('#keyConnectCmd'), st = q('#keyConnectState');
+      err.hidden = true; btn.disabled = true;
+      if (!RemoteBridge.token) {
+        const ok = await RemoteBridge.pair();
+        if (!ok) { err.textContent = RemoteBridge.detail || 'pairing is not available here'; err.hidden = false; btn.disabled = false; return; }
+      }
+      cmd.textContent = RemoteBridge.command();
+      panel.hidden = false;
+      const paint = (state, detail) => {
+        if (RemoteBridge.token) cmd.textContent = RemoteBridge.command();
+        st.textContent = state === 'connected' ? (detail || 'an agent') + ' connected'
+          : state === 'waiting' ? 'waiting for your agent…'
+          : state === 'pairing' ? detail || 'pairing…'
+          : state === 'error' ? detail : '';
+        if (state === 'connected') { track('key_added', { via: 'mcp', ...src }); AgentActivity.connected('mcp'); done(); }
+      };
+      offBridge = RemoteBridge.on(paint); paint(RemoteBridge.state, RemoteBridge.detail);
+    };
+    const copy = (text, btn) => navigator.clipboard.writeText(text).then(
+      () => { btn.textContent = 'Copied ✓'; return true; },
+      () => { q('#keyConnectState').textContent = 'the browser refused the clipboard — select the text and copy it'; return false; });
+    q('#keyConnectCopy').onclick = e => copy(q('#keyConnectCmd').textContent, e.currentTarget);
+    q('#keyConnectRun').textContent = CONNECT_RUN_LINE;
+    q('#keyConnectRunCopy').onclick = e => copy(CONNECT_RUN_LINE, e.currentTarget);
+    for (const { which, text } of CONNECT_PROMPTS) {
+      const card = document.createElement('div'), line = document.createElement('span'), btn = document.createElement('button');
+      card.className = 'prompt-card'; card.dataset.which = which;
+      line.textContent = text;
+      btn.type = 'button'; btn.className = 'btn sm'; btn.textContent = 'Copy';
+      btn.onclick = async () => track('mcp_prompt_copied', { which, ok: await copy(text, btn) ? 'yes' : 'no' });
+      card.append(line, btn);
+      q('#keyConnectPrompts').append(card);
+    }
+    const save = () => {
+      const k = q('#keyInput').value.trim();
+      if (!k) return;
+      Gen.saveKey(k);
+      track('key_added', { via: 'paste', ...src }); AgentActivity.connected('key');
+    };
+    q('#keySaveBtn').onclick = save;
+    q('#keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') save(); });
+    q('#keyLoginBtn').onclick = async () => {
+      track('login_openai_click', src);
+      const slot = q('#keyOAuthSlot'), errEl = q('#keyOAuthError'), loginBtn = q('#keyLoginBtn');
+      errEl.hidden = true; errEl.textContent = '';
+      loginBtn.disabled = true;
+      try {
+        const flow = await VibeOSOAuth.startOAuthDeviceFlow();
+        slot.innerHTML = VibeOSOAuth.renderOAuthPanelHtml({ code: flow.code, url: flow.url, status: 'waiting' });
+        VibeOSOAuth.wireOAuthPanel(slot, flow);
+        const tokens = await VibeOSOAuth.pollOAuthUntilComplete(flow.id, {
+          sleep: ms => new Promise(r => setTimeout(r, ms)), intervalMs: 5000, fetchImpl: fetch,
+          onPoll: result => {
+            if (result.status === 'pending') VibeOSOAuth.updateOAuthPanelStatus(slot, flow, 'polling');
+            else if (result.status === 'complete') VibeOSOAuth.updateOAuthPanelStatus(slot, flow, 'complete');
+          },
+        });
+        Gen.saveOAuth(tokens);
+        track('key_added', { via: 'codex', ...src });
+        AgentActivity.connected('key');
+      } catch (e) {
+        const statusEl = slot.querySelector('#oauthPanel .oauth-status');
+        if (statusEl) statusEl.textContent = (e && e.message) || 'authorization failed';
+        errEl.textContent = (e && e.message) || 'authorization failed';
+        errEl.hidden = false;
+        loginBtn.disabled = false;
+      }
+    };
+    return done;
+  },
+};
+
+/* Back from the sign-up (beads-tavc.16.11 S4): the chat opens, a line says
+   what happened, and a new account gets confetti (the ui's, skipped under
+   reduced motion). The held text is back in the box, not sent. Once. */
+const Welcome = {
+  shown: false,
+  maybe() {
+    if (this.shown || !Account.returned || !Hosted.signedIn) return;
+    this.shown = true;
+    const fresh = Account.returned === 'new';
+    if (typeof window.__vibeosOpenChat === 'function') window.__vibeosOpenChat();
+    Chat.line(fresh ? "You're in! You have 500 free credits. Try asking for an app." : `Welcome back! You have ${Hosted.credits} credits.`);
+    if (fresh) track('credits_welcome_shown');
+    Connect.emit(fresh ? 'welcome' : 'welcome-back');
+  },
+};
+
+/* The paywall: the only modal (beads-tavc.16.11 S7), Subscribe only — no
+   top-up anywhere. It opens on a send at 0 credits (or bring-your-own locked
+   at 0, the 16.1 rule) and from the menubar's [ Unlock MCP ✨Pro ]. "Coming
+   soon" is the honest state of own MCP servers until they ship. Signed out,
+   Subscribe goes through sign-up first and on to checkout on the way back. */
+const Paywall = {
+  AFTER_KEY: 'vibeos-after-signup',
+  el: null,
+  open(reason) {
+    if (this.el) return;
+    track('paywall_shown', { reason });
+    const overlay = document.createElement('div');
+    overlay.className = 'paywall-overlay key-modal-overlay';
+    overlay.innerHTML = `
+      <div class="key-modal paywall" role="dialog" aria-modal="true" aria-labelledby="paywallTitle">
+        <h2 id="paywallTitle">Keep going with Pro</h2>
+        <p class="small" id="paywallPrice" style="margin:0"></p>
+        <p class="small" id="paywallMcp" style="margin:0"></p>
+        <p class="tiny dimmer" id="paywallFree" style="margin:0"></p>
+        <div class="row" style="gap:8px">
+          <button type="button" class="btn p" id="paywallSubscribe">Subscribe</button>
+          <button type="button" class="btn" id="paywallNotNow">Not now</button>
+        </div>
+        <p class="tiny dimmer" id="paywallSoon" hidden style="margin:0">Pro opens soon. Until then your own key or agent keeps working without an account.</p>
+        <p class="tiny dimmer" id="paywallFinal" style="margin:0"></p>
+        <p class="note no" id="paywallErr" hidden style="margin:0"></p>
+      </div>`;
+    const q = sel => overlay.querySelector(sel);
+    q('#paywallPrice').textContent = '$20 a month · 3,000 credits every month · unused credits roll over';
+    q('#paywallMcp').textContent = 'Your own MCP servers in vibeOS: coming soon, included in Pro.';
+    q('#paywallFree').textContent = 'Connecting Claude Code or Codex without an account stays free.';
+    q('#paywallFinal').textContent = Hosted.FINAL_LINE;
+    // The MCP line leads when the menubar's Unlock MCP opened it.
+    if (reason === 'menubar') q('#paywallTitle').after(q('#paywallMcp'));
+    if (!Hosted.purchases) { q('#paywallSubscribe').hidden = true; q('#paywallSoon').hidden = false; q('#paywallFinal').hidden = true; }
+    const close = () => { document.removeEventListener('keydown', onKey); overlay.remove(); this.el = null; };
+    const onKey = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    q('#paywallNotNow').onclick = close;
+    q('#paywallSubscribe').onclick = async () => {
+      const from = reason === 'menubar' ? 'menubar' : 'paywall';
+      if (!Hosted.signedIn) {
+        track('subscribe_click', { from });
+        try { sessionStorage.setItem(this.AFTER_KEY, 'subscribe'); } catch {}
+        location.href = Account.SIGNUP;
+        return;
+      }
+      try { await Hosted.checkout('pro', from); }
+      catch (e) { q('#paywallErr').textContent = e.message; q('#paywallErr').hidden = false; }
+    };
+    document.body.appendChild(overlay);
+    this.el = overlay;
+    q('#paywallSubscribe').hidden || q('#paywallNotNow').focus();
+  },
+  // Back from a sign-up that Subscribe started: straight on to checkout.
+  resume() {
+    let after = null;
+    try { after = sessionStorage.getItem(this.AFTER_KEY); sessionStorage.removeItem(this.AFTER_KEY); } catch {}
+    if (after === 'subscribe' && Hosted.signedIn && Hosted.purchases && !Hosted.pro) {
+      Hosted.checkout('pro', 'paywall').catch(e => console.warn('checkout after sign-up:', e.message));
+      return true;
+    }
+    return false;
   },
 };
 
@@ -321,224 +587,14 @@ const Gen = {
     this.setProvider();
     return this.oauth;
   },
-  // `from` says who opened it when it was not a click: 'first_visit' is the
-  // boot's own offer (offerAgentOnFirstVisit in kernel/boot.js), carried on
-  // the events below so a connection it caused reads apart from one a click did.
+  // Every "connect a model" in the desktop — the no-model pill, the chat
+  // intro, an app's upsell, Settings' Add a key, a send with nothing
+  // connected — opens the chat at the connect card (beads-tavc.16.11). The
+  // key modal that used to pop up here is gone: it came back on every
+  // no-model send and again after it failed. The name stays because forks
+  // and apps call it; it resolves once something is connected.
   askForKey({ from } = {}) {
-    if (this._askModal) return this._askModal;
-    const src = from ? { from } : undefined;
-    // Seen once, by a click or by the boot: the boot's first-visit offer is
-    // for a browser that has never seen it, on this page or a later one.
-    this.askedThisPage = true;
-    try { localStorage.setItem('vibeos-asked', '1'); } catch {}
-    this._askModal = new Promise(resolve => {
-      const overlay = document.createElement('div');
-      overlay.className = 'key-modal-overlay';
-      overlay.innerHTML = `
-        <div class="key-modal" role="dialog" aria-modal="true" aria-labelledby="keyModalTitle">
-          <h2 id="keyModalTitle">vibeOS needs an agent.</h2>
-          <p class="small dimmer" id="keyModalSubtitle" style="margin:0">Connect one you already use, or sign in.</p>
-          <div class="key-modal-actions col">
-            <div class="col" id="keyModalStep1">
-              <div class="col" id="keyTryFree" hidden>
-                <button type="button" class="btn p" id="keyTryFreeBtn">Try it free: 500 credits</button>
-                <p class="tiny dimmer" style="margin:0">Sign up and the built-in agent runs on our model. Free credits are for trying it; after them, keep going with Pro.</p>
-              </div>
-              <button type="button" class="btn p" id="keyConnectBtn">Connect your agent</button>
-              <div class="col" id="keyConnectPanel" hidden>
-                <ol class="connect-steps">
-                  <li><b>Install vibeOS in your agent</b>
-                    <p class="tiny dimmer">Paste this into your terminal:</p>
-                    <div class="copy-line"><code class="mono" id="keyConnectCmd"></code><button type="button" class="btn sm" id="keyConnectCopy">Copy</button></div>
-                  </li>
-                  <li><b>Open your agent in a folder</b>
-                    <p class="tiny dimmer">In your project folder (or your home folder) run <code>claude</code>. Cursor and Codex work too.</p>
-                    <div class="copy-line"><code class="mono" id="keyConnectRun"></code><button type="button" class="btn sm" id="keyConnectRunCopy">Copy</button></div>
-                  </li>
-                  <li><b>Ask it something</b>
-                    <div class="col connect-prompts" id="keyConnectPrompts"></div>
-                  </li>
-                </ol>
-                <span class="tiny dimmer" id="keyConnectState"></span>
-              </div>
-              <p class="note" id="keyConnectError" hidden style="margin:0;color:var(--no)"></p>
-              <button type="button" class="btn" id="keyLoginBtn">Login with Codex</button>
-              <div id="keyOAuthSlot"></div>
-              <p class="note oauth-error" id="keyOAuthError" hidden style="margin:0;color:var(--no)"></p>
-              <button type="button" class="btn sm skip" id="keyOtherBtn">Other options</button>
-            </div>
-            <div class="col" id="keyModalStep2" hidden>
-              <button type="button" class="btn sm skip" id="keyBackBtn">← Back</button>
-              <button type="button" class="btn" id="keyPasteBtn">Paste API key (OpenAI / Anthropic)</button>
-              <div class="col" id="keyPasteForm" hidden>
-                <input type="password" id="keyInput" placeholder="sk-... or sk-ant-..." autocomplete="off" spellcheck="false">
-                <p class="tiny dimmer" style="margin:0">Your key is stored only in this browser and sent straight to the provider, never to vibeos.sh.</p>
-                <button type="button" class="btn p sm" id="keySaveBtn">Save</button>
-              </div>
-              <button type="button" class="btn" id="keyCreateBtn">Create account</button>
-              <p class="note" id="keyCreateNote" hidden style="margin:0">
-                Coming soon! <a href="/get-access">Join the waitlist</a> to be the first to know.
-              </p>
-              <div class="col" id="keyAccount" hidden>
-                <p class="note" id="keyAccountLine" style="margin:0"></p>
-                <p class="tiny dimmer" id="keyAccountStatus" style="margin:0">Hosted AI for accounts is coming — you're on the list.</p>
-              </div>
-              <button type="button" class="btn sm skip" id="keySkipBtn">Continue without AI features</button>
-            </div>
-          </div>
-        </div>`;
-      document.body.appendChild(overlay);
-
-      let offBridge = null;
-      const finish = () => {
-        document.removeEventListener('keydown', onKey);
-        if (offBridge) offBridge();
-        overlay.remove();
-        this._askModal = null;
-        resolve(this.available);
-      };
-      const decline = () => { track('key_declined', src); finish(); };
-      const onKey = e => { if (e.key === 'Escape') decline(); };
-
-      document.addEventListener('keydown', onKey);
-      overlay.querySelector('#keyOtherBtn').onclick = () => {
-        overlay.querySelector('#keyModalStep1').hidden = true;
-        overlay.querySelector('#keyModalStep2').hidden = false;
-        overlay.querySelector('#keyModalSubtitle').textContent = 'Other ways in.';
-      };
-      overlay.querySelector('#keyBackBtn').onclick = () => {
-        overlay.querySelector('#keyModalStep1').hidden = false;
-        overlay.querySelector('#keyModalStep2').hidden = true;
-        overlay.querySelector('#keyCreateNote').hidden = true;
-        overlay.querySelector('#keyModalSubtitle').textContent = 'Connect one you already use, or sign in.';
-      };
-      // The first door: an agent the person already pays for. Pairing mints a
-      // token for this tab; the modal closes by itself the moment the agent
-      // connects, and says so if this page cannot pair (the static mirror has
-      // no relay; a host shell refuses on purpose).
-      overlay.querySelector('#keyConnectBtn').onclick = async () => {
-        track('connect_agent_click', src);
-        const btn = overlay.querySelector('#keyConnectBtn'), panel = overlay.querySelector('#keyConnectPanel');
-        const err = overlay.querySelector('#keyConnectError'), cmd = overlay.querySelector('#keyConnectCmd'), st = overlay.querySelector('#keyConnectState');
-        err.hidden = true; btn.disabled = true;
-        if (!RemoteBridge.token) {
-          const ok = await RemoteBridge.pair();
-          if (!ok) { err.textContent = RemoteBridge.detail || 'pairing is not available here'; err.hidden = false; btn.disabled = false; return; }
-        }
-        cmd.textContent = RemoteBridge.command();
-        panel.hidden = false;
-        const paint = (state, detail) => {
-          if (RemoteBridge.token) cmd.textContent = RemoteBridge.command();
-          st.textContent = state === 'connected' ? (detail || 'an agent') + ' connected'
-            : state === 'waiting' ? 'waiting for your agent…'
-            : state === 'pairing' ? detail || 'pairing…'
-            : state === 'error' ? detail : '';
-          if (state === 'connected') { track('key_added', { via: 'mcp', ...src }); AgentActivity.connected('mcp'); finish(); }
-        };
-        offBridge = RemoteBridge.on(paint); paint(RemoteBridge.state, RemoteBridge.detail);
-      };
-      const copy = (text, btn) => navigator.clipboard.writeText(text).then(
-        () => { btn.textContent = 'Copied ✓'; return true; },
-        () => { overlay.querySelector('#keyConnectState').textContent = 'the browser refused the clipboard — select the text and copy it'; return false; });
-      overlay.querySelector('#keyConnectCopy').onclick = e => copy(overlay.querySelector('#keyConnectCmd').textContent, e.currentTarget);
-      overlay.querySelector('#keyConnectRun').textContent = CONNECT_RUN_LINE;
-      overlay.querySelector('#keyConnectRunCopy').onclick = e => copy(CONNECT_RUN_LINE, e.currentTarget);
-      for (const { which, text } of CONNECT_PROMPTS) {
-        const card = document.createElement('div'), line = document.createElement('span'), btn = document.createElement('button');
-        card.className = 'prompt-card'; card.dataset.which = which;
-        line.textContent = text;
-        btn.type = 'button'; btn.className = 'btn sm'; btn.textContent = 'Copy';
-        btn.onclick = async () => track('mcp_prompt_copied', { which, ok: await copy(text, btn) ? 'yes' : 'no' });
-        card.append(line, btn);
-        overlay.querySelector('#keyConnectPrompts').append(card);
-      }
-      overlay.querySelector('#keyPasteBtn').onclick = () => {
-        overlay.querySelector('#keyPasteForm').hidden = false;
-        overlay.querySelector('#keyInput').focus();
-        track('paste_key_click');
-      };
-      overlay.querySelector('#keyInput').addEventListener('keydown', e => {
-        if (e.key === 'Enter') overlay.querySelector('#keySaveBtn').click();
-      });
-      overlay.querySelector('#keySaveBtn').onclick = () => {
-        const k = overlay.querySelector('#keyInput').value.trim();
-        this.saveKey(k);
-        if (k) { track('key_added', { via: 'paste', ...src }); AgentActivity.connected('key'); }
-        finish();
-      };
-      // One probe per modal, started on open so a signed-in person sees who
-      // they are before they reach for the button; the click reuses it.
-      const account = Account.me();
-      const paintSignedIn = a => {
-        overlay.querySelector('#keyCreateBtn').hidden = true;
-        overlay.querySelector('#keyCreateNote').hidden = true;
-        // The email is the person's data: text, never markup.
-        overlay.querySelector('#keyAccountLine').textContent = a.email ? `Signed in as ${a.email}` : 'Signed in';
-        overlay.querySelector('#keyAccount').hidden = false;
-      };
-      account.then(a => { if (a.available && a.signedIn) paintSignedIn(a); });
-      // Hosted AI on, not signed in: trying it is the first way in, and it
-      // takes Create account's place (pm's spec 16.1 §5b).
-      if (Hosted.enabled && !Hosted.signedIn) {
-        overlay.querySelector('#keyTryFree').hidden = false;
-        overlay.querySelector('#keyConnectBtn').className = 'btn';
-        overlay.querySelector('#keyCreateBtn').hidden = true;
-        overlay.querySelector('#keyTryFreeBtn').onclick = () => Account.trySignUp('key_modal');
-      }
-      overlay.querySelector('#keyCreateBtn').onclick = async () => {
-        track('create_account_click');
-        const btn = overlay.querySelector('#keyCreateBtn');
-        btn.disabled = true;
-        const a = await account;
-        btn.disabled = false;
-        if (a.available && a.signedIn) paintSignedIn(a);
-        else if (a.available) location.href = Account.SIGNUP;
-        else overlay.querySelector('#keyCreateNote').hidden = false;
-      };
-      overlay.querySelector('#keyLoginBtn').onclick = async () => {
-        track('login_openai_click');
-        const slot = overlay.querySelector('#keyOAuthSlot');
-        const errEl = overlay.querySelector('#keyOAuthError');
-        const loginBtn = overlay.querySelector('#keyLoginBtn');
-        errEl.hidden = true;
-        errEl.textContent = '';
-        loginBtn.disabled = true;
-        try {
-          const flow = await VibeOSOAuth.startOAuthDeviceFlow();
-          slot.innerHTML = VibeOSOAuth.renderOAuthPanelHtml({ code: flow.code, url: flow.url, status: 'waiting' });
-          VibeOSOAuth.wireOAuthPanel(slot, flow);
-          const tokens = await VibeOSOAuth.pollOAuthUntilComplete(flow.id, {
-            sleep: ms => new Promise(r => setTimeout(r, ms)),
-            intervalMs: 5000,
-            fetchImpl: fetch,
-            onPoll: result => {
-              if (result.status === 'pending') {
-                VibeOSOAuth.updateOAuthPanelStatus(slot, flow, 'polling');
-              } else if (result.status === 'complete') {
-                VibeOSOAuth.updateOAuthPanelStatus(slot, flow, 'complete');
-              }
-            },
-          });
-          this.saveOAuth(tokens);
-          track('key_added', { via: 'codex', ...src });
-          AgentActivity.connected('key');
-          finish();
-        } catch (e) {
-          if (slot.querySelector('#oauthPanel')) {
-            const statusEl = slot.querySelector('.oauth-status');
-            if (statusEl) statusEl.textContent = (e && e.message) || 'authorization failed';
-          }
-          errEl.textContent = (e && e.message) || 'authorization failed';
-          errEl.hidden = false;
-          loginBtn.disabled = false;
-        }
-      };
-      overlay.querySelector('#keySkipBtn').onclick = decline;
-      overlay.querySelector('#keyInput').addEventListener('keydown', e => {
-        if (e.key === 'Enter') overlay.querySelector('#keySaveBtn').click();
-      });
-    });
-    return this._askModal;
+    return Connect.open(from || 'other');
   },
 
   // A local demo server holding a key answers /api/health; vibeos.sh and the
@@ -3998,6 +4054,16 @@ const Chat = {
   send(text) {
     text = String(text || '').trim();
     if (!text && !this.pending.length) return null;
+    // Nothing connected: nothing sends (beads-tavc.16.11). The text stays in
+    // the box and is held across the sign-up trip; the card pulses. And a
+    // send at 0 credits — hosted, or your own key once the free credits are
+    // gone and you're not Pro — opens the paywall instead.
+    if (!Connect.connected) { Connect.hold(text); return null; }
+    if ((Gen.provider === 'hosted' && !Hosted.pro && Hosted.credits <= 0) || (Hosted.byoLocked && (Gen.oauth || Gen.key))) {
+      Paywall.open('zero_credits');
+      return null;
+    }
+    Connect.keep('');
     // Once per page: how long the person sat before asking for anything, and
     // whether the machine had arrived by then. The text rides only the first
     // prompt this browser ever sends, only on the hosted page, under the
@@ -4215,11 +4281,6 @@ const Chat = {
     // next one, at once and with no click.
     const finish = () => { this.running = null; this.turnImages = []; this.emit('done', { reply, failure }); this.flushQueue(); };
 
-    // Offer connect/login when they send a first prompt, not on an empty desktop.
-    if (!Gen.available && RemoteBridge.state !== 'connected') {
-      try { await Gen.askForKey(); } catch {}
-    }
-
     // Both paths are the agent now. Signing in with ChatGPT proxies through
     // vibeos.sh; a pasted key talks to the provider from this page. Same
     // tools, same prompt, same loop.
@@ -4289,13 +4350,14 @@ const Chat = {
       return;
     }
 
+    // Chat.send refuses with nothing connected; a model that went away
+    // between the send and here fails plainly, with the card to reconnect.
     if (!Gen.available) {
       giveBack();
-      failure = 'no model configured';
+      failure = 'no model connected';
       this.failed(failure, remember);
-      this.offer = { text, reply };
       finish();
-      void Gen.askForKey();
+      Connect.open('send');
       return;
     }
 
@@ -4355,21 +4417,6 @@ const Chat = {
     // the turn itself when there is one, so a caller that awaits this still
     // returns once the retry is done.
     const out = this.send(text);
-    if (out && out.started) await out.started;
-  },
-
-  // Retry the same request, now for real. The pictures are already back in
-  // the chip row (giveBack), so they go with it this time.
-  async retryWithKey() {
-    const offer = this.offer;
-    if (!offer) throw new Error('nothing to retry');
-    track('key_offer_click');
-    await Gen.askForKey();
-    if (!Gen.available) return;
-    track('key_offer_added');
-    this.offer = null;
-    this.emit('offer');
-    const out = this.send(offer.text);
     if (out && out.started) await out.started;
   },
 
