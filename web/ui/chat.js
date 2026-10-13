@@ -215,7 +215,7 @@ export function ChatApp(body, win) {
       <button class="btn p sm" id="addKeyNow">Connect a model</button>`}`);
     b.querySelector('#addKeyNow').onclick = () => { track('offer_connect_click'); Chat.retryWithKey(); };
     const tf = b.querySelector('#tryFreeNow');
-    if (tf) tf.onclick = () => { track('try_free_click', { from: 'offer' }); location.href = Account.SIGNUP; };
+    if (tf) tf.onclick = () => Account.trySignUp('offer');
     return b;
   };
   // A model reply that failed: the provider's words (a slice of a proxy's
@@ -250,7 +250,7 @@ export function ChatApp(body, win) {
     if (billing) {
       b.querySelector('#hostedFinal').textContent = Hosted.FINAL_LINE;
       const buy = product => async () => {
-        try { await Hosted.checkout(product); }
+        try { await Hosted.checkout(product, 'card'); }
         catch (e) { const err = b.querySelector('#hostedBuyErr'); err.textContent = e.message; err.hidden = false; }
       };
       b.querySelector('#hostedPro').onclick = buy('pro');

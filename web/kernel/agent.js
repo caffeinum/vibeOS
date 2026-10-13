@@ -31,6 +31,14 @@ const Account = {
   ME: '/api/account/me',
   SIGNUP: '/auth/sign-up?next=/app',
   NEW_FLAG: 'vibeos-account-new',
+  FROM_FLAG: 'vibeos-signup-from',
+  // Every "Try it free" goes through here: the click is tracked with where it
+  // was, and the tab remembers it for account_created when it comes back.
+  trySignUp(from) {
+    track('try_free_click', { from });
+    try { sessionStorage.setItem(this.FROM_FLAG, 'try_free'); } catch {}
+    location.href = this.SIGNUP;
+  },
   absent: false,
   async me() {
     if (this.absent) return { available: false };
@@ -52,8 +60,12 @@ const Account = {
     if (!fresh) return;
     // The insights script is deferred and the kernel can run before it has
     // defined window.va; track() drops an event with no va.
-    if (window.va || document.readyState === 'complete') track('account_created');
-    else addEventListener('load', () => track('account_created'), { once: true });
+    // Which door the sign-up came through (beads-tavc.16.7): Try it free
+    // marks the tab before it leaves (Account.trySignUp); anything else is other.
+    let from = 'other';
+    try { if (sessionStorage.getItem(this.FROM_FLAG) === 'try_free') from = 'try_free'; sessionStorage.removeItem(this.FROM_FLAG); } catch {}
+    if (window.va || document.readyState === 'complete') track('account_created', { from });
+    else addEventListener('load', () => track('account_created', { from }), { once: true });
   },
 };
 Account.noteNewAccount();
@@ -80,6 +92,19 @@ const Hosted = {
   // (pm's spec 16.1 §4, aleks's pick b). The server decides; signing out
   // restores free bring-your-own, a loophole the spec accepts.
   byoLocked: false,
+  firstTurn: false,   // no metered step yet on this account (from /api/hosted)
+  // One per hosted chat turn (beads-tavc.16.7): ok, the account's first,
+  // and whether the cap or the free pause refused it.
+  turnDone(code) {
+    track('hosted_turn', { ok: !code, first: this.firstTurn, paused: code === 'paused' });
+    if (!code) this.firstTurn = false;
+  },
+  // The chat's paywall card, said once where the refusal is recorded (the
+  // chat repaints the card on every event, so the paint is not the place).
+  paywall(code) {
+    const reason = code === 'out-of-credits' ? 'zero_credits' : code === 'needs-pro' ? 'byo_needs_pro' : '';
+    if (reason) track('paywall_shown', { reason });
+  },
   PRO_LINE: "You've used your free credits. Pro ($20/mo, 3000 credits a month, they roll over) keeps the AI going, with ours or your own key or agent.",
   FINAL_LINE: 'Purchases are final. Pro renews monthly until you cancel; cancelling stops the next renewal and you keep your credits.',
   get active() { return this.enabled && this.signedIn; },
@@ -91,7 +116,9 @@ const Hosted = {
     if (r.status === 404) return;
     const j = await r.json().catch(() => null);
     if (!r.ok || !j || typeof j.enabled !== 'boolean') { console.error('hosted AI status answered ' + r.status + ':', j); return; }
-    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: j.model || '', byoLocked: !!j.byoLocked });
+    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: j.model || '', byoLocked: !!j.byoLocked, firstTurn: !!j.firstTurn });
+    // This read landed the sign-up grant: once per account (the server grants once).
+    if (j.granted === true) track('credits_granted', { plan: 'grant' });
     Gen.setProvider();
     Gen.emit();
   },
@@ -116,8 +143,9 @@ const Hosted = {
     return j;
   },
   // Hexclave's hosted checkout for 'pro' or 'topup', back to /app after.
-  async checkout(product) {
-    track('hosted_checkout_click', { product });
+  // `from`: where the button was (card | settings), for subscribe_click / topup_click.
+  async checkout(product, from) {
+    track(product === 'pro' ? 'subscribe_click' : 'topup_click', { from });
     const r = await fetch('/api/billing/checkout', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'content-type': 'application/json' },
@@ -404,7 +432,7 @@ const Gen = {
         overlay.querySelector('#keyTryFree').hidden = false;
         overlay.querySelector('#keyConnectBtn').className = 'btn';
         overlay.querySelector('#keyCreateBtn').hidden = true;
-        overlay.querySelector('#keyTryFreeBtn').onclick = () => { track('try_free_click', src); location.href = Account.SIGNUP; };
+        overlay.querySelector('#keyTryFreeBtn').onclick = () => Account.trySignUp('key_modal');
       }
       overlay.querySelector('#keyCreateBtn').onclick = async () => {
         track('create_account_click');
@@ -4139,6 +4167,7 @@ const Chat = {
       const e = Hosted.refuseByo();
       failure = e.message;
       reply.hosted = e.hostedCode;
+      Hosted.paywall(e.hostedCode);
       giveBack();
       this.failed(failure, remember);
       finish();
@@ -4150,6 +4179,7 @@ const Chat = {
           ? await Gen.generate(text, prior, onStatus, images, steer)
           : await Agent.runWithKey(text, prior, onStatus, images, steer);
         live = true;
+        if (Gen.provider === 'hosted') Hosted.turnDone();
         // What history remembers of the turn: the reply, else what was
         // built. A refused create_app built nothing, so a turn that only
         // refused is remembered as the refusal, never as the title alone.
@@ -4185,7 +4215,8 @@ const Chat = {
         failure = e.message;
         // A hosted refusal (out of credits, paused) gets the way out painted
         // under it: Top up / Subscribe, or your own key or agent.
-        if (e.hostedCode) reply.hosted = e.hostedCode;
+        if (e.hostedCode) { reply.hosted = e.hostedCode; Hosted.paywall(e.hostedCode); }
+        if (Gen.provider === 'hosted') Hosted.turnDone(e.hostedCode || 'failed');
         giveBack();
         this.failed(failure, remember);
         finish();

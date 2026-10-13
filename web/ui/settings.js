@@ -1224,7 +1224,7 @@ function paintHosted(body) {
     p('Sign up and the built-in agent runs on our model: 500 free credits. Free credits are for trying it; after them, keep going with Pro.');
     const go = document.createElement('button');
     go.className = 'btn p sm'; go.id = 'hostedTryFree'; go.textContent = 'Try it free';
-    go.onclick = () => { track('try_free_click', { from: 'settings' }); location.href = Account.SIGNUP; };
+    go.onclick = () => Account.trySignUp('settings');
     box.appendChild(go);
     return;
   }
@@ -1240,7 +1240,7 @@ function paintHosted(body) {
   const buy = (id, label, product, primary) => {
     const btn = document.createElement('button');
     btn.className = 'btn sm' + (primary ? ' p' : ''); btn.id = id; btn.textContent = label;
-    btn.onclick = async () => { try { await Hosted.checkout(product); } catch (e) { err.textContent = e.message; err.hidden = false; } };
+    btn.onclick = async () => { try { await Hosted.checkout(product, 'settings'); } catch (e) { err.textContent = e.message; err.hidden = false; } };
     row.appendChild(btn);
   };
   if (!Hosted.pro) buy('hostedSubscribe', 'Subscribe: $20/mo, 3000 credits a month', 'pro', true);
