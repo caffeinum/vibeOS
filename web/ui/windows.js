@@ -123,7 +123,12 @@ export function build(rec, geom) {
   el.className = 'win';
   if (id) el.dataset.app = id;
   Windows.stamp(rec, el);
-  Object.assign(el.style, { width: w + 'px', height: h + 'px' }, Windows.place());
+  // A new window fits the screen it opens on: at 390 px (Add to Home Screen)
+  // the 580 px chat ran off the right edge, the connect card with it.
+  const at = Windows.place(), vw = innerWidth || w + 16, vh = innerHeight || h + 80;
+  const fw = Math.min(w, vw - 16), fh = Math.min(h, vh - 80);
+  at.left = Math.max(8, Math.min(parseFloat(at.left), vw - fw - 8)) + 'px';
+  Object.assign(el.style, { width: fw + 'px', height: fh + 'px' }, at);
   if (geom) {
     Object.assign(el.style, { left: geom.left, top: geom.top, width: geom.width, height: geom.height, zIndex: geom.zIndex });
     Windows.z = Math.max(Windows.z, Number(geom.zIndex) || 0);
