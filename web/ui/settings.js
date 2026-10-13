@@ -1206,7 +1206,7 @@ function forkVersionText() {
 
 /* Hosted AI (beads-tavc.16.3), above the rest of the Model pane: the
    balance by source, the plan, the last 20 metered steps (time, model,
-   credits: no prompt or reply text exists to show) and Subscribe / Top up.
+   credits: no prompt or reply text exists to show) and Subscribe (no top-up since tavc.16.11).
    Signed out with hosted AI on: Try it free. Every value from the server is
    textContent. */
 function paintHosted(body) {
