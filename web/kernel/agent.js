@@ -104,7 +104,10 @@ const Hosted = {
       body: JSON.stringify(body),
     });
     const j = await jsonOf(r, 'hosted AI');
-    if (j.balance) { this.balance = j.balance; Gen.emit(); }
+    // A step answers with what is left to spend after it (the charge itself
+    // lands on the server a moment after the reply); the full balance by
+    // source is /api/hosted's, read at boot and by Settings.
+    if (typeof j.spendable === 'number') { this.balance = Object.assign({}, this.balance, { spendable: j.spendable }); Gen.emit(); }
     if (r.ok && typeof j.credits === 'number') track('credits_spent', { model: this.model });
     if (!r.ok) {
       track('hosted_refused', { code: String(j.code || r.status).slice(0, 40) });
@@ -139,8 +142,9 @@ const Hosted = {
   },
   // A turn that ends holding its lease (the step budget ran out, a tool threw
   // between steps) lets it go, or the next message waits out the 2 min hold.
-  async release(lease) {
-    try { await this.step({ release: lease }); }
+  // `turn` is the token the last step answered with.
+  async release(turn) {
+    try { await this.step({ release: turn }); }
     catch (e) { console.warn('hosted AI: the turn lease was not released (it expires in 2 min):', e.message); }
   },
 };
@@ -3660,18 +3664,19 @@ const Agent = {
     ];
     const created = [];
     // Hosted AI holds one turn per account: the first step's reply carries
-    // the lease, every later step sends it back, the last step's reply drops
-    // it. A turn that ends any other way lets it go here.
-    let lease = null;
+    // a signed turn token (the lease and the running balance), every later
+    // step sends it back, the last step's reply drops it. A turn that ends
+    // any other way lets it go here.
+    let turn = null;
     try {
-      return await this.runSteps(messages, onStatus, steer, created, l => { lease = l; });
+      return await this.runSteps(messages, onStatus, steer, created, t => { turn = t; });
     } finally {
-      if (lease) Hosted.release(lease);
+      if (turn) Hosted.release(turn);
     }
   },
 
-  async runSteps(messages, onStatus, steer, created, setLease) {
-    let lastText = '', lease = null;
+  async runSteps(messages, onStatus, steer, created, setTurn) {
+    let lastText = '', turn = null;
     for (let step = 0; step < this.MAX_STEPS; step++) {
       const note = this.stepNote(step);
       if (note) onStatus?.(this.stepStatus(step));
@@ -3682,9 +3687,9 @@ const Agent = {
       const body = Object.assign({ image: VM.bootedImage || VM.image, messages },
         note ? { note } : {},
         !hosted && Gen.codexModel ? { model: Gen.codexModel } : {},
-        hosted && lease ? { lease } : {});
+        hosted && turn ? { turn } : {});
       const j = await this.callServer(body);
-      if (hosted) { lease = j.lease || null; setLease(lease); }
+      if (hosted) { turn = j.turn || null; setTurn(turn); }
       lastText = j.text || '';
 
       if (!j.toolCalls || !j.toolCalls.length) {
