@@ -87,6 +87,32 @@ const Hosted = {
   // under it reads as low, not as a bug.
   HEADROOM: 50,
   enabled: false, signedIn: false, balance: null, grantPaused: false, paused: false, pro: false, model: '',
+  // The two hosted models, from /api/hosted ([{provider, id, label}]), and
+  // which one this browser picked in Settings › Model (beads-tavc.16.10).
+  // The server checks the provider against its own list; this is only the pick.
+  models: [], defaultProvider: 'openai',
+  CHOICE_KEY: 'vibeos-hosted-model',
+  get choice() {
+    let c = null;
+    try { c = localStorage.getItem(this.CHOICE_KEY); } catch {}
+    return this.models.some(m => m.provider === c) ? c : this.defaultProvider;
+  },
+  setChoice(provider) {
+    if (!this.models.some(m => m.provider === provider)) throw new Error('hosted AI has no model for ' + provider);
+    try { localStorage.setItem(this.CHOICE_KEY, provider); } catch {}
+    track('hosted_model_switch', { to: provider });
+    Gen.setProvider();
+    Gen.emit();
+  },
+  get chosen() { return this.models.find(m => m.provider === this.choice) || null; },
+  // This turn's spend, summed from its steps' replies, for hosted_turn.
+  turnCredits: 0, turnCost: 0, turnProvider: '',
+  turnStart() { this.turnCredits = 0; this.turnCost = 0; this.turnProvider = this.choice; },
+  noteStep(j) {
+    if (typeof j.credits === 'number') this.turnCredits += j.credits;
+    if (typeof j.costUsd === 'number') this.turnCost += j.costUsd;
+    if (typeof j.provider === 'string') this.turnProvider = j.provider;
+  },
   // Signed in, the free credits used up, no credits left and not Pro: the
   // chat, api.ai and the agent bridge need Pro, bring-your-own included
   // (pm's spec 16.1 §4, aleks's pick b). The server decides; signing out
@@ -102,7 +128,10 @@ const Hosted = {
   // booting | ready | failed), so a charge made before the machine was up
   // can be counted (beads-tavc.16.7).
   turnDone(code, vm) {
-    track('hosted_turn', { ok: !code, first: this.firstTurn, paused: code === 'paused', vm });
+    // model: which provider the turn ran on; cost_usd and credits: what its
+    // steps cost us and charged, summed from the replies (6 dp: per-model cost).
+    track('hosted_turn', { ok: !code, first: this.firstTurn, paused: code === 'paused', vm,
+      model: this.turnProvider || this.choice, cost_usd: Math.round(this.turnCost * 1e6) / 1e6, credits: this.turnCredits });
     if (!code) this.firstTurn = false;
   },
   // The chat's paywall card, said once where the refusal is recorded (the
@@ -122,7 +151,8 @@ const Hosted = {
     if (r.status === 404) return;
     const j = await r.json().catch(() => null);
     if (!r.ok || !j || typeof j.enabled !== 'boolean') { console.error('hosted AI status answered ' + r.status + ':', j); return; }
-    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: j.model || '', byoLocked: !!j.byoLocked, firstTurn: !!j.firstTurn, purchases: !!j.purchases });
+    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: '', byoLocked: !!j.byoLocked, firstTurn: !!j.firstTurn, purchases: !!j.purchases,
+      models: Array.isArray(j.models) ? j.models : [], defaultProvider: typeof j.defaultProvider === 'string' ? j.defaultProvider : 'openai' });
     // This read landed the sign-up grant: once per account (the server grants once).
     if (j.granted === true) track('credits_granted', { plan: 'grant' });
     Gen.setProvider();
@@ -141,7 +171,7 @@ const Hosted = {
     // lands on the server a moment after the reply); the full balance by
     // source is /api/hosted's, read at boot and by Settings.
     if (typeof j.spendable === 'number') { this.balance = Object.assign({}, this.balance, { spendable: j.spendable }); Gen.emit(); }
-    if (r.ok && typeof j.credits === 'number') track('credits_spent', { model: this.model });
+    if (r.ok && typeof j.credits === 'number') track('credits_spent', { model: j.provider || this.choice });
     if (!r.ok) {
       track('hosted_refused', { code: String(j.code || r.status).slice(0, 40) });
       throw Object.assign(new Error(j.error || ('hosted AI answered ' + r.status)), { hostedCode: j.code || 'failed' });
@@ -248,7 +278,7 @@ const Gen = {
     }
     if (Hosted.active) {
       this.provider = 'hosted';
-      this.model = Hosted.model.replace(/^[a-z]+\//, '');
+      this.model = Hosted.chosen ? Hosted.chosen.id.replace(/^[a-z]+\//, '') : '';
       this.available = true;
       return;
     }
@@ -653,7 +683,7 @@ const Gen = {
   samplingRefusal(agent) { return samplingRefusal(agent); },
   // Hosted AI with { ask }: one metered step, no tools, answered { text }.
   async askHosted(system, prompt, images, maxTokens) {
-    const j = await Hosted.step({ ask: { system, maxTokens }, messages: [{ role: 'user', content: Agent.userContent('sdk', prompt, images) }] });
+    const j = await Hosted.step({ provider: Hosted.choice, ask: { system, maxTokens }, messages: [{ role: 'user', content: Agent.userContent('sdk', prompt, images) }] });
     if (typeof j.text !== 'string') throw new Error('hosted AI answered with no text');
     return j.text;
   },
@@ -3721,9 +3751,9 @@ const Agent = {
       const body = Object.assign({ image: VM.bootedImage || VM.image, messages },
         note ? { note } : {},
         !hosted && Gen.codexModel ? { model: Gen.codexModel } : {},
-        hosted && turn ? { turn } : {});
+        hosted ? Object.assign({ provider: Hosted.choice }, turn ? { turn } : {}) : {});
       const j = await this.callServer(body);
-      if (hosted) { turn = j.turn || null; setTurn(turn); }
+      if (hosted) { turn = j.turn || null; setTurn(turn); Hosted.noteStep(j); }
       lastText = j.text || '';
 
       if (!j.toolCalls || !j.toolCalls.length) {
@@ -4181,6 +4211,7 @@ const Chat = {
     }
     if (Gen.available && (Gen.oauth || Gen.key || Gen.provider === 'hosted')) {
       const vmAtStart = VM.state;
+      if (Gen.provider === 'hosted') Hosted.turnStart();
       try {
         const result = Gen.oauth || Gen.provider === 'hosted'
           ? await Gen.generate(text, prior, onStatus, images, steer)
