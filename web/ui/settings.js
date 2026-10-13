@@ -1243,11 +1243,14 @@ function paintHosted(body) {
     btn.onclick = async () => { try { await Hosted.checkout(product, 'settings'); } catch (e) { err.textContent = e.message; err.hidden = false; } };
     row.appendChild(btn);
   };
-  if (!Hosted.pro) buy('hostedSubscribe', 'Subscribe: $20/mo, 3000 credits a month', 'pro', true);
-  buy('hostedTopUp', 'Top up 500 for $5', 'topup', Hosted.pro);
-  box.appendChild(row);
-  p(Hosted.FINAL_LINE, 'tiny dimmer');
-  box.appendChild(err);
+  // Buying only while the server has purchases on (PURCHASES_ENABLED).
+  if (Hosted.purchases) {
+    if (!Hosted.pro) buy('hostedSubscribe', 'Subscribe: $20/mo, 3000 credits a month', 'pro', true);
+    buy('hostedTopUp', 'Top up 500 for $5', 'topup', Hosted.pro);
+    box.appendChild(row);
+    p(Hosted.FINAL_LINE, 'tiny dimmer');
+    box.appendChild(err);
+  }
   const list = document.createElement('div');
   list.className = 'hosted-usage tiny';
   list.textContent = 'loading usage…';

@@ -93,6 +93,9 @@ const Hosted = {
   // restores free bring-your-own, a loophole the spec accepts.
   byoLocked: false,
   firstTurn: false,   // no metered step yet on this account (from /api/hosted)
+  // PURCHASES_ENABLED on the server: Subscribe / Top up are offered only
+  // then (Hexclave's test-mode checkout grants with no card).
+  purchases: false,
   // One per hosted chat turn (beads-tavc.16.7): ok, the account's first,
   // and whether the cap or the free pause refused it.
   turnDone(code) {
@@ -116,7 +119,7 @@ const Hosted = {
     if (r.status === 404) return;
     const j = await r.json().catch(() => null);
     if (!r.ok || !j || typeof j.enabled !== 'boolean') { console.error('hosted AI status answered ' + r.status + ':', j); return; }
-    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: j.model || '', byoLocked: !!j.byoLocked, firstTurn: !!j.firstTurn });
+    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: j.model || '', byoLocked: !!j.byoLocked, firstTurn: !!j.firstTurn, purchases: !!j.purchases });
     // This read landed the sign-up grant: once per account (the server grants once).
     if (j.granted === true) track('credits_granted', { plan: 'grant' });
     Gen.setProvider();
