@@ -123,7 +123,9 @@ export function ChatApp(body, win) {
     if (model) model.textContent = Gen.model;
     if (agent && !Gen.available) introEl.querySelector('b').textContent = RemoteBridge.detail || 'your agent';
     const connectBtn = introEl.querySelector('#chatConnect');
-    if (connectBtn) connectBtn.onclick = async () => { await Gen.askForKey({ from: 'intro' }); paintIntro(); };
+    // An agent is connected, so there is no card: a second model is a
+    // Settings › Model choice (its Add a key opens the same options inline).
+    if (connectBtn) connectBtn.onclick = () => UI.live().openSettings('model');
   };
   // The intro follows the bridge: the onboarding modal closes itself when an
   // agent connects, and the chat behind it must not keep saying "no model".
