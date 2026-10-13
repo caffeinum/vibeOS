@@ -1204,12 +1204,74 @@ function forkVersionText() {
     '. Keep mine hides the notice until the next served change; Take the update sets each of your copies aside as system/<file>.bak and boots the served ones; Let agent update gives the connected agent your fork and the served copy to merge.';
 }
 
+/* Hosted AI (beads-tavc.16.3), above the rest of the Model pane: the
+   balance by source, the plan, the last 20 metered steps (time, model,
+   credits: no prompt or reply text exists to show) and Subscribe / Top up.
+   Signed out with hosted AI on: Try it free. Every value from the server is
+   textContent. */
+function paintHosted(body) {
+  if (typeof Hosted === 'undefined' || !Hosted.enabled) return;
+  const box = document.createElement('div');
+  box.className = 'hosted-pane';
+  box.style.cssText = 'border:1px solid var(--line);border-radius:var(--radius-ctl);padding:10px 12px;margin:0 0 14px';
+  body.prepend(box);
+  const h = document.createElement('h4');
+  h.style.margin = '0 0 6px';
+  h.textContent = 'vibeOS hosted AI';
+  box.appendChild(h);
+  const p = (text, cls = 'small') => { const el = document.createElement('p'); el.className = cls; el.style.margin = '0 0 6px'; el.textContent = text; box.appendChild(el); return el; };
+  if (!Hosted.signedIn) {
+    p('Sign up and the built-in agent runs on our model: 500 free credits. Free credits are for trying it; after them, keep going with Pro.');
+    const go = document.createElement('button');
+    go.className = 'btn p sm'; go.id = 'hostedTryFree'; go.textContent = 'Try it free';
+    go.onclick = () => { track('try_free_click', { from: 'settings' }); location.href = Account.SIGNUP; };
+    box.appendChild(go);
+    return;
+  }
+  const bal = Hosted.balance || { total: 0, spendable: 0, 'credits-grant': 0, 'credits-pro': 0, 'credits-topup': 0 };
+  p(`${Hosted.credits} credits` + (Hosted.pro ? ' · Pro' : ' · free plan'), 'hosted-balance');
+  p(`free ${bal['credits-grant']} · Pro ${bal['credits-pro']} · top-up ${bal['credits-topup']}. A step needs up to about ${Hosted.HEADROOM} credits of headroom.`
+    + (Hosted.grantPaused ? ' Free credits are paused for the rest of this month; paid ones still work.' : ''), 'tiny dimmer');
+  if (Hosted.byoLocked) p(Hosted.PRO_LINE, 'small no');
+  const row = document.createElement('div');
+  row.className = 'row'; row.style.gap = '6px';
+  const err = document.createElement('p');
+  err.className = 'no tiny'; err.hidden = true;
+  const buy = (id, label, product, primary) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn sm' + (primary ? ' p' : ''); btn.id = id; btn.textContent = label;
+    btn.onclick = async () => { try { await Hosted.checkout(product); } catch (e) { err.textContent = e.message; err.hidden = false; } };
+    row.appendChild(btn);
+  };
+  if (!Hosted.pro) buy('hostedSubscribe', 'Subscribe: $20/mo, 3000 credits a month', 'pro', true);
+  buy('hostedTopUp', 'Top up 500 for $5', 'topup', Hosted.pro);
+  box.appendChild(row);
+  p(Hosted.FINAL_LINE, 'tiny dimmer');
+  box.appendChild(err);
+  const list = document.createElement('div');
+  list.className = 'hosted-usage tiny';
+  list.textContent = 'loading usage…';
+  box.appendChild(list);
+  Hosted.usage().then(j => {
+    list.textContent = '';
+    if (!j.usage.length) { list.textContent = 'No metered steps yet.'; return; }
+    for (const u of j.usage) {
+      const line = document.createElement('div');
+      line.className = 'hosted-usage-row';
+      line.textContent = `${new Date(u.at).toLocaleString()} · ${String(u.model).replace(/^[a-z]+\//, '')} · ${u.credits} credit${u.credits === 1 ? '' : 's'}`;
+      list.appendChild(line);
+    }
+  }, e => { list.textContent = 'usage could not be read: ' + e.message; list.className += ' no'; });
+}
+
 export function ModelApp(body) {
   const render = () => {
     body.innerHTML = `
       <h3>Model</h3>
       <p class="small muted" style="margin-top:0">
-        ${Gen.viaServer
+        ${Gen.provider === 'hosted'
+          ? `Using vibeOS hosted AI on your account. Model: <b>${Gen.model}</b>. A pasted key or a ChatGPT login takes over from it, and stays free.`
+          : Gen.viaServer
           ? `A local server is holding the key. Model: <b>${Gen.model}</b>.`
           : Gen.key
             ? `Using your own <b>${Gen.provider}</b> key. It’s stored only in this browser and sent
@@ -1241,6 +1303,7 @@ export function ModelApp(body) {
           ? 'ChatGPT tokens stay in <code>localStorage</code> and are sent to vibeos.sh only for proxied Codex inference.'
           : 'API keys never reach vibeos.sh. They live in <code>localStorage</code> and go directly to Anthropic or OpenAI from your browser.'}
       </p>`;
+    paintHosted(body);
     body.querySelector('#setkey').onclick = async () => { await Gen.askForKey(); render(); };
     const c = body.querySelector('#clear');
     if (c) c.onclick = () => { Gen.saveKey(''); render(); };

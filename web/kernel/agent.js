@@ -75,6 +75,13 @@ const Hosted = {
   // under it reads as low, not as a bug.
   HEADROOM: 50,
   enabled: false, signedIn: false, balance: null, grantPaused: false, paused: false, pro: false, model: '',
+  // Signed in, the free credits used up, no credits left and not Pro: the
+  // chat, api.ai and the agent bridge need Pro, bring-your-own included
+  // (pm's spec 16.1 §4, aleks's pick b). The server decides; signing out
+  // restores free bring-your-own, a loophole the spec accepts.
+  byoLocked: false,
+  PRO_LINE: "You've used your free credits. Pro ($20/mo, 3000 credits a month, they roll over) keeps the AI going, with ours or your own key or agent.",
+  FINAL_LINE: 'Purchases are final. Pro renews monthly until you cancel; cancelling stops the next renewal and you keep your credits.',
   get active() { return this.enabled && this.signedIn; },
   get credits() { return this.balance ? Math.max(0, this.balance.spendable) : 0; },
   async refresh() {
@@ -84,7 +91,7 @@ const Hosted = {
     if (r.status === 404) return;
     const j = await r.json().catch(() => null);
     if (!r.ok || !j || typeof j.enabled !== 'boolean') { console.error('hosted AI status answered ' + r.status + ':', j); return; }
-    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: j.model || '' });
+    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: j.model || '', byoLocked: !!j.byoLocked });
     Gen.setProvider();
     Gen.emit();
   },
@@ -104,6 +111,31 @@ const Hosted = {
       throw Object.assign(new Error(j.error || ('hosted AI answered ' + r.status)), { hostedCode: j.code || 'failed' });
     }
     return j;
+  },
+  // Hexclave's hosted checkout for 'pro' or 'topup', back to /app after.
+  async checkout(product) {
+    track('hosted_checkout_click', { product });
+    const r = await fetch('/api/billing/checkout', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ product }),
+    });
+    const j = await jsonOf(r, 'checkout');
+    if (!r.ok || typeof j.url !== 'string') throw new Error(j.error || ('checkout answered ' + r.status));
+    location.href = j.url;
+  },
+  // The last 20 metered steps and the plan (/api/billing: no prompt or reply text, ever).
+  async usage() {
+    const r = await fetch('/api/billing', { credentials: 'same-origin', cache: 'no-store' });
+    const j = await jsonOf(r, 'billing');
+    if (!r.ok) throw new Error(j.error || ('billing answered ' + r.status));
+    if (!Array.isArray(j.usage)) throw new Error('billing answered without a usage list');
+    return j;
+  },
+  // The way it says no to bring-your-own once the free credits are gone.
+  refuseByo() {
+    track('hosted_refused', { code: 'needs-pro' });
+    return Object.assign(new Error(this.PRO_LINE), { hostedCode: 'needs-pro' });
   },
   // A turn that ends holding its lease (the step budget ran out, a tool threw
   // between steps) lets it go, or the next message waits out the 2 min hold.
@@ -522,6 +554,7 @@ const Gen = {
     // agent whose client cannot sample is named in the refusal, so the app
     // and the upsell say why instead of "no model connected".
     if (!this.forApps && !this.viaAgent) throw new Error(RemoteBridge.state === 'connected' ? samplingRefusal(RemoteBridge.agentName) : 'no model connected');
+    if (Hosted.byoLocked && this.provider !== 'hosted') throw Hosted.refuseByo();
     const provider = this.forApps ? this.provider : 'mcp-sampling';
     let text;
     try {
@@ -1325,6 +1358,7 @@ const BUILTIN_APPS = () => Object.entries(UI.stable().SHELL).map(([id, s]) => ({
 // writes or sends whatever comes back.
 async function bridgeCall(call, event) {
   if (!call || typeof call !== 'object' || !call.tool) return { ok: false, error: 'request needs a "tool" field' };
+  if (event === 'mcp_call' && Hosted.byoLocked) return { ok: false, error: Hosted.refuseByo().message };
   if (call.tool === 'js') {
     // `vibeos js '<code>'` runs in the desktop's own origin and returns the
     // value (awaited) as JSON. The machine is trusted and the agent can
@@ -4096,6 +4130,15 @@ const Chat = {
     // Both paths are the agent now. Signing in with ChatGPT proxies through
     // vibeos.sh; a pasted key talks to the provider from this page. Same
     // tools, same prompt, same loop.
+    if (Gen.available && (Gen.oauth || Gen.key) && Hosted.byoLocked) {
+      const e = Hosted.refuseByo();
+      failure = e.message;
+      reply.hosted = e.hostedCode;
+      giveBack();
+      this.failed(failure, remember);
+      finish();
+      return;
+    }
     if (Gen.available && (Gen.oauth || Gen.key || Gen.provider === 'hosted')) {
       try {
         const result = Gen.oauth || Gen.provider === 'hosted'
