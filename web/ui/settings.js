@@ -1233,6 +1233,22 @@ function paintHosted(body) {
   p(`free ${bal['credits-grant']} · Pro ${bal['credits-pro']} · top-up ${bal['credits-topup']}. A step needs up to about ${Hosted.HEADROOM} credits of headroom.`
     + (Hosted.grantPaused ? ' Free credits are paused for the rest of this month; paid ones still work.' : ''), 'tiny dimmer');
   if (Hosted.byoLocked) p(Hosted.PRO_LINE, 'small no');
+  // Which model hosted AI runs (beads-tavc.16.10): one per provider, kept in
+  // this browser; a turn already running keeps the model it started on.
+  if (Hosted.models.length > 1) {
+    const pick = document.createElement('div');
+    pick.className = 'row hosted-models'; pick.style.cssText = 'gap:6px;margin:0 0 8px';
+    for (const m of Hosted.models) {
+      const b = document.createElement('button');
+      b.className = 'btn sm' + (m.provider === Hosted.choice ? ' p' : '');
+      b.dataset.provider = m.provider;
+      b.textContent = (m.provider === 'openai' ? 'OpenAI' : m.provider === 'anthropic' ? 'Anthropic' : m.provider) + ' · ' + m.label;
+      b.setAttribute('aria-pressed', String(m.provider === Hosted.choice));
+      b.onclick = () => { Hosted.setChoice(m.provider); body.dispatchEvent(new CustomEvent('hosted-repaint')); };
+      pick.appendChild(b);
+    }
+    box.appendChild(pick);
+  }
   const row = document.createElement('div');
   row.className = 'row'; row.style.gap = '6px';
   const err = document.createElement('p');
@@ -1307,6 +1323,7 @@ export function ModelApp(body) {
           : 'API keys never reach vibeos.sh. They live in <code>localStorage</code> and go directly to Anthropic or OpenAI from your browser.'}
       </p>`;
     paintHosted(body);
+    body.addEventListener('hosted-repaint', render, { once: true });
     body.querySelector('#setkey').onclick = async () => { await Gen.askForKey(); render(); };
     const c = body.querySelector('#clear');
     if (c) c.onclick = () => { Gen.saveKey(''); render(); };

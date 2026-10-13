@@ -87,6 +87,32 @@ const Hosted = {
   // under it reads as low, not as a bug.
   HEADROOM: 50,
   enabled: false, signedIn: false, balance: null, grantPaused: false, paused: false, pro: false, model: '',
+  // The two hosted models, from /api/hosted ([{provider, id, label}]), and
+  // which one this browser picked in Settings › Model (beads-tavc.16.10).
+  // The server checks the provider against its own list; this is only the pick.
+  models: [], defaultProvider: 'openai',
+  CHOICE_KEY: 'vibeos-hosted-model',
+  get choice() {
+    let c = null;
+    try { c = localStorage.getItem(this.CHOICE_KEY); } catch {}
+    return this.models.some(m => m.provider === c) ? c : this.defaultProvider;
+  },
+  setChoice(provider) {
+    if (!this.models.some(m => m.provider === provider)) throw new Error('hosted AI has no model for ' + provider);
+    try { localStorage.setItem(this.CHOICE_KEY, provider); } catch {}
+    track('hosted_model_switch', { to: provider });
+    Gen.setProvider();
+    Gen.emit();
+  },
+  get chosen() { return this.models.find(m => m.provider === this.choice) || null; },
+  // This turn's spend, summed from its steps' replies, for hosted_turn.
+  turnCredits: 0, turnCost: 0, turnProvider: '',
+  turnStart() { this.turnCredits = 0; this.turnCost = 0; this.turnProvider = this.choice; },
+  noteStep(j) {
+    if (typeof j.credits === 'number') this.turnCredits += j.credits;
+    if (typeof j.costUsd === 'number') this.turnCost += j.costUsd;
+    if (typeof j.provider === 'string') this.turnProvider = j.provider;
+  },
   // Signed in, the free credits used up, no credits left and not Pro: the
   // chat, api.ai and the agent bridge need Pro, bring-your-own included
   // (pm's spec 16.1 §4, aleks's pick b). The server decides; signing out
@@ -102,7 +128,10 @@ const Hosted = {
   // booting | ready | failed), so a charge made before the machine was up
   // can be counted (beads-tavc.16.7).
   turnDone(code, vm) {
-    track('hosted_turn', { ok: !code, first: this.firstTurn, paused: code === 'paused', vm });
+    // model: which provider the turn ran on; cost_usd and credits: what its
+    // steps cost us and charged, summed from the replies (6 dp: per-model cost).
+    track('hosted_turn', { ok: !code, first: this.firstTurn, paused: code === 'paused', vm,
+      model: this.turnProvider || this.choice, cost_usd: Math.round(this.turnCost * 1e6) / 1e6, credits: this.turnCredits });
     if (!code) this.firstTurn = false;
   },
   // The chat's paywall card, said once where the refusal is recorded (the
@@ -122,7 +151,8 @@ const Hosted = {
     if (r.status === 404) return;
     const j = await r.json().catch(() => null);
     if (!r.ok || !j || typeof j.enabled !== 'boolean') { console.error('hosted AI status answered ' + r.status + ':', j); return; }
-    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: j.model || '', byoLocked: !!j.byoLocked, firstTurn: !!j.firstTurn, purchases: !!j.purchases });
+    Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: '', byoLocked: !!j.byoLocked, firstTurn: !!j.firstTurn, purchases: !!j.purchases,
+      models: Array.isArray(j.models) ? j.models : [], defaultProvider: typeof j.defaultProvider === 'string' ? j.defaultProvider : 'openai' });
     // This read landed the sign-up grant: once per account (the server grants once).
     if (j.granted === true) track('credits_granted', { plan: 'grant' });
     Gen.setProvider();
@@ -130,9 +160,9 @@ const Hosted = {
   },
   // One step, or one api.ai ask. A refusal (out of credits, paused, another
   // turn running, signed out) throws with its `hostedCode`, in the server's words.
-  async step(body) {
+  async step(body, { keepalive = false } = {}) {
     const r = await fetch(this.GENERATE, {
-      method: 'POST', credentials: 'same-origin',
+      method: 'POST', credentials: 'same-origin', keepalive,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
@@ -141,7 +171,7 @@ const Hosted = {
     // lands on the server a moment after the reply); the full balance by
     // source is /api/hosted's, read at boot and by Settings.
     if (typeof j.spendable === 'number') { this.balance = Object.assign({}, this.balance, { spendable: j.spendable }); Gen.emit(); }
-    if (r.ok && typeof j.credits === 'number') track('credits_spent', { model: this.model });
+    if (r.ok && typeof j.credits === 'number') track('credits_spent', { model: j.provider || this.choice });
     if (!r.ok) {
       track('hosted_refused', { code: String(j.code || r.status).slice(0, 40) });
       throw Object.assign(new Error(j.error || ('hosted AI answered ' + r.status)), { hostedCode: j.code || 'failed' });
@@ -176,10 +206,25 @@ const Hosted = {
   },
   // A turn that ends holding its lease (the step budget ran out, a tool threw
   // between steps) lets it go, or the next message waits out the 2 min hold.
-  // `turn` is the token the last step answered with.
+  // `turn` is the token the last step answered with. keepalive, because the
+  // turn that ends in reload_os releases 400 ms before the page goes.
   async release(turn) {
-    try { await this.step({ release: turn }); }
+    if (this.liveTurn === turn) this.liveTurn = null;
+    try { await this.step({ release: turn }, { keepalive: true }); }
     catch (e) { console.warn('hosted AI: the turn lease was not released (it expires in 2 min):', e.message); }
+  },
+  // The lease of the turn in flight, for a page that goes away mid-turn (a
+  // hand reload, a closed tab): pagehide lets it go, or the next page's first
+  // message is refused "another turn is already running" for 2 min.
+  liveTurn: null,
+  releaseOnLeave() {
+    const turn = this.liveTurn;
+    if (!turn) return;
+    this.liveTurn = null;
+    try {
+      fetch(this.GENERATE, { method: 'POST', credentials: 'same-origin', keepalive: true,
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ release: turn }) }).catch(() => {});
+    } catch {}
   },
 };
 
@@ -248,7 +293,7 @@ const Gen = {
     }
     if (Hosted.active) {
       this.provider = 'hosted';
-      this.model = Hosted.model.replace(/^[a-z]+\//, '');
+      this.model = Hosted.chosen ? Hosted.chosen.id.replace(/^[a-z]+\//, '') : '';
       this.available = true;
       return;
     }
@@ -653,7 +698,7 @@ const Gen = {
   samplingRefusal(agent) { return samplingRefusal(agent); },
   // Hosted AI with { ask }: one metered step, no tools, answered { text }.
   async askHosted(system, prompt, images, maxTokens) {
-    const j = await Hosted.step({ ask: { system, maxTokens }, messages: [{ role: 'user', content: Agent.userContent('sdk', prompt, images) }] });
+    const j = await Hosted.step({ provider: Hosted.choice, ask: { system, maxTokens }, messages: [{ role: 'user', content: Agent.userContent('sdk', prompt, images) }] });
     if (typeof j.text !== 'string') throw new Error('hosted AI answered with no text');
     return j.text;
   },
@@ -2904,6 +2949,7 @@ const RemoteBridge = {
   unload() {},
 };
 window.addEventListener('pagehide', () => RemoteBridge.unload());
+window.addEventListener('pagehide', () => Hosted.releaseOnLeave());
 
 /* A window app was created and its window opened: the ui's tray balloon
    and the winxp cascade listen here. Decoration only, so a listener that
@@ -3721,9 +3767,9 @@ const Agent = {
       const body = Object.assign({ image: VM.bootedImage || VM.image, messages },
         note ? { note } : {},
         !hosted && Gen.codexModel ? { model: Gen.codexModel } : {},
-        hosted && turn ? { turn } : {});
+        hosted ? Object.assign({ provider: Hosted.choice }, turn ? { turn } : {}) : {});
       const j = await this.callServer(body);
-      if (hosted) { turn = j.turn || null; setTurn(turn); }
+      if (hosted) { turn = j.turn || null; setTurn(turn); Hosted.liveTurn = turn; Hosted.noteStep(j); }
       lastText = j.text || '';
 
       if (!j.toolCalls || !j.toolCalls.length) {
@@ -3731,9 +3777,11 @@ const Agent = {
       }
 
       const toolResults = [];
+      let reloading = false;
       for (const call of j.toolCalls) {
         const output = await this.executeTool(call, onStatus, true);
         if (call.toolName === 'create_app') created.push(output);
+        if (call.toolName === 'reload_os' && output && output.ok !== false) reloading = true;
         toolResults.push({
           type: 'tool-result',
           toolCallId: call.toolCallId,
@@ -3745,6 +3793,12 @@ const Agent = {
       if (j.finishReason !== 'tool-calls') {
         return { text: lastText, created, steps: step + 1 };
       }
+      // reload_os replaces the page 400 ms from now: the turn ends here, as
+      // its result tells the model. A next step would be cut off mid-flight
+      // (charged, its reply never read) and the turn would never finish — no
+      // release, no hosted_turn. Ending it lets run() release the lease and
+      // the chat record the turn before the page goes.
+      if (reloading) return { text: lastText, created, steps: step + 1, reloading: true };
 
       messages = [...messages, ...(j.responseMessages || []), { role: 'tool', content: toolResults },
                   ...this.steerMessages('sdk', steer && step + 1 < this.MAX_STEPS ? steer() : [])];
@@ -4181,12 +4235,16 @@ const Chat = {
     }
     if (Gen.available && (Gen.oauth || Gen.key || Gen.provider === 'hosted')) {
       const vmAtStart = VM.state;
+      if (Gen.provider === 'hosted') Hosted.turnStart();
       try {
         const result = Gen.oauth || Gen.provider === 'hosted'
           ? await Gen.generate(text, prior, onStatus, images, steer)
           : await Agent.runWithKey(text, prior, onStatus, images, steer);
         live = true;
         if (Gen.provider === 'hosted') Hosted.turnDone(undefined, vmAtStart);
+        // reload_os ended the turn (the loop stopped there): the reply stays
+        // blank in the log for the next boot to fill with the reload note.
+        if (result.reloading) { finish(); return; }
         // What history remembers of the turn: the reply, else what was
         // built. A refused create_app built nothing, so a turn that only
         // refused is remembered as the refusal, never as the title alone.
