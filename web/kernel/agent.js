@@ -98,8 +98,11 @@ const Hosted = {
   purchases: false,
   // One per hosted chat turn (beads-tavc.16.7): ok, the account's first,
   // and whether the cap or the free pause refused it.
-  turnDone(code) {
-    track('hosted_turn', { ok: !code, first: this.firstTurn, paused: code === 'paused' });
+  // `vm` is the machine's state when the turn STARTED (off | unavailable |
+  // booting | ready | failed), so a charge made before the machine was up
+  // can be counted (beads-tavc.16.7).
+  turnDone(code, vm) {
+    track('hosted_turn', { ok: !code, first: this.firstTurn, paused: code === 'paused', vm });
     if (!code) this.firstTurn = false;
   },
   // The chat's paywall card, said once where the refusal is recorded (the
@@ -4177,12 +4180,13 @@ const Chat = {
       return;
     }
     if (Gen.available && (Gen.oauth || Gen.key || Gen.provider === 'hosted')) {
+      const vmAtStart = VM.state;
       try {
         const result = Gen.oauth || Gen.provider === 'hosted'
           ? await Gen.generate(text, prior, onStatus, images, steer)
           : await Agent.runWithKey(text, prior, onStatus, images, steer);
         live = true;
-        if (Gen.provider === 'hosted') Hosted.turnDone();
+        if (Gen.provider === 'hosted') Hosted.turnDone(undefined, vmAtStart);
         // What history remembers of the turn: the reply, else what was
         // built. A refused create_app built nothing, so a turn that only
         // refused is remembered as the refusal, never as the title alone.
@@ -4219,7 +4223,7 @@ const Chat = {
         // A hosted refusal (out of credits, paused) gets the way out painted
         // under it: Top up / Subscribe, or your own key or agent.
         if (e.hostedCode) { reply.hosted = e.hostedCode; Hosted.paywall(e.hostedCode); }
-        if (Gen.provider === 'hosted') Hosted.turnDone(e.hostedCode || 'failed');
+        if (Gen.provider === 'hosted') Hosted.turnDone(e.hostedCode || 'failed', vmAtStart);
         giveBack();
         this.failed(failure, remember);
         finish();
