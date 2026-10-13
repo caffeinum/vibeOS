@@ -59,6 +59,7 @@ export function ChatApp(body, win) {
     <div id="composer" class="chat-composer">
       <div id="connectCard" class="connect-card col" hidden></div>
       <div id="zeroLine" class="chat-zero row" hidden></div>
+      <div id="privateNote" class="chat-first-note" hidden></div>
       <div id="chips" class="chat-chips row" hidden></div>
       <div class="chat-composer-row row">
         <button class="btn sm chat-attach" id="attach" type="button" title="attach an image" aria-label="attach an image"></button>
@@ -451,7 +452,12 @@ export function ChatApp(body, win) {
      the other options. */
   const card = body.querySelector('#connectCard'), zero = body.querySelector('#zeroLine'), sendBtn = body.querySelector('#send');
   let optionsUndo = null;
+  // Before any turn, not after a charged one (tavc.16.13): with no workspace
+  // (a private window), the agent cannot change the OS here.
+  const privateNote = body.querySelector('#privateNote');
   const paintConnect = () => {
+    privateNote.hidden = Workspace.open;
+    if (!Workspace.open) privateNote.textContent = "Private window: changes to the desktop itself won't stick here. Apps still open.";
     const on = !Connect.connected;
     sendBtn.textContent = on ? Connect.COPY.send : 'Send';
     if (!on) {
