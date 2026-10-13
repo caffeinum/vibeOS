@@ -3530,8 +3530,17 @@ const Agent = {
     return out;
   },
 
+  // No workspace (a private window has no storage that lasts, or a folder
+  // waits to be re-granted): the file tools and the reloads answer one line
+  // the model can act on. "no workspace is open" sent it round trying other
+  // paths, and on hosted AI every step of that was charged for an edit that
+  // could never stick (tavc.16.13: a Vista restyle cost 9-17 credits).
+  NO_WORKSPACE_TOOLS: new Set(['read_file', 'search_file', 'list_files', 'edit_file', 'write_file', 'reload_os', 'reload_ui']),
+  NO_WORKSPACE: "this window has no workspace (a private window keeps nothing), so the OS files can't be read or changed here and nothing would survive a reload. Don't retry with other paths or tools: tell the person to open vibeOS in a normal browser window to change the desktop. Apps made with create_app still open in this window.",
+
   async runTool(call, onStatus, remember) {
     const { toolName, input } = call;
+    if (!Workspace.open && this.NO_WORKSPACE_TOOLS.has(toolName)) return { ok: false, error: this.NO_WORKSPACE };
     if (toolName === 'create_app') {
       const title = input.title || 'app';
       const source = input.source || '';
