@@ -4038,17 +4038,9 @@ const Chat = {
   send(text) {
     text = String(text || '').trim();
     if (!text && !this.pending.length) return null;
-    // Nothing connected: nothing sends (beads-tavc.16.11). The text stays in
-    // the box and is held across the sign-up trip; the card pulses. And a
-    // send at 0 credits — hosted, or your own key once the free credits are
-    // gone and you're not Pro — opens the paywall instead.
-    if (!Connect.connected) { Connect.hold(text); return null; }
-    if ((Gen.provider === 'hosted' && !Hosted.pro && Hosted.credits <= 0) || (Hosted.byoLocked && (Gen.oauth || Gen.key))) {
-      Paywall.open('zero_credits');
-      return null;
-    }
-    Connect.keep('');
-    // Once per page: how long the person sat before asking for anything, and
+    // Once per page, before the guards below: a send held for a connection
+    // or stopped by the paywall is still the person asking (it was a turn
+    // before tavc.16.11). How long the person sat before asking for anything, and
     // whether the machine had arrived by then. The text rides only the first
     // prompt this browser ever sends, only on the hosted page, under the
     // composer's notice, redacted and to Hexclave alone (FirstPrompt in
@@ -4063,6 +4055,16 @@ const Chat = {
         vm: VM.state, model: Gen.available ? 'yes' : 'no' }, extra);
       this.emit('first');
     }
+    // Nothing connected: nothing sends (beads-tavc.16.11). The text stays in
+    // the box and is held across the sign-up trip; the card pulses. And a
+    // send at 0 credits — hosted, or your own key once the free credits are
+    // gone and you're not Pro — opens the paywall instead.
+    if (!Connect.connected) { Connect.hold(text); return null; }
+    if ((Gen.provider === 'hosted' && !Hosted.pro && Hosted.credits <= 0) || (Hosted.byoLocked && (Gen.oauth || Gen.key))) {
+      Paywall.open('zero_credits');
+      return null;
+    }
+    Connect.keep('');
     // Pictures put back after a failure can stack past the cap; refuse here
     // rather than let the body grow past what the server will take — at queue
     // time too, so a steer carrying too many is refused as it is typed.
