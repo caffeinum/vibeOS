@@ -582,7 +582,12 @@
     flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px 14px;
     display: flex; flex-direction: column; gap: 10px;
   }
-  .chat-composer { flex: 0 0 auto; border-top: 1px solid var(--barline); background: var(--panel); }
+  /* The composer may shrink, and only the connect card gives: with its
+     options and the Claude Code steps open it is ~600 px, taller than a
+     500 px chat window, and it ran off the window (up in headless Chromium,
+     down in Chrome). It scrolls inside the window; the input row never moves. */
+  .chat-composer { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--barline); background: var(--panel); }
+  .chat-composer > * { flex: 0 0 auto; }
   .chat-chips { flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
   .chat-first-note { padding: 0 12px 8px; margin-top: -4px; font-size: 11px; color: var(--dimmer); }
   .chat-composer-row { gap: 8px; padding: 10px 12px; align-items: center; }
@@ -773,6 +778,7 @@
   .boot-now { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
   /* The login flow (ui/chat.js connect card, ui/dock.js credits banner and
      Pro pill; beads-tavc.16.11). */
+  .chat-composer > .connect-card { flex: 0 1 auto; min-height: 0; overflow: auto; }
   .connect-card { gap: 8px; padding: 12px; margin: 0 0 8px; border: var(--border-w) solid var(--line2); border-radius: var(--radius-ctl); background: var(--panel); }
   .connect-card .connect-title { font-size: 13px; }
   .connect-card.pulse { animation: connect-pulse .6s ease-out 2; }
