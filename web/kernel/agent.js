@@ -3642,22 +3642,38 @@ const Agent = {
     }
     if (toolName === 'vm_exec') {
       onStatus?.('running in vm…');
-      if (VM.state !== 'ready') {
-        // The model's other move when the machine is booting is to call
-        // vm_exec in a loop until it answers. Say how long it has been and
-        // that a shell app opens itself when the machine is up.
-        const since = VM.bootStarted ? ` (${Math.round((Date.now() - VM.bootStarted) / 1000)}s)` : '';
-        return { ok: false, error: `the machine is ${VM.state}${since}. Do not poll it: build the app with // @requires shell and it opens itself when ready.` };
-      }
       const s = input.timeout_s;
       if (s !== undefined && !(Number.isInteger(s) && s >= 1 && s <= 600)) {
         return { ok: false, error: `timeout_s must be an integer from 1 to 600, got ${JSON.stringify(s)}` };
       }
+      // A cold desktop's machine is still booting for the first 60-90 s, and an
+      // agent's first command usually lands in that window. Wait for it to come
+      // up instead of refusing — bounded by the image's boot budget and, when
+      // the caller gave one, timeout_s — and say we waited. A machine that
+      // cannot run (failed/unavailable) still errors at once, naming why.
+      let waitedMs = 0;
+      if (VM.state !== 'ready') {
+        if (VM.state === 'failed' || VM.state === 'unavailable') {
+          return { ok: false, error: `the machine is ${VM.state}${VM.detail ? ' — ' + VM.detail : ''}; it can't run commands. Open the Machine pane to retry.` };
+        }
+        if (VM.state === 'off') VM.ensureBoot();
+        const waitMs = Math.min(VM.bootBudgetMs(), s ? s * 1000 : VM.bootBudgetMs());
+        onStatus?.('waiting for the machine to boot…');
+        const t0 = Date.now();
+        await VM.waitForReady(waitMs);
+        waitedMs = Date.now() - t0;
+        if (VM.state !== 'ready') {
+          const since = VM.bootStarted ? `; ${Math.round((Date.now() - VM.bootStarted) / 1000)}s since boot began` : '';
+          return { ok: false, error: `the machine is still ${VM.state} after waiting ${Math.round(waitedMs / 1000)}s${since}. ${s ? 'Pass a larger timeout_s and retry' : 'Try again shortly'}, or open the Machine pane.` };
+        }
+      }
       // A timeout is the model's to act on, not the loop's to die of: it comes
-      // back as a tool error that names the fix.
+      // back as a tool error that names the fix. The command gets the budget
+      // left after any boot wait, so the total stays within timeout_s.
       try {
-        const output = await VM.exec(input.command, s && s * 1000);
-        return { ok: true, output: output || '' };
+        const execMs = s ? Math.max(1000, s * 1000 - waitedMs) : undefined;
+        const output = await VM.exec(input.command, execMs);
+        return { ok: true, output: output || '', ...(waitedMs >= 1500 ? { note: `waited ${Math.round(waitedMs / 1000)}s for the machine to boot` } : {}) };
       } catch (e) {
         return { ok: false, error: e.message + (/timed out/.test(e.message)
           ? '. For an install or a build pass timeout_s (up to 600), or background it: cmd > /mnt/job.log 2>&1 & then tail the log.' : '') };
