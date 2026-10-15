@@ -26,7 +26,9 @@ function historyWindow(history) {
    sign-up and comes back to /app; it leaves `vibeos-account-new` in
    sessionStorage when the account is younger than the trip, read once here. */
 const Account = {
-  SIGNUP: '/auth/sign-up?next=/app',
+  // Our own email-code step (beads-tavc.16.17); the hosted page with Google
+  // and GitHub is its Other options.
+  SIGNUP: '/auth/email?next=/app',
   NEW_FLAG: 'vibeos-account-new',
   FROM_FLAG: 'vibeos-signup-from',
   // Every "Try it free" goes through here: the click is tracked with where it
@@ -242,9 +244,9 @@ const Connect = {
   COPY: {
     title: 'Connect a model to start',
     primary: 'Get 500 free credits',
-    // Google and GitHub run on Hexclave's shared keys until our own OAuth apps
-    // exist, so their screens name the provider, not vibeOS (tavc.16.14).
-    under: "You'll sign in with email, Google or GitHub. Google and GitHub show our auth provider's name for now. No card needed.",
+    // The button goes to our own email-code step (tavc.16.17), so no provider
+    // screen to warn about any more; Google and GitHub are its Other options.
+    under: "Sign up with your email: we send you a code. No card needed.",
     other: 'Other options',
     fine: "Signed in, your own key or agent needs Pro after the free credits. Signed out, it's always free.",
     leaving: 'Taking you to sign up…',
