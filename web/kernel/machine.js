@@ -964,6 +964,28 @@ const VM = {
     this.emit(changed);
   },
 
+  // How long the current image may take to boot — the ceiling for waiting on
+  // 'ready' (vm_exec during boot). Falls back to a conservative 120 s.
+  bootBudgetMs() { return (IMAGES[this.image] && IMAGES[this.image].bootTimeoutMs) || 120000; },
+
+  // Resolve once the machine reaches a terminal state (ready, or the no-point-
+  // waiting ones failed/unavailable) or `ms` elapses. Returns the state reached,
+  // or null on timeout. Lets a caller wait out a boot instead of refusing.
+  waitForReady(ms) {
+    if (this.state === 'ready' || this.state === 'failed' || this.state === 'unavailable') return Promise.resolve(this.state);
+    return new Promise(resolve => {
+      let timer = null;
+      const off = this.on(state => {
+        if (state === 'ready' || state === 'failed' || state === 'unavailable') { if (timer) clearTimeout(timer); off(); resolve(state); }
+      });
+      timer = setTimeout(() => { off(); resolve(null); }, ms);
+    });
+  },
+
+  // Start the machine if it is idle. A desktop boots on load (boot.js), so this
+  // is a safety net for an odd path (e.g. a direct vm_exec before/without that).
+  ensureBoot() { if (this.state === 'off') this.boot().catch(() => {}); },
+
   async available() {
     try { return (await fetch(V86_ASSETS + 'libv86.js', { method: 'HEAD' })).ok; }
     catch { return false; }
