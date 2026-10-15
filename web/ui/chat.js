@@ -131,6 +131,10 @@ export function ChatApp(body, win) {
   // The intro follows the bridge: the onboarding modal closes itself when an
   // agent connects, and the chat behind it must not keep saying "no model".
   Windows.onDispose(win, RemoteBridge.on(() => { if (introEl) paintIntro(); agentMode(); }));
+  // And the model: back from sign-up, hosted AI arrives after the first paint,
+  // and the intro kept saying "Connect a model below to start" (vibeos-hexclave's
+  // dev run, tavc.16.17).
+  Windows.onDispose(win, Gen.on(() => { if (introEl) paintIntro(); }));
 
   // With an agent connected and no model here, this window is the activity
   // view: every tool call lands as a card, and the composer feeds the mailbox.
