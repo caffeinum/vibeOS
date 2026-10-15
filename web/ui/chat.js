@@ -536,6 +536,11 @@ export function ChatApp(body, win) {
   Windows.onDispose(win, Connect.on(type => {
     if (type === 'expand') expandOptions();
     if (type === 'open') { paintConnect(); pulse(); }
+    if (type === 'hop-blocked') {
+      const btn = card.querySelector('#connectFree'), leaving = card.querySelector('.connect-leaving');
+      if (btn) btn.disabled = false;
+      if (leaving) leaving.hidden = true;
+    }
     if (type === 'welcome' || type === 'welcome-back') {
       if (!input.value && Connect.held()) input.value = Connect.held();
       paintConnect();

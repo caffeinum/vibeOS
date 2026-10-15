@@ -33,10 +33,28 @@ const Account = {
   FROM_FLAG: 'vibeos-signup-from',
   // Every "Try it free" goes through here: the click is tracked with where it
   // was, and the tab remembers it for account_created when it comes back.
+  // The hop is ours, so the leave-page guard (boot.js) must not ask about it:
+  // with a chat restored from system/chat.json, the browser's "Leave site?"
+  // prompt stood between the click and /auth/email, and Cancel left the card
+  // on "Taking you to sign up…" with try_free_click counted and no sign-up
+  // page (device 564146, 10-15). The log is on disk, so leaving loses nothing
+  // — unless a turn is running, which the guard still protects.
+  // Still on this page HOP_BLOCKED_MS later: something else stopped the
+  // navigation; say so and let the card be clicked again.
+  HOP_BLOCKED_MS: 10000,
   trySignUp(from) {
     track('try_free_click', { from });
     try { sessionStorage.setItem(this.FROM_FLAG, 'try_free'); } catch {}
+    if (!Chat.running) window.__vibeosIntentionalUnload = true;
+    let left = false;
+    addEventListener('pagehide', () => { left = true; }, { once: true });
     location.href = this.SIGNUP;
+    setTimeout(() => {
+      if (left) return;
+      window.__vibeosIntentionalUnload = false;
+      track('sign_up_hop_blocked', { from });
+      Connect.emit('hop-blocked');
+    }, this.HOP_BLOCKED_MS);
   },
   // 'new' | 'existing' | '': how this page came back from the sign-up trip,
   // for the welcome (Welcome below, once /api/hosted says who is signed in).
