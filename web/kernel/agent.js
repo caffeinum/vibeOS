@@ -28,7 +28,7 @@ function historyWindow(history) {
 const Account = {
   // Our own email-code step (beads-tavc.16.17); the hosted page with Google
   // and GitHub is its Other options.
-  SIGNUP: '/auth/email?next=/app',
+  SIGNUP: '/auth/sign-up?next=/app',   // rolled back from /auth/email (tavc.16.17)
   NEW_FLAG: 'vibeos-account-new',
   FROM_FLAG: 'vibeos-signup-from',
   // Every "Try it free" goes through here: the click is tracked with where it
