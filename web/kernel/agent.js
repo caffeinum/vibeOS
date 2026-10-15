@@ -181,13 +181,33 @@ const Hosted = {
   },
   // One step, or one api.ai ask. A refusal (out of credits, paused, another
   // turn running, signed out) throws with its `hostedCode`, in the server's words.
+  // What the chat says when a step fails without the server's own words
+  // (beads-tavc.16.18). The route's own timeout is a 504 with JSON
+  // {code: 'timeout', error} and its error is shown as it is; the platform's
+  // (anything past 300 s) is a 504 that is not JSON, often with
+  // x-vercel-error: FUNCTION_INVOCATION_TIMEOUT; only a fetch that rejects,
+  // with no response at all, is the network.
+  SERVER_TIMEOUT: 'The server took too long on this step, so it was stopped. Send again, or ask for a smaller piece at a time.',
+  NETWORK: "Couldn't reach vibeOS: the connection dropped before an answer came back. Check your network and send again.",
   async step(body, { keepalive = false } = {}) {
-    const r = await fetch(this.GENERATE, {
-      method: 'POST', credentials: 'same-origin', keepalive,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const j = await jsonOf(r, 'hosted AI');
+    let r;
+    try {
+      r = await fetch(this.GENERATE, {
+        method: 'POST', credentials: 'same-origin', keepalive,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      throw Object.assign(new Error(this.NETWORK), { hostedCode: 'network', cause: e });
+    }
+    const timedOut = r.status === 504 || /TIMEOUT/.test(r.headers.get('x-vercel-error') || '');
+    let j;
+    try { j = await jsonOf(r, 'hosted AI'); }
+    catch (e) {
+      if (!timedOut) throw e;
+      track('hosted_refused', { code: 'server-timeout' });
+      throw Object.assign(new Error(this.SERVER_TIMEOUT), { hostedCode: 'server-timeout', cause: e });
+    }
     // A step answers with what is left to spend after it (the charge itself
     // lands on the server a moment after the reply); the full balance by
     // source is /api/hosted's, read at boot and by Settings.
@@ -3933,8 +3953,12 @@ const CONNECT_PROMPTS = [
 function trackFailure(failure) {
   track('gen_failed', { error: String(failure).slice(0, 80) });
   const msg = String(failure).toLowerCase();
+  // A server that ran out of time is not the network (tavc.16.18): the
+  // route's 504 says "took longer than", the platform's names
+  // FUNCTION_INVOCATION_TIMEOUT, and Hosted.step words both as "took too long".
   const bucket = /api key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
-    : /timed out|timeout|failed to fetch|network|econn/.test(msg) ? 'network'
+    : /took longer than|took too long|function_invocation_timeout|\b504\b/.test(msg) ? 'timeout'
+    : /timed out|timeout|failed to fetch|network|econn|couldn't reach/.test(msg) ? 'network'
     : /not supported|model|400|bad request/.test(msg) ? 'model'
     : /429|rate limit|quota|insufficient/.test(msg) ? 'quota'
     : 'other';
