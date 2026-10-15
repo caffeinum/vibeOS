@@ -84,6 +84,7 @@ const HexEvents = {
 function track(name, data, hexOnly) {
   try {
     if (BootArm.EVENTS.has(name) && BootArm.arm) data = { ...data, arm: BootArm.arm };
+    if (DeviceStamp.EVENTS.has(name) && DeviceStamp.id) data = { ...data, ds: DeviceStamp.id };
     const evt = { name };
     if (data) evt.data = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)]));
     window.va && window.va('event', evt);
@@ -100,6 +101,31 @@ function track(name, data, hexOnly) {
 // stored coin is the same split. Only where the events go (the hosted page):
 // the mirror and the image have no arm and stay as they were, and so does a
 // browser whose storage throws, rather than a new draw on every visit.
+// One random id per browser on the sign-up events (vibeos-yc, 10-15,
+// beads-tavc.16.17): the try-free click is anonymous and the account is a new
+// user id, so `ds` is the only thing that joins them per device. Random and
+// stored, never derived from the person or the browser; /auth/email reads and
+// writes the same key (lib/device-stamp.ts). Storage that throws: no stamp,
+// never a shared placeholder.
+const DeviceStamp = {
+  KEY: 'vibeos-ds',
+  EVENTS: new Set(['try_free_click', 'sign_up_email_sent', 'sign_up_code_ok', 'sign_up_returned', 'account_created']),
+  _id: undefined,
+  get id() {
+    if (this._id !== undefined) return this._id;
+    this._id = null;
+    try {
+      let id = localStorage.getItem(this.KEY);
+      if (!/^[0-9a-f]{16}$/.test(id || '')) {
+        id = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
+        localStorage.setItem(this.KEY, id);
+      }
+      this._id = id;
+    } catch {}
+    return this._id;
+  },
+};
+
 const BootArm = {
   KEY: 'vibeos-boot-arm',
   EVENTS: new Set(['app_open', 'vm_ready', 'vm_left_booting', 'boot_progress_shown', 'boot_start_now_click']),
