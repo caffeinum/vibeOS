@@ -109,7 +109,7 @@ function track(name, data, hexOnly) {
 // never a shared placeholder.
 const DeviceStamp = {
   KEY: 'vibeos-ds',
-  EVENTS: new Set(['try_free_click', 'sign_up_email_sent', 'sign_up_code_ok', 'sign_up_returned', 'account_created']),
+  EVENTS: new Set(['try_free_click', 'sign_up_email_sent', 'sign_up_code_ok', 'sign_up_returned', 'account_created', 'credits_granted']),
   _id: undefined,
   get id() {
     if (this._id !== undefined) return this._id;
