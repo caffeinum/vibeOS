@@ -228,7 +228,9 @@ export function ChatApp(body, win) {
     // Out of credits or no answer at all: a model reset cannot fix either.
     const bucket = Chat.failureBucket(t.failure);
     const credits = last && bucket === 'credits';
-    const to = bucket === 'credits' || bucket === 'network' ? '' : Chat.defaultModel();
+    // A pasted key the provider refused: a new key fixes it, a reset cannot.
+    const badKey = last && bucket === 'auth' && !!Gen.key;
+    const to = bucket === 'credits' || bucket === 'network' || badKey ? '' : Chat.defaultModel();
     // Hosted AI out of credits or paused: the ways out, on the last failure
     // only — top up or subscribe on /account, or bring your own model.
     // Out of credits, or bring-your-own locked at 0 (needs-pro): the paywall
@@ -238,6 +240,7 @@ export function ChatApp(body, win) {
     const ownKey = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused');
     const b = bubble('vibeos', '<span class="no" id="failure"></span>'
       + (credits ? '<div class="tiny" id="failureWhy"></div><div class="row chat-failure-actions"><button class="btn sm" id="connectOther">Connect another way</button></div>' : '')
+      + (badKey ? '<div class="tiny" id="failureWhy"></div><div class="row chat-failure-actions"><button class="btn sm" id="newKey">Use a different key</button></div>' : '')
       + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : '')
       + (billing || ownKey ? '<div class="row chat-failure-actions">'
         + (billing ? '<button class="btn sm p" id="hostedPro">Subscribe</button>' : '')
@@ -246,6 +249,10 @@ export function ChatApp(body, win) {
     if (credits) {
       b.querySelector('#failureWhy').textContent = Chat.CREDITS_LINE;
       b.querySelector('#connectOther').onclick = () => openSettings('model');
+    }
+    if (badKey) {
+      b.querySelector('#failureWhy').textContent = Chat.BAD_KEY_LINE;
+      b.querySelector('#newKey').onclick = () => Chat.useDifferentKey();
     }
     const pro = b.querySelector('#hostedPro');
     if (pro) pro.onclick = () => Paywall.open('zero_credits');

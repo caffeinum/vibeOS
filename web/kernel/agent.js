@@ -4011,7 +4011,7 @@ function failureBucket(failure) {
   // route's 504 says "took longer than", the platform's names
   // FUNCTION_INVOCATION_TIMEOUT, and Hosted.step words both as "took too long".
   return NO_CREDITS.test(msg) ? 'credits'
-    : /api key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
+    : /api key|x-api-key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
     : /took longer than|took too long|function_invocation_timeout|\b504\b/.test(msg) ? 'timeout'
     : /timed out|timeout|failed to fetch|network|econn|couldn't reach/.test(msg) ? 'network'
     : /not supported|model|400|bad request/.test(msg) ? 'model'
@@ -4493,6 +4493,15 @@ const Chat = {
   // provider refused; an account out of credits and a request that got no
   // answer are not that, and offering it sent 406dba1e round a reset twice.
   failureBucket,
+  BAD_KEY_LINE: 'This key was refused. Paste a new one, or connect another way.',
+  // A refused key is no key: forget it, so the connect card (paste a key,
+  // sign in, an agent) is what the chat shows next.
+  useDifferentKey() {
+    track('bad_key_replace_click', { provider: Gen.provider });
+    Gen.saveKey('');
+    Connect.open('bad_key');
+    Connect.expand();
+  },
   CREDITS_LINE: 'The account behind this key is out of credits. Add credits on your provider\'s site, or connect another way.',
   // reload_os (and Take the update) replace the page while the loop's next
   // model request is in flight, and the reload aborts it: "Failed to fetch"
