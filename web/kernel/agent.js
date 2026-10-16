@@ -690,9 +690,9 @@ const Gen = {
             messages: [{ role: 'system', content: withSkills(forImage(PASTE_KEY_SYSTEM_PROMPT)) },
                        ...historyWindow(history), user] };
 
-      const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+      const r = await providerFetch(this.provider, url, { method: 'POST', headers, body: JSON.stringify(payload) });
       const j = await jsonOf(r, this.provider);
-      if (!r.ok) throw new Error(`${this.provider} ${r.status}: ${(j.error && j.error.message) || 'request failed'}`);
+      if (!r.ok) throw providerError(this.provider, r, j, true);
       let src = this.provider === 'anthropic'
         ? (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim()
         : ((j.choices || [{}])[0].message || {}).content.trim();
@@ -2136,6 +2136,29 @@ const CUT_OFF = "the model's reply was cut off at the token limit (16000) before
    body over 4.5 MB with a 413 as text/plain before the route ever runs, so
    `await r.json()` on it surfaced "Unexpected token 'R'" — a parse error for a
    size limit. The status and the first line of the body name the real cause. */
+// A pasted key talks to the provider from the page, so a request that got no
+// answer at all reaches us as the browser's bare TypeError: "Failed to fetch"
+// (Chrome), "Load failed" (Safari), "NetworkError when attempting to fetch
+// resource." (Firefox). None of those says what happened or what to do
+// (tavc.26: 2 in a row for one device, then nothing). The words say it, and
+// the error carries provider and status (0: no answer) for gen_failed.
+const PROVIDER_HOSTS = { openai: 'api.openai.com', anthropic: 'api.anthropic.com' };
+async function providerFetch(provider, url, init) {
+  const host = PROVIDER_HOSTS[provider];
+  if (!host) throw new Error('providerFetch: no host for provider ' + provider);
+  try { return await fetch(url, init); }
+  catch (e) {
+    if (e?.name === 'AbortError') throw e;
+    throw Object.assign(new Error(`Couldn't reach ${host}: the browser got no answer at all. The network dropped, or an extension, firewall or VPN blocked the request. Check your connection and send again.`), { provider, status: 0, cause: e });
+  }
+}
+// The provider's own words, with its status and error code on the error.
+function providerError(provider, r, j, prefixed) {
+  const words = j.error?.message || (prefixed ? 'request failed' : provider + ' returned ' + r.status);
+  return Object.assign(new Error(prefixed ? `${provider} ${r.status}: ${words}` : words),
+    { provider, status: r.status, code: String(j.error?.code || j.error?.type || '') });
+}
+
 async function jsonOf(r, who) {
   const text = await r.text();
   try { return JSON.parse(text); }
@@ -3502,7 +3525,7 @@ const Agent = {
   // reasoning items come back encrypted and go back verbatim with the tool
   // outputs so a multi-step turn keeps its thread.
   async stepOpenAI(system, msgs) {
-    const r = await fetch('https://api.openai.com/v1/responses', {
+    const r = await providerFetch('openai', 'https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + Gen.key },
       body: JSON.stringify({
@@ -3514,7 +3537,7 @@ const Agent = {
       }),
     });
     const j = await jsonOf(r, 'openai');
-    if (!r.ok) throw new Error(j.error?.message || ('openai returned ' + r.status));
+    if (!r.ok) throw providerError('openai', r, j, false);
     // A reply cut at the token limit used to arrive here as a tool call whose
     // arguments were half a JSON object; the parse failed silently to {} and
     // create_app then wrote an empty module that failed at import with
@@ -3535,7 +3558,7 @@ const Agent = {
   },
 
   async stepAnthropic(system, msgs) {
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
+    const r = await providerFetch('anthropic', 'https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': Gen.key,
                  'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
@@ -3545,7 +3568,7 @@ const Agent = {
       }),
     });
     const j = await jsonOf(r, 'anthropic');
-    if (!r.ok) throw new Error(j.error?.message || ('anthropic returned ' + r.status));
+    if (!r.ok) throw providerError('anthropic', r, j, false);
     if (j.stop_reason === 'max_tokens') throw new Error(CUT_OFF);
     const blocks = j.content || [];
     return {
@@ -3966,19 +3989,34 @@ const CONNECT_PROMPTS = [
 // the error on gen_failed is unreadable from outside the dashboard. A coarse
 // bucket as its own event name is countable: 9 failures in a day could be
 // one expired key or a broken deploy, and those need different fixes.
-function trackFailure(failure) {
-  track('gen_failed', { error: String(failure).slice(0, 80) });
+// `err` is the thrown error when there is one: a provider's carries provider,
+// status (0 for no answer) and code, so gen_failed says which provider
+// answered what (tavc.26: three "no credits" read as 'other' with no status).
+function trackFailure(failure, err) {
+  const props = { error: String(failure).slice(0, 80) };
+  const provider = err?.provider || Gen.provider;
+  if (provider) props.provider = provider;
+  if (Number.isInteger(err?.status)) props.status = err.status;
+  track('gen_failed', props);
+  track('gen_failed_' + failureBucket(failure));
+}
+// An account out of credits is not a model problem, and Reset model cannot
+// fix it: OpenAI's prepaid "You have no credits remaining…" (and the older
+// insufficient_quota "exceeded your current quota"), Anthropic's 400 "Your
+// credit balance is too low…", which the 400 rule below read as 'model'.
+const NO_CREDITS = /no credits remaining|credit balance is too low|insufficient_quota|exceeded your current quota/;
+function failureBucket(failure) {
   const msg = String(failure).toLowerCase();
   // A server that ran out of time is not the network (tavc.16.18): the
   // route's 504 says "took longer than", the platform's names
   // FUNCTION_INVOCATION_TIMEOUT, and Hosted.step words both as "took too long".
-  const bucket = /api key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
+  return NO_CREDITS.test(msg) ? 'credits'
+    : /api key|unauthorized|401|invalid_api_key|authentication/.test(msg) ? 'auth'
     : /took longer than|took too long|function_invocation_timeout|\b504\b/.test(msg) ? 'timeout'
     : /timed out|timeout|failed to fetch|network|econn|couldn't reach/.test(msg) ? 'network'
     : /not supported|model|400|bad request/.test(msg) ? 'model'
     : /429|rate limit|quota|insufficient/.test(msg) ? 'quota'
     : 'other';
-  track('gen_failed_' + bucket);
 }
 
 const Chat = {
@@ -4409,7 +4447,7 @@ const Chat = {
         if (e.hostedCode) { reply.hosted = e.hostedCode; Hosted.paywall(e.hostedCode); }
         if (Gen.provider === 'hosted') Hosted.turnDone(e.hostedCode || 'failed', vmAtStart);
         giveBack();
-        this.failed(failure, remember);
+        this.failed(failure, remember, e);
         finish();
       }
       return;
@@ -4433,7 +4471,7 @@ const Chat = {
       if (this.leaving()) { finish(); return; }
       failure = e.message;
       giveBack();
-      this.failed(failure, remember);
+      this.failed(failure, remember, e);
       finish();
       return;
     }
@@ -4447,10 +4485,15 @@ const Chat = {
   // model id or a dead key looked like a desktop that half-worked. Now the
   // turn is the provider's words as an error line, history remembers the
   // turn failed, nothing is created, and the chat offers the reset below.
-  failed(failure, remember) {
+  failed(failure, remember, err) {
     remember(false, 'the request failed: ' + failure);
-    trackFailure(failure);
+    trackFailure(failure, err);
   },
+  // What the chat offers under a failed turn. Reset model is for a model the
+  // provider refused; an account out of credits and a request that got no
+  // answer are not that, and offering it sent 406dba1e round a reset twice.
+  failureBucket,
+  CREDITS_LINE: 'The account behind this key is out of credits. Add credits on your provider\'s site, or connect another way.',
   // reload_os (and Take the update) replace the page while the loop's next
   // model request is in flight, and the reload aborts it: "Failed to fetch"
   // landed in this catch 0.5-0.8 s later and was tracked as gen_failed_network
