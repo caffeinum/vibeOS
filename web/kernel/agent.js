@@ -2989,8 +2989,10 @@ const RemoteBridge = {
     // The relay's {paired} lands before the package's {want, agent}, so the
     // event waits for the name (LINK_ANNOUNCE_MS at most, or the pair ending)
     // and carries which client paired: the HN read could not tell (2.17.1.4).
+    // Only a name this call carried ends the wait early: agentName may be the
+    // stored name of the LAST client (resume reads it back), not this one.
     if (this.state !== 'connected') { this.pairedPending = this.pairedHow || 'unknown'; AgentActivity.connected('mcp'); clearTimeout(this.pairedTimer); this.pairedTimer = setTimeout(() => this.flushPaired(), LINK_ANNOUNCE_MS); }
-    if (this.agentName) this.flushPaired();
+    if (name) this.flushPaired();
     this.set('connected', label);
     // A link pairing lands with no pane open: the person accepted a dialog,
     // it closed, and nothing on screen said the handover happened (the pane
