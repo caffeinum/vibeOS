@@ -2510,6 +2510,7 @@ const RemoteBridge = {
   set(state, detail = '') {
     if (state === this.state && detail === this.detail) return;
     const left = this.state === 'connected' && state !== 'connected';
+    if (left) this.flushPaired();
     this.state = state; this.detail = detail;
     // Leaving 'connected' — the agent gone (4002), displaced (4001), revoked,
     // a gap — ends what the agent owed: an ask in flight cannot be answered
@@ -2966,13 +2967,32 @@ const RemoteBridge = {
     this.asks.clear();
   },
 
+  // A client name as analytics carries it: a product name (claude-code,
+  // cursor), lowercased, [a-z0-9._-] only, 40 chars; '' when there is none.
+  clientName(name) { return String(name || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40); },
+  pairedPending: null,
+  pairedTimer: null,
+  flushPaired() {
+    clearTimeout(this.pairedTimer); this.pairedTimer = null;
+    if (!this.pairedPending) return;
+    const agent = this.clientName(this.agentName);
+    track('mcp_paired', agent ? { how: this.pairedPending, agent } : { how: this.pairedPending });
+    this.pairedPending = null;
+  },
+
   connected(name = '') {
     if (name) { this.agentName = name; try { localStorage.setItem(MCP_AGENT_KEY, name); } catch {} }
     const label = this.agentName || 'an agent';
     // WHICH path produced this pairing. Without it the link experiment reads
     // as a number that cannot be attributed: a rise in mcp_paired could be new
     // people the link reached, or the same people who would have used the pane.
-    if (this.state !== 'connected') { track('mcp_paired', { how: this.pairedHow || 'unknown' }); AgentActivity.connected('mcp'); }
+    // The relay's {paired} lands before the package's {want, agent}, so the
+    // event waits for the name (LINK_ANNOUNCE_MS at most, or the pair ending)
+    // and carries which client paired: the HN read could not tell (2.17.1.4).
+    // Only a name this call carried ends the wait early: agentName may be the
+    // stored name of the LAST client (resume reads it back), not this one.
+    if (this.state !== 'connected') { this.pairedPending = this.pairedHow || 'unknown'; AgentActivity.connected('mcp'); clearTimeout(this.pairedTimer); this.pairedTimer = setTimeout(() => this.flushPaired(), LINK_ANNOUNCE_MS); }
+    if (name) this.flushPaired();
     this.set('connected', label);
     // A link pairing lands with no pane open: the person accepted a dialog,
     // it closed, and nothing on screen said the handover happened (the pane
@@ -3041,6 +3061,7 @@ const RemoteBridge = {
 
   revoke() {
     if (!remoteToken) return;
+    this.flushPaired();
     track('mcp_revoked');
     const token = remoteToken;
     const s = this.socket;
@@ -3608,7 +3629,8 @@ const Agent = {
     const out = await this.runTool(call, onStatus, remember);
     AgentActivity.touch(via);
     if (this.DOING_TOOLS.has(call.toolName) && !(out && out.ok === false)) {
-      track('agent_did', { tool: call.toolName, via });
+      const agent = via === 'mcp' ? RemoteBridge.clientName(RemoteBridge.agentName) : '';
+      track('agent_did', agent ? { tool: call.toolName, via, agent } : { tool: call.toolName, via });
       AgentActivity.did(via);
     }
     return out;
