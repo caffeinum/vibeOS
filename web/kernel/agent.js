@@ -31,6 +31,13 @@ const Account = {
   SIGNUP: '/auth/email?next=/app',
   NEW_FLAG: 'vibeos-account-new',
   FROM_FLAG: 'vibeos-signup-from',
+  // Which way in the sign-up pages took (google | code | link | hosted), left
+  // by /auth/email and /auth/sign-up; rides sign_up_returned,
+  // account_created and credits_granted so the read splits by door.
+  VIA_FLAG: 'vibeos-signup-via',
+  VIAS: ['google', 'code', 'link', 'hosted'],
+  via: '',
+  withVia(props) { return this.via ? { ...props, via: this.via } : props; },
   // Every "Try it free" goes through here: the click is tracked with where it
   // was, and the tab remembers it for account_created when it comes back.
   // The hop is ours, so the leave-page guard (boot.js) must not ask about it:
@@ -61,6 +68,10 @@ const Account = {
   returned: '',
   reported: false,
   noteNewAccount() {
+    try {
+      const v = sessionStorage.getItem(this.VIA_FLAG);
+      if (v !== null) { sessionStorage.removeItem(this.VIA_FLAG); if (this.VIAS.includes(v)) this.via = v; else console.error('unknown sign-up via: ' + v); }
+    } catch {}
     let fresh = false;
     try { fresh = sessionStorage.getItem(this.NEW_FLAG) === '1'; if (fresh) sessionStorage.removeItem(this.NEW_FLAG); } catch {}
     if (!fresh) {
@@ -77,8 +88,8 @@ const Account = {
     let from = 'other';
     try { if (sessionStorage.getItem(this.FROM_FLAG) === 'try_free') from = 'try_free'; sessionStorage.removeItem(this.FROM_FLAG); } catch {}
     this.returned = 'new';
-    if (window.va || document.readyState === 'complete') track('account_created', { from });
-    else addEventListener('load', () => track('account_created', { from }), { once: true });
+    if (window.va || document.readyState === 'complete') track('account_created', this.withVia({ from }));
+    else addEventListener('load', () => track('account_created', this.withVia({ from })), { once: true });
   },
 };
 Account.noteNewAccount();
@@ -166,13 +177,13 @@ const Hosted = {
     Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: '', byoLocked: !!j.byoLocked, firstTurn: !!j.firstTurn, purchases: !!j.purchases,
       models: Array.isArray(j.models) ? j.models : [], defaultProvider: typeof j.defaultProvider === 'string' ? j.defaultProvider : 'openai' });
     // This read landed the sign-up grant: once per account (the server grants once).
-    if (j.granted === true) track('credits_granted', { plan: 'grant' });
+    if (j.granted === true) track('credits_granted', Account.withVia({ plan: 'grant' }));
     // Back from the sign-up trip, with an account or without (Back from the
     // hosted page): the step between try_free_click and account_created that
     // was invisible (tavc.16.14). Once per page.
     if (Account.returned && !Account.reported) {
       Account.reported = true;
-      track('sign_up_returned', { account: !!j.signedIn });
+      track('sign_up_returned', Account.withVia({ account: !!j.signedIn }));
     }
     Welcome.maybe();
     Paywall.resume();
