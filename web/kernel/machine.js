@@ -870,6 +870,17 @@ window.addEventListener('pagehide', () => {
   track('vm_left_booting', { ms: Date.now() - VM.bootStarted, hidden_ms: Hidden.total() - VM.bootHiddenFrom, ...(signup ? { signup: true } : {}) });
 });
 
+// The guest's written 256-byte blocks over a reply from v86's disk buffer,
+// in place (see VM.overlayDiskWrites).
+function overlayWrites(buf, offset, data) {
+  if (!buf.block_cache_is_write.size) return;
+  if (offset % 256 || data.length % 256) throw new Error(`disk read at ${offset}+${data.length} is not in 256-byte blocks`);
+  const first = offset / 256, n = data.length / 256;
+  for (let i = 0; i < n; i++) {
+    if (buf.block_cache_is_write.has(first + i)) data.set(buf.block_cache.get(first + i), i * 256);
+  }
+}
+
 const VM = {
   state: 'off',
   net: '',                 // '' = no relay, 'connecting' (lease or relay dial pending), 'no lease', then the link: connected | reconnecting | disconnected | unwatched
@@ -1138,6 +1149,46 @@ const VM = {
     this.emu.keyboard_set_status(!!this.screen && this.screen === document.activeElement);
   },
 
+  // A file the guest wrote read back as the image's (beads-tavc.28). v86's
+  // part-file disk — alpine and debian, `use_parts` with fixed 128 KB zstd
+  // chunks — keeps the guest's writes in its block cache, but a read whose
+  // chunk is not wholly cached fetches the chunk, copies it into the reply,
+  // and only then lays the written blocks over the fetched copy
+  // (AsyncXHRPartfileBuffer.get: `blocks.set(block)` before
+  // `handle_read(…, block)`). So a read that spans a block the guest wrote
+  // and one never fetched handed the guest the image's bytes for the written
+  // one. Measured on a cold alpine boot: of the 4 written blocks in a chunk
+  // the cache held only in part, 3 came back stale. A restore makes it
+  // common, since set_state keeps the written blocks and drops every read,
+  // and a stale metadata block the guest writes back is permanent: a
+  // directory became a regular file with the image's mtime. Here every read
+  // gets the written blocks laid over it, whatever path v86 took.
+  // `diskOverlay` says whether that hook is on: 'on', 'none' (no part-file
+  // disk on this image) or 'missing' (one is, but not in the shape this
+  // knows: an upgraded v86).
+  diskOverlay: '',
+  overlayDiskWrites(image) {
+    const ide = this.emu && this.emu.v86 && this.emu.v86.cpu && this.emu.v86.cpu.devices.ide;
+    const streamed = !!(image.config().hda || {}).use_parts;
+    let hooked = 0;
+    for (const channel of ide ? [ide.primary, ide.secondary] : []) {
+      for (const dev of channel ? [channel.master, channel.slave] : []) {
+        const buf = dev && dev.buffer;
+        if (!buf || !buf.fixed_chunk_size) continue;
+        if (buf.__overlay) { hooked++; continue; }
+        if (!(buf.block_cache instanceof Map) || !(buf.block_cache_is_write instanceof Set) || typeof buf.get !== 'function') continue;
+        const get = buf.get;
+        buf.get = function (offset, length, done, opts) {
+          return get.call(this, offset, length, data => { overlayWrites(this, offset, data); done(data); }, opts);
+        };
+        buf.__overlay = true;
+        hooked++;
+      }
+    }
+    this.diskOverlay = hooked ? 'on' : streamed ? 'missing' : 'none';
+    if (this.diskOverlay === 'missing') console.warn('vibeOS: the streamed disk has no write overlay; files the guest writes may read back as the image\'s (beads-tavc.28)');
+  },
+
   construct(image, autostart) {
     this.emu = new V86({
       wasm_path: V86_ASSETS + 'v86.wasm',
@@ -1166,6 +1217,9 @@ const VM = {
     // a no-op — measured: emu_enabled true after ready. It is applied on
     // the events that follow that init, and on every focus change.
     for (const ev of ['emulator-ready', 'emulator-loaded']) this.emu.add_listener(ev, () => this.syncKeyboard());
+    // Before the cpu runs (autostart follows this event) and before a
+    // restore_state, so no read ever goes out without it.
+    this.emu.add_listener('emulator-loaded', () => this.overlayDiskWrites(image));
     this.emu.add_listener('serial0-output-byte', b => {
       this.serial += String.fromCharCode(b);
       // Not while an exec is reading: its `from` is an index into this
