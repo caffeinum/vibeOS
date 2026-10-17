@@ -3973,6 +3973,64 @@ const EXAMPLE_PROMPTS = [
   'Create app that is a Clippy in the corner of the screen',
 ];
 
+// Links in what the guest prints and the agent says (aleks, 2026-10-17:
+// `stripe login` in the machine prints a device-flow url that had to be
+// copied by hand). Only http and https, parsed by URL, never a scheme the
+// text chose; the anchor is built through the DOM with the url as href and
+// the text as textContent, target _blank, rel noopener. Nothing opens a tab
+// but the person's click: the guest can print a link, it cannot follow one.
+const Links = {
+  // A url stops at whitespace, quotes, angle brackets and backticks, and
+  // gives back the punctuation a sentence puts after it. A ')' stays when
+  // the url opened one (wikipedia's `Foo_(bar)`).
+  RE: /\bhttps?:\/\/[^\s<>"'`]+/gi,
+  TRAIL: /[.,;:!?'"\]}>]+$/,
+  find(text) {
+    const out = [];
+    for (const m of String(text).matchAll(Links.RE)) {
+      let url = m[0].replace(Links.TRAIL, '');
+      while (url.endsWith(')') && (url.split('(').length < url.split(')').length)) url = url.slice(0, -1).replace(Links.TRAIL, '');
+      const href = Links.href(url);
+      if (href) out.push({ start: m.index, end: m.index + url.length, href });
+    }
+    return out;
+  },
+  // A loopback url names the machine that printed it, so a tab on the host
+  // would open the person's own laptop port instead: those stay text.
+  LOOPBACK: /^(localhost|.*\.localhost|127(\.\d+){3}|0\.0\.0\.0|\[::1?\])$/i,
+  href(url) {
+    let u;
+    try { u = new URL(url); } catch { return null; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return Links.LOOPBACK.test(u.hostname) ? null : u.href;
+  },
+  anchor(href, text) {
+    if (!Links.href(href)) throw new Error('Links.anchor: not an http(s) url: ' + href);
+    const a = document.createElement('a');
+    a.href = href; a.target = '_blank'; a.rel = 'noopener';
+    if (text !== undefined) a.textContent = text;
+    return a;
+  },
+  // The person's click on a link that is not an anchor (the Terminal's: an
+  // anchor cannot be drag-selected in Chromium). Opens nothing that is not
+  // http(s), and never without the click that called it.
+  open(href) {
+    const url = Links.href(href);
+    if (!url) throw new Error('Links.open: not an http(s) url: ' + href);
+    window.open(url, '_blank', 'noopener');
+  },
+  // text → text nodes and anchors, appended to parent.
+  append(parent, text) {
+    let last = 0;
+    for (const l of Links.find(text)) {
+      if (l.start > last) parent.appendChild(document.createTextNode(text.slice(last, l.start)));
+      parent.appendChild(Links.anchor(l.href, text.slice(l.start, l.end)));
+      last = l.end;
+    }
+    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  },
+};
+
 // "Connect your agent" in three steps (the key modal and Settings ›
 // Capabilities both paint them): install the `claude mcp add` line, open the
 // agent in a folder, then one of these first prompts, each copyable. Data in
