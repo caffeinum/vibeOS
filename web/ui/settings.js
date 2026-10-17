@@ -350,6 +350,17 @@ function createVt(el, respond) {
   // A url the shell wrapped at the right edge goes on in the next row: rows
   // whose last cell and the next row's first are both ink are one line for
   // the search, and each row gets the part of the link it holds.
+  // The scan is memoized by the line's text: a repaint rebuilds up to 1000
+  // rows of scrollback that did not change since the last frame.
+  const found = new Map();
+  const findLinks = text => {
+    let hit = found.get(text);
+    if (!hit) {
+      if (found.size >= 4096) found.clear();
+      found.set(text, hit = Links.find(text));
+    }
+    return hit;
+  };
   const rowLinks = rows => {
     const out = rows.map(() => []);
     if (typeof Links === 'undefined') return out;
@@ -363,7 +374,7 @@ function createVt(el, respond) {
         if (!next || !end || end[0] === ' ' || !next[0] || next[0][0] === ' ') break;
         j++;
       }
-      for (const l of Links.find(text)) {
+      for (const l of findLinks(text)) {
         for (let k = 0; k < offsets.length; k++) {
           const from = offsets[k], to = from + rows[i + k].length;
           const start = Math.max(l.start, from), end = Math.min(l.end, to);
@@ -458,7 +469,9 @@ export function TerminalApp(body, win) {
   // A click on a link opens it in a new tab; a drag over one selects it.
   screen.addEventListener('click', e => {
     const link = e.target.closest('.link');
-    if (link && e.button === 0 && !window.getSelection().toString()) Links.open(link.dataset.href);
+    const sel = window.getSelection();
+    const selecting = sel.toString() && screen.contains(sel.anchorNode);
+    if (link && e.button === 0 && !selecting) Links.open(link.dataset.href);
   });
   const onKey = e => {
     if (!tty) return;
