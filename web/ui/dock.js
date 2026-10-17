@@ -358,15 +358,36 @@ function startBootCard() {
    redirect mid-boot throws the boot away (the card's own button does that,
    and says so). Hidden while anything is connected or an account is signed
    in, on ?safe=1 / ?stock=1 / a recovery boot, and for this page after ×.
-   Only where hosted AI is on (Hosted.enabled). */
+   Only where hosted AI is on (Hosted.enabled).
+   While an agent is paired through vibeos-mcp the same place says what to
+   ask it instead (beads-tavc.2.17.3): a cold pair landed on an empty desktop
+   selling the built-in agent, and nothing said what to ask the one just
+   paired. The name is the client's own, so textContent, capped at 80. */
 function startCreditsBanner() {
   if (window.__vibeosCreditsBannerDecided) return () => {};
   window.__vibeosCreditsBannerDecided = true;
   const boot = window.__vibeosBoot || {};
   if (boot.safe || boot.stock || boot.recovering) return () => {};
   if (typeof Hosted === 'undefined' || typeof Connect === 'undefined') return () => {};
-  let el = null, dismissed = false, told = false;
+  let el = null, hint = null, dismissed = false, hintDismissed = false, told = false;
   const want = () => !dismissed && Hosted.enabled && !Hosted.signedIn && !Connect.connected;
+  const paired = () => !hintDismissed && RemoteBridge.state === 'connected';
+  const hintText = () => `${String(RemoteBridge.detail || 'Your agent').slice(0, 80)} is connected. Ask it from its own window, e.g. "open a terminal here and show me uname -a" or "make me a todo app".`;
+  const showHint = () => {
+    hint = document.createElement('div');
+    hint.id = 'creditsBanner';
+    hint.className = 'credits-banner paired-hint';
+    hint.setAttribute('role', 'status');
+    const menubar = document.getElementById('menubar');
+    hint.style.top = ((menubar ? menubar.getBoundingClientRect().bottom : 0) + 8) + 'px';
+    const text = document.createElement('span');
+    text.className = 'credits-banner-text';
+    const x = document.createElement('button');
+    x.type = 'button'; x.className = 'ask-x'; x.setAttribute('aria-label', 'Dismiss'); x.textContent = '×';
+    x.onclick = () => { hintDismissed = true; sync(); };
+    hint.append(text, x);
+    document.body.appendChild(hint);
+  };
   const show = () => {
     el = document.createElement('div');
     el.id = 'creditsBanner';
@@ -385,10 +406,14 @@ function startCreditsBanner() {
   const sync = () => {
     if (want() && !el) show();
     else if (!want() && el) { el.remove(); el = null; }
+    if (paired()) {
+      if (!hint) showHint();
+      hint.querySelector('.credits-banner-text').textContent = hintText();
+    } else if (hint) { hint.remove(); hint = null; }
   };
   const offs = [Gen.on(sync), RemoteBridge.on(sync)];
   sync();
-  return () => { offs.forEach(off => off()); if (el) el.remove(); };
+  return () => { offs.forEach(off => off()); if (el) el.remove(); if (hint) hint.remove(); };
 }
 
 /* [ Unlock MCP ✨Pro ] in the menubar, beside the model pill, for everyone
