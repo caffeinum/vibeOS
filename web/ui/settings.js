@@ -321,19 +321,58 @@ function createVt(el, respond) {
     vt.dirty = true; paint();
   };
   let frame = 0;
-  const paintRow = (cells, cursorX) => {
+  // links: [{start, end, href}] on this row's columns. A link's cells go
+  // inside one `.link` span per row, rebuilt on every repaint. Not an
+  // anchor: Chromium will not start a text selection on one, so a drag over
+  // the url opened it instead of selecting it.
+  const paintRow = (cells, cursorX, links = []) => {
     const div = document.createElement('div');
-    let span = null, last = -1;
+    let span = null, last = -1, parent = div, link = null;
     cells.forEach(([ch, attr], i) => {
+      const at = links.find(l => i >= l.start && i < l.end) || null;
+      if (at !== link) {
+        link = at; span = null;
+        if (at) {
+          parent = div.appendChild(document.createElement('span'));
+          parent.className = 'link'; parent.dataset.href = at.href; parent.title = at.href;
+        } else parent = div;
+      }
       const a = i === cursorX ? attr | 0x2000 : attr;
       if (a !== last || span === null) {
         span = document.createElement('span');
         if (a) span.className = attrClass(a);
-        div.appendChild(span); last = a;
+        parent.appendChild(span); last = a;
       }
       span.textContent += ch;
     });
     return div;
+  };
+  // A url the shell wrapped at the right edge goes on in the next row: rows
+  // whose last cell and the next row's first are both ink are one line for
+  // the search, and each row gets the part of the link it holds.
+  const rowLinks = rows => {
+    const out = rows.map(() => []);
+    if (typeof Links === 'undefined') return out;
+    for (let i = 0; i < rows.length;) {
+      let j = i, text = '';
+      const offsets = [];
+      for (;;) {
+        offsets.push(text.length);
+        text += rows[j].map(c => c[0]).join('');
+        const end = rows[j][rows[j].length - 1], next = rows[j + 1];
+        if (!next || !end || end[0] === ' ' || !next[0] || next[0][0] === ' ') break;
+        j++;
+      }
+      for (const l of Links.find(text)) {
+        for (let k = 0; k < offsets.length; k++) {
+          const from = offsets[k], to = from + rows[i + k].length;
+          const start = Math.max(l.start, from), end = Math.min(l.end, to);
+          if (start < end) out[i + k].push({ start: start - from, end: end - from, href: l.href });
+        }
+      }
+      i = j + 1;
+    }
+    return out;
   };
   const attrClass = a => {
     const c = [];
@@ -351,8 +390,11 @@ function createVt(el, respond) {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
       el.textContent = '';
       const frag = document.createDocumentFragment();
-      if (!vt.alt) for (const r of vt.scrollback) frag.appendChild(paintRow(r, -1));
-      vt.grid.forEach((r, y) => frag.appendChild(paintRow(r, vt.cursorVisible && y === vt.y ? vt.x : -1)));
+      const back = vt.alt ? [] : vt.scrollback, rows = back.concat(vt.grid), links = rowLinks(rows);
+      rows.forEach((r, i) => {
+        const y = i - back.length;
+        frag.appendChild(paintRow(r, y >= 0 && vt.cursorVisible && y === vt.y ? vt.x : -1, links[i]));
+      });
       el.appendChild(frag);
       if (atBottom) el.scrollTop = el.scrollHeight;
     });
@@ -413,6 +455,11 @@ export function TerminalApp(body, win) {
   // selection and the guest sees nothing. The textarea is focused on a
   // click that selected nothing: paste and mobile keyboards want it.
   screen.addEventListener('mouseup', () => { if (!window.getSelection().toString()) focus(); });
+  // A click on a link opens it in a new tab; a drag over one selects it.
+  screen.addEventListener('click', e => {
+    const link = e.target.closest('.link');
+    if (link && e.button === 0 && !window.getSelection().toString()) Links.open(link.dataset.href);
+  });
   const onKey = e => {
     if (!tty) return;
     const bytes = keyBytes(e);

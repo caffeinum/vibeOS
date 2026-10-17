@@ -6,17 +6,23 @@
 // and it was painted as raw text with the backticks showing. This builds DOM
 // nodes for that subset and nothing else: no innerHTML, so a reply that
 // quotes a fetched page cannot carry markup into the desktop's origin.
+// A url in a reply, a code span or a fence is a link (Links, kernel/agent.js);
+// a kernel forked before Links paints it as text.
+const linked = (parent, text) => {
+  if (typeof Links === 'undefined') parent.appendChild(document.createTextNode(text));
+  else Links.append(parent, text);
+};
 export function renderMd(el, text) {
   el.textContent = '';
   const inline = (parent, line) => {
     const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)/g; let last = 0, m;
     while ((m = re.exec(line))) {
-      if (m.index > last) parent.appendChild(document.createTextNode(line.slice(last, m.index)));
+      if (m.index > last) linked(parent, line.slice(last, m.index));
       const node = document.createElement(m[1] ? 'code' : 'b');
-      node.textContent = m[1] ? m[1].slice(1, -1) : m[2].slice(2, -2);
+      linked(node, m[1] ? m[1].slice(1, -1) : m[2].slice(2, -2));
       parent.appendChild(node); last = m.index + m[0].length;
     }
-    if (last < line.length) parent.appendChild(document.createTextNode(line.slice(last)));
+    if (last < line.length) linked(parent, line.slice(last));
   };
   const lines = String(text).split('\n');
   let i = 0, list = null, para = null;
@@ -26,7 +32,7 @@ export function renderMd(el, text) {
     if (/^\s*```/.test(line)) {
       closeAll(); const pre = document.createElement('pre'); const buf = [];
       for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) buf.push(lines[i]);
-      pre.textContent = buf.join('\n'); el.appendChild(pre); i++; continue;
+      linked(pre, buf.join('\n')); el.appendChild(pre); i++; continue;
     }
     const li = /^\s*[-*]\s+(.*)$/.exec(line);
     if (li) {
