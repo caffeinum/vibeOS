@@ -2095,6 +2095,17 @@ function toolResultText(output) {
   if (text.length <= TOOL_RESULT_MAX) return text;
   return text.slice(0, TOOL_RESULT_MAX) + `\n…[truncated: ${text.length - TOOL_RESULT_MAX} more characters; narrow the request (from/to, a pattern, a path)]`;
 }
+// The same cap on the server's path (hosted, ChatGPT login), where a result
+// rides as JSON. It was uncapped there: a vm_exec that printed megabytes (about 2.3 MB by the route's own estimate) went
+// into the next hosted step whole, whose worst case (458 credits) outran a
+// balance of 453, and the person got the out-of-credits wall with most of
+// their free credits left (beads-tavc.16.19). An oversized one goes as the
+// cut text, the shape the key paths already send.
+function toolResultOutput(output) {
+  const json = JSON.stringify(output);
+  if (json === undefined || json.length <= TOOL_RESULT_MAX) return { type: 'json', value: output };
+  return { type: 'text', value: toolResultText(output) };
+}
 
 // reload_os kills the page mid-turn, so whatever the model says after it never
 // arrives. The note it passed is parked here and the next boot's chat reads it.
@@ -3957,7 +3968,7 @@ const Agent = {
           type: 'tool-result',
           toolCallId: call.toolCallId,
           toolName: call.toolName,
-          output: { type: 'json', value: output },
+          output: toolResultOutput(output),
         });
       }
 
