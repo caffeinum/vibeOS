@@ -253,7 +253,7 @@ export function ChatApp(body, win) {
         + (ownKey ? '<button class="btn sm" id="hostedOwnKey">Use my own key or agent</button>' : '') + '</div>' : ''), null, 'chat-failure');
     b.querySelector('#failure').textContent = t.failure;
     if (credits) {
-      b.querySelector('#failureWhy').textContent = Chat.CREDITS_LINE;
+      b.querySelector('#failureWhy').textContent = Chat.creditsLine(t.failure);
       b.querySelector('#connectOther').onclick = () => openSettings('model');
     }
     if (badKey) {

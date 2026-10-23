@@ -4106,7 +4106,11 @@ function trackFailure(failure, err) {
 // fix it: OpenAI's prepaid "You have no credits remaining…" (and the older
 // insufficient_quota "exceeded your current quota"), Anthropic's 400 "Your
 // credit balance is too low…", which the 400 rule below read as 'model'.
-const NO_CREDITS = /no credits remaining|credit balance is too low|insufficient_quota|exceeded your current quota/;
+// And a ChatGPT login's plan limit, "The usage limit has been reached"
+// (account 87553544 after the hosted wall, beads-tavc.16.20): it resets on
+// ChatGPT's clock, and a model reset only sent the same request again.
+const NO_CREDITS = /no credits remaining|credit balance is too low|insufficient_quota|exceeded your current quota|usage limit has been reached/;
+const PLAN_LIMIT = /usage limit has been reached/;
 function failureBucket(failure) {
   const msg = String(failure).toLowerCase();
   // A server that ran out of time is not the network (tavc.16.18): the
@@ -4605,6 +4609,8 @@ const Chat = {
     Connect.expand();
   },
   CREDITS_LINE: 'The account behind this key is out of credits. Add credits on your provider\'s site, or connect another way.',
+  LIMIT_LINE: 'Your ChatGPT plan\'s usage limit is reached. It resets on ChatGPT\'s schedule; until then, connect another way.',
+  creditsLine(failure) { return PLAN_LIMIT.test(String(failure).toLowerCase()) ? this.LIMIT_LINE : this.CREDITS_LINE; },
   // reload_os (and Take the update) replace the page while the loop's next
   // model request is in flight, and the reload aborts it: "Failed to fetch"
   // landed in this catch 0.5-0.8 s later and was tracked as gen_failed_network
