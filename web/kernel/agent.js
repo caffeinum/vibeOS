@@ -4609,7 +4609,7 @@ const Chat = {
     Connect.expand();
   },
   CREDITS_LINE: 'The account behind this key is out of credits. Add credits on your provider\'s site, or connect another way.',
-  LIMIT_LINE: 'Your ChatGPT plan\'s usage limit is reached. It resets on ChatGPT\'s schedule; until then, connect another way.',
+  LIMIT_LINE: 'Your ChatGPT plan has reached its usage limit. Wait for it to reset, or connect another way.',
   creditsLine(failure) { return PLAN_LIMIT.test(String(failure).toLowerCase()) ? this.LIMIT_LINE : this.CREDITS_LINE; },
   // reload_os (and Take the update) replace the page while the loop's next
   // model request is in flight, and the reload aborts it: "Failed to fetch"
