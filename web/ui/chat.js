@@ -229,11 +229,21 @@ export function ChatApp(body, win) {
     }
     return -1;
   };
+  // The failure's inline options survive a repaint of the log: which turn
+  // has them open, and how to undo the pairing listener they hold.
+  let failureOptions = null;
+  Windows.onDispose(win, () => { if (failureOptions) failureOptions.undo(); });
   const paintFailure = (t, i) => {
     const last = i === lastFailure() && !Chat.running;
     // Out of credits or no answer at all: a model reset cannot fix either.
     const bucket = Chat.failureBucket(t.failure);
     const credits = last && bucket === 'credits';
+    // tavc.6.5: out of credits always ends on a way on. Signed out on a hosted
+    // page, the free credits first; then the connect card's other options,
+    // inline, never a modal (tavc.13: a turn can fail before vm_ready).
+    // Not for a ChatGPT login: its limit resets, and signing them out of
+    // ChatGPT to make room for hosted AI costs them something.
+    const free = credits && Hosted.enabled && !Hosted.signedIn && !Gen.oauth;
     // A pasted key the provider refused: a new key fixes it, a reset cannot.
     const badKey = last && bucket === 'auth' && !!Gen.key;
     const to = bucket === 'credits' || bucket === 'network' || badKey ? '' : Chat.defaultModel();
@@ -245,7 +255,9 @@ export function ChatApp(body, win) {
     const billing = last && Hosted.purchases && (t.hosted === 'out-of-credits' || t.hosted === 'needs-pro');
     const ownKey = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused');
     const b = bubble('vibeos', '<span class="no" id="failure"></span>'
-      + (credits ? '<div class="tiny" id="failureWhy"></div><div class="row chat-failure-actions"><button class="btn sm" id="connectOther">Connect another way</button></div>' : '')
+      + (credits ? '<div class="tiny" id="failureWhy"></div><div class="row chat-failure-actions">'
+        + (free ? '<button class="btn sm p" id="creditsFree"></button>' : '')
+        + '<button class="btn sm" id="connectOther"></button></div><div class="failure-options-slot"></div>' : '')
       + (badKey ? '<div class="tiny" id="failureWhy"></div><div class="row chat-failure-actions"><button class="btn sm" id="newKey">Use a different key</button></div>' : '')
       + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : '')
       + (billing || ownKey ? '<div class="row chat-failure-actions">'
@@ -254,7 +266,24 @@ export function ChatApp(body, win) {
     b.querySelector('#failure').textContent = t.failure;
     if (credits) {
       b.querySelector('#failureWhy').textContent = Chat.creditsLine(t.failure);
-      b.querySelector('#connectOther').onclick = () => openSettings('model');
+      const other = b.querySelector('#connectOther');
+      other.textContent = Connect.COPY.other;
+      const openOptions = () => {
+        if (failureOptions) failureOptions.undo();
+        other.hidden = true;
+        failureOptions = { at: t, undo: Connect.buildOptions(b.querySelector('.failure-options-slot'), 'credits_failure') };
+      };
+      other.onclick = () => { track('other_options_click', { from: 'credits_failure' }); openOptions(); };
+      if (failureOptions && failureOptions.at === t) openOptions();
+      const freeBtn = b.querySelector('#creditsFree');
+      if (freeBtn) {
+        freeBtn.textContent = Connect.COPY.primary;
+        freeBtn.onclick = () => {
+          freeBtn.disabled = true;
+          freeBtn.textContent = Connect.COPY.leaving;
+          Chat.useFreeCredits(Chat.turns[i - 1] ? Chat.turns[i - 1].text : '');
+        };
+      }
     }
     if (badKey) {
       b.querySelector('#failureWhy').textContent = Chat.BAD_KEY_LINE;
