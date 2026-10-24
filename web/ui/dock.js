@@ -267,9 +267,8 @@ function bootSplash() {
    nothing opens by itself: the auto key modal is what cut boots in tavc.13.
    Shown on the page's first cold boot (a restore has no progress and takes
    seconds), gone at 'ready', 'failed' or the ×. Top right: the chat opens
-   on the left. Arm a is the desktop as it
-   was; the arm is BootArm's (kernel/machine.js), and an older kernel fork
-   without it shows nothing. */
+   on the left. Hosted only (BootArm, kernel/machine.js): an older kernel
+   fork without it shows nothing. */
 const bootArmB = () => typeof BootArm !== 'undefined' && BootArm.arm === 'b';
 
 function startBootCard() {
