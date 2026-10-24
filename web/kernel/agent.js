@@ -346,8 +346,8 @@ const Connect = {
   // [ Other options ], built into whatever element the card hands it: what
   // the key modal held (connect your agent, ChatGPT, a pasted key), with the
   // same element ids, so a suite or a fork that drives them by id still does.
-  buildOptions(root) {
-    const src = { from: 'card' };
+  buildOptions(root, from = 'card') {
+    const src = { from };
     root.innerHTML = `
       <div class="col connect-options">
         <div class="row" style="gap:6px">
@@ -4607,6 +4607,16 @@ const Chat = {
     Gen.saveKey('');
     Connect.open('bad_key');
     Connect.expand();
+  },
+  // Out of credits, signed out: the free credits are the way on, but a pasted
+  // key or a ChatGPT login wins over hosted AI, so the spent one is forgotten
+  // first or the person would come back to the same wall (87553544, 16.20).
+  // The prompt is held and put back in the box on the way back, not sent.
+  useFreeCredits(text) {
+    if (Gen.key) Gen.saveKey('');
+    if (Gen.oauth) Gen.saveOAuth(null);
+    Connect.keep(text);
+    setTimeout(() => Connect.signUp('credits_failure'), 600);
   },
   CREDITS_LINE: 'The account behind this key is out of credits. Add credits on your provider\'s site, or connect another way.',
   LIMIT_LINE: 'Your ChatGPT plan has reached its usage limit. Wait for it to reset, or connect another way.',
