@@ -267,16 +267,15 @@ function bootSplash() {
    nothing opens by itself: the auto key modal is what cut boots in tavc.13.
    Shown on the page's first cold boot (a restore has no progress and takes
    seconds), gone at 'ready', 'failed' or the ×. Top right: the chat opens
-   on the left. Arm a is the desktop as it
-   was; the arm is BootArm's (kernel/machine.js), and an older kernel fork
-   without it shows nothing. */
+   on the left. Hosted only (BootArm, kernel/machine.js): an older kernel
+   fork without it shows nothing. */
 const bootArmB = () => typeof BootArm !== 'undefined' && BootArm.arm === 'b';
 
 function startBootCard() {
   if (window.__vibeosBootCardDecided) return () => {};
   window.__vibeosBootCardDecided = true;
   if (!bootArmB() || !VM.onProgress) return () => {};
-  let el = null, line = null, bar = null, ended = false;
+  let el = null, line = null, bar = null, go = null, ended = false;
   const end = () => {
     if (ended) return;
     ended = true;
@@ -289,6 +288,7 @@ function startBootCard() {
     line.textContent = 'Starting Linux…' + (p.percent === null ? '' : ` ${p.percent}%`) + (typical ? `, usually about ${typical} s` : '');
     bar.parentNode.hidden = p.percent === null;
     bar.style.width = (p.percent || 0) + '%';
+    if (go) go.textContent = Gen.available || RemoteBridge.state === 'connected' ? 'Open the chat' : 'Connect a model while Linux boots';
   };
   const show = () => {
     el = document.createElement('div');
@@ -319,15 +319,18 @@ function startBootCard() {
     const say = document.createElement('p');
     say.className = 'ask-note';
     say.textContent = 'You can start now: ask the agent for an app while Linux boots.';
-    const go = document.createElement('button');
+    go = document.createElement('button');
     go.type = 'button';
     go.className = 'btn p boot-go';
-    go.textContent = 'Open the chat';
+    // tavc.42: the words only. Either way the click opens the chat, never the
+    // key modal: a modal before 'ready' is what cut boots in tavc.13, and the
+    // chat's own intro carries the Add a key offer.
+    // Re-read on every progress tick, so a key pasted mid-boot changes it.
     go.onclick = () => {
       track('boot_start_now_click');
       // From here it is a progress line over a desktop in use: clicks go
       // through it, so it never takes a window's title bar on a narrow screen.
-      now.remove(); x.remove();
+      now.remove(); x.remove(); go = null;
       el.style.pointerEvents = 'none';
       const ui = UI.live();
       ui.focusOrOpen(ui.SHELL.chat);

@@ -126,22 +126,15 @@ const DeviceStamp = {
   },
 };
 
+// tavc.14 passed (10-23): every hosted device gets the progress card, so the
+// arm is 'b' wherever HexEvents records, kept on the boot events for a week
+// so the reads before and after line up (tavc.42). The mirror and the image
+// have no arm. The coin that drew it, and its localStorage key, are gone.
 const BootArm = {
-  KEY: 'vibeos-boot-arm',
   EVENTS: new Set(['app_open', 'vm_ready', 'vm_left_booting', 'boot_progress_shown', 'boot_start_now_click']),
   _arm: undefined,
   get arm() {
-    if (this._arm !== undefined) return this._arm;
-    this._arm = null;
-    if (!HexEvents.hosted()) return null;
-    try {
-      let arm = localStorage.getItem(this.KEY);
-      if (arm !== 'a' && arm !== 'b') {
-        arm = crypto.getRandomValues(new Uint8Array(1))[0] & 1 ? 'b' : 'a';
-        localStorage.setItem(this.KEY, arm);
-      }
-      this._arm = arm;
-    } catch {}
+    if (this._arm === undefined) this._arm = HexEvents.hosted() ? 'b' : null;
     return this._arm;
   },
 };
