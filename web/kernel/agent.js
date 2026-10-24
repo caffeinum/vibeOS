@@ -4608,13 +4608,12 @@ const Chat = {
     Connect.open('bad_key');
     Connect.expand();
   },
-  // Out of credits, signed out: the free credits are the way on, but a pasted
-  // key or a ChatGPT login wins over hosted AI, so the spent one is forgotten
+  // A pasted key out of credits, signed out: the free credits are the way
+  // on, but a pasted key wins over hosted AI, so the spent one is forgotten
   // first or the person would come back to the same wall (87553544, 16.20).
   // The prompt is held and put back in the box on the way back, not sent.
   useFreeCredits(text) {
-    if (Gen.key) Gen.saveKey('');
-    if (Gen.oauth) Gen.saveOAuth(null);
+    Gen.saveKey('');
     Connect.keep(text);
     setTimeout(() => Connect.signUp('credits_failure'), 600);
   },

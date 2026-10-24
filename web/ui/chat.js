@@ -241,7 +241,9 @@ export function ChatApp(body, win) {
     // tavc.6.5: out of credits always ends on a way on. Signed out on a hosted
     // page, the free credits first; then the connect card's other options,
     // inline, never a modal (tavc.13: a turn can fail before vm_ready).
-    const free = credits && Hosted.enabled && !Hosted.signedIn;
+    // Not for a ChatGPT login: its limit resets, and signing them out of
+    // ChatGPT to make room for hosted AI costs them something.
+    const free = credits && Hosted.enabled && !Hosted.signedIn && !Gen.oauth;
     // A pasted key the provider refused: a new key fixes it, a reset cannot.
     const badKey = last && bucket === 'auth' && !!Gen.key;
     const to = bucket === 'credits' || bucket === 'network' || badKey ? '' : Chat.defaultModel();
