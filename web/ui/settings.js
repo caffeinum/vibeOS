@@ -1383,6 +1383,18 @@ export function ModelApp(body) {
           : 'API keys never reach vibeos.sh. They live in <code>localStorage</code> and go directly to Anthropic or OpenAI from your browser.'}
       </p>`;
     paintHosted(body);
+    // Hosted AI preferred over the person's own key or ChatGPT login
+    // (tavc.16.22): say so, and offer the way back. Both stay in storage.
+    const own = Gen.key ? 'key' : Gen.oauth ? 'oauth' : '';
+    if (Hosted.preferred && own) {
+      const box = document.createElement('div');
+      box.className = 'row hosted-prefer'; box.style.cssText = 'gap:8px;margin:0 0 12px;align-items:center';
+      const line = document.createElement('span'); line.className = 'small'; line.textContent = Hosted.PREFER_COPY.on[own];
+      const back = document.createElement('button'); back.className = 'btn sm'; back.id = 'hostedPreferOff'; back.textContent = Hosted.PREFER_COPY.back[own];
+      back.onclick = () => { Hosted.prefer(false, 'settings'); render(); };
+      box.append(line, back);
+      body.prepend(box);
+    }
     body.addEventListener('hosted-repaint', render, { once: true });
     // Your own key, ChatGPT or an agent, in this pane: the connect card's
     // Other options (Connect.buildOptions), since with hosted AI connected the
@@ -1401,7 +1413,7 @@ export function ModelApp(body) {
     const c = body.querySelector('#clear');
     if (c) c.onclick = () => { Gen.saveKey(''); render(); };
     const co = body.querySelector('#clearoauth');
-    if (co) co.onclick = () => { Gen.saveOAuth(null); render(); };
+    if (co) co.onclick = () => { track('chatgpt_logout_click'); Gen.saveOAuth(null); render(); };
     const save = body.querySelector('#modelSave');
     if (save) save.onclick = () => { Gen.saveCodexModel(body.querySelector('#modelId').value); render(); };
     const reset = body.querySelector('#modelReset');

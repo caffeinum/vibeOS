@@ -244,6 +244,8 @@ export function ChatApp(body, win) {
     // Not for a ChatGPT login: its limit resets, and signing them out of
     // ChatGPT to make room for hosted AI costs them something.
     const free = credits && Hosted.enabled && !Hosted.signedIn && !Gen.oauth;
+    // Signed in with vibeOS credits left (tavc.16.22): those first.
+    const instead = credits && Chat.creditsInstead;
     // A pasted key the provider refused: a new key fixes it, a reset cannot.
     const badKey = last && bucket === 'auth' && !!Gen.key;
     const to = bucket === 'credits' || bucket === 'network' || badKey ? '' : Chat.defaultModel();
@@ -256,6 +258,7 @@ export function ChatApp(body, win) {
     const ownKey = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused');
     const b = bubble('vibeos', '<span class="no" id="failure"></span>'
       + (credits ? '<div class="tiny" id="failureWhy"></div><div class="row chat-failure-actions">'
+        + (instead ? '<button class="btn sm p" id="useCredits"></button>' : '')
         + (free ? '<button class="btn sm p" id="creditsFree"></button>' : '')
         + '<button class="btn sm" id="connectOther"></button></div><div class="failure-options-slot"></div>' : '')
       + (badKey ? '<div class="tiny" id="failureWhy"></div><div class="row chat-failure-actions"><button class="btn sm" id="newKey">Use a different key</button></div>' : '')
@@ -275,6 +278,11 @@ export function ChatApp(body, win) {
       };
       other.onclick = () => { track('other_options_click', { from: 'credits_failure' }); openOptions(); };
       if (failureOptions && failureOptions.at === t) openOptions();
+      const use = b.querySelector('#useCredits');
+      if (use) {
+        use.textContent = Hosted.PREFER_COPY.use(Hosted.credits);
+        use.onclick = () => { use.disabled = true; Chat.useHostedCredits(Chat.turns[i - 1].text).catch(e => Chat.line(e.message, true)); };
+      }
       const freeBtn = b.querySelector('#creditsFree');
       if (freeBtn) {
         freeBtn.textContent = Connect.COPY.primary;
