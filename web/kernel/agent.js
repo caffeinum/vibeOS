@@ -129,6 +129,25 @@ const Hosted = {
     Gen.emit();
   },
   get chosen() { return this.models.find(m => m.provider === this.choice) || null; },
+  // "Use my vibeOS credits" (beads-tavc.16.22): hosted AI wins over a pasted
+  // key and a ChatGPT login in this browser, which both stay where they are.
+  // D2 hit their ChatGPT plan's limit twice with 537 credits unused, because
+  // the login wins; the only way over was logging out of ChatGPT by hand.
+  // Settings › Model turns it off. Read by Gen._setProvider.
+  PREFER_KEY: 'vibeos-prefer-hosted',
+  PREFER_COPY: {
+    use: n => `Use my vibeOS credits (${n})`,
+    // Echo (vibeos-writer). "used now", not "first": there is no fall-back
+    // to the login or key when the credits run out; that is the paywall.
+    on: { oauth: 'vibeOS credits are used now. Your ChatGPT login is still saved.', key: 'vibeOS credits are used now. Your API key is still saved.' },
+    back: { oauth: 'Use ChatGPT again', key: 'Use my API key again' },
+  },
+  get preferred() { try { return localStorage.getItem(this.PREFER_KEY) === '1'; } catch { return false; } },
+  prefer(on, from) {
+    try { on ? localStorage.setItem(this.PREFER_KEY, '1') : localStorage.removeItem(this.PREFER_KEY); } catch {}
+    track('hosted_prefer', { on: on ? 'yes' : 'no', from });
+    Gen.setProvider();
+  },
   // This turn's spend, summed from its steps' replies, for hosted_turn.
   turnCredits: 0, turnCost: 0, turnProvider: '',
   turnStart() { this.turnCredits = 0; this.turnCost = 0; this.turnProvider = this.choice; },
@@ -589,6 +608,7 @@ const Gen = {
       this.available = true;
       return;
     }
+    if (Hosted.active && Hosted.preferred) return this._setHosted();
     if (this.key) {
       this.provider = this.key.startsWith('sk-ant-') ? 'anthropic' : 'openai';
       this.model = this.provider === 'anthropic' ? 'claude-sonnet-5'
@@ -602,15 +622,15 @@ const Gen = {
       this.available = true;
       return;
     }
-    if (Hosted.active) {
-      this.provider = 'hosted';
-      this.model = Hosted.chosen ? Hosted.chosen.id.replace(/^[a-z]+\//, '') : '';
-      this.available = true;
-      return;
-    }
+    if (Hosted.active) return this._setHosted();
     this.provider = '';
     this.model = '';
     this.available = false;
+  },
+  _setHosted() {
+    this.provider = 'hosted';
+    this.model = Hosted.chosen ? Hosted.chosen.id.replace(/^[a-z]+\//, '') : '';
+    this.available = true;
   },
   // A model an app can call: a pasted key or a ChatGPT login — the page
   // posts to the provider itself (or to the codex proxy). The local demo
@@ -685,7 +705,7 @@ const Gen = {
       if (!r.ok) throw new Error(j.error || ('server returned ' + r.status));
       return j.source;
     }
-    if (this.key) {
+    if (this.key && this.provider !== 'hosted') {
       const url = this.provider === 'anthropic'
         ? 'https://api.anthropic.com/v1/messages'
         : 'https://api.openai.com/v1/chat/completions';
@@ -4107,7 +4127,7 @@ function trackFailure(failure, err) {
 // insufficient_quota "exceeded your current quota"), Anthropic's 400 "Your
 // credit balance is too low…", which the 400 rule below read as 'model'.
 // And a ChatGPT login's plan limit, "The usage limit has been reached"
-// (account 87553544 after the hosted wall, beads-tavc.16.20): it resets on
+// (D2 after the hosted wall, beads-tavc.16.20): it resets on
 // ChatGPT's clock, and a model reset only sent the same request again.
 const NO_CREDITS = /no credits remaining|credit balance is too low|insufficient_quota|exceeded your current quota|usage limit has been reached/;
 const PLAN_LIMIT = /usage limit has been reached/;
@@ -4283,7 +4303,7 @@ const Chat = {
     // send at 0 credits — hosted, or your own key once the free credits are
     // gone and you're not Pro — opens the paywall instead.
     if (!Connect.connected) { Connect.hold(text); return null; }
-    if ((Gen.provider === 'hosted' && !Hosted.pro && Hosted.credits <= 0) || (Hosted.byoLocked && (Gen.oauth || Gen.key))) {
+    if ((Gen.provider === 'hosted' && !Hosted.pro && Hosted.credits <= 0) || (Hosted.byoLocked && Gen.provider !== 'hosted' && (Gen.oauth || Gen.key))) {
       Paywall.open('zero_credits');
       return null;
     }
@@ -4493,7 +4513,7 @@ const Chat = {
     // Both paths are the agent now. Signing in with ChatGPT proxies through
     // vibeos.sh; a pasted key talks to the provider from this page. Same
     // tools, same prompt, same loop.
-    if (Gen.available && (Gen.oauth || Gen.key) && Hosted.byoLocked) {
+    if (Gen.available && Gen.provider !== 'hosted' && (Gen.oauth || Gen.key) && Hosted.byoLocked) {
       const e = Hosted.refuseByo();
       failure = e.message;
       reply.hosted = e.hostedCode;
@@ -4610,12 +4630,22 @@ const Chat = {
   },
   // A pasted key out of credits, signed out: the free credits are the way
   // on, but a pasted key wins over hosted AI, so the spent one is forgotten
-  // first or the person would come back to the same wall (87553544, 16.20).
+  // first or the person would come back to the same wall (D2, 16.20).
   // The prompt is held and put back in the box on the way back, not sent.
   useFreeCredits(text) {
     Gen.saveKey('');
     Connect.keep(text);
     setTimeout(() => Connect.signUp('credits_failure'), 600);
+  },
+  // A signed-in person whose own key or ChatGPT login ran out, with vibeOS
+  // credits left: switch this browser to them (both stay) and send again.
+  get creditsInstead() { return Hosted.active && !Hosted.preferred && Hosted.credits > 0 && Gen.provider !== 'hosted'; },
+  async useHostedCredits(text) {
+    if (typeof text !== 'string') throw new Error('useHostedCredits: the prompt to resend must be a string');
+    Hosted.prefer(true, 'credits_failure');
+    if (Gen.provider !== 'hosted') throw new Error('asked for hosted AI, but the model is ' + (Gen.provider || 'none'));
+    const out = this.send(text);
+    if (out && out.started) await out.started;
   },
   CREDITS_LINE: 'The account behind this key is out of credits. Add credits on your provider\'s site, or connect another way.',
   LIMIT_LINE: 'Your ChatGPT plan has reached its usage limit. Wait for it to reset, or connect another way.',
