@@ -499,6 +499,15 @@ const Welcome = {
    Subscribe goes through sign-up first and on to checkout on the way back. */
 const Paywall = {
   AFTER_KEY: 'vibeos-after-signup',
+  // Signed out, Subscribe is a sign-up first (beads-tavc.16.25): every outside
+  // subscribe click was signed out and landed on a page about free credits
+  // with nothing about Pro, so the button says so and the page is told why.
+  // Echo's lines (vibeos-writer).
+  SIGNUP: '/auth/email?next=/app&for=pro',
+  COPY: {
+    signedOut: 'Create a free account to subscribe',
+    accountFirst: 'You need a free account to subscribe. It comes with 500 free credits.',
+  },
   el: null,
   open(reason) {
     if (this.el) return;
@@ -515,6 +524,7 @@ const Paywall = {
           <button type="button" class="btn p" id="paywallSubscribe">Subscribe</button>
           <button type="button" class="btn" id="paywallNotNow">Not now</button>
         </div>
+        <p class="tiny dimmer" id="paywallAccount" hidden style="margin:0"></p>
         <p class="tiny dimmer" id="paywallSoon" hidden style="margin:0">Pro opens soon. Until then your own key or agent keeps working without an account.</p>
         <p class="tiny dimmer" id="paywallFinal" style="margin:0"></p>
         <p class="note no" id="paywallErr" hidden style="margin:0"></p>
@@ -526,7 +536,12 @@ const Paywall = {
     q('#paywallFinal').textContent = Hosted.FINAL_LINE;
     // The MCP line leads when the menubar's Unlock MCP opened it.
     if (reason === 'menubar') q('#paywallTitle').after(q('#paywallMcp'));
-    if (!Hosted.purchases) { q('#paywallSubscribe').hidden = true; q('#paywallSoon').hidden = false; q('#paywallFinal').hidden = true; }
+    if (!Hosted.signedIn) {
+      q('#paywallSubscribe').textContent = this.COPY.signedOut;
+      q('#paywallAccount').textContent = this.COPY.accountFirst;
+      q('#paywallAccount').hidden = false;
+    }
+    if (!Hosted.purchases) { q('#paywallSubscribe').hidden = true; q('#paywallAccount').hidden = true; q('#paywallSoon').hidden = false; q('#paywallFinal').hidden = true; }
     const close = () => { document.removeEventListener('keydown', onKey); overlay.remove(); this.el = null; };
     const onKey = e => { if (e.key === 'Escape') close(); };
     document.addEventListener('keydown', onKey);
@@ -536,7 +551,9 @@ const Paywall = {
       if (!Hosted.signedIn) {
         track('subscribe_click', { from });
         try { sessionStorage.setItem(this.AFTER_KEY, 'subscribe'); } catch {}
-        location.href = Account.SIGNUP;
+        // Our own hop: the leave-page guard must not ask (Account.trySignUp).
+        if (!Chat.running) window.__vibeosIntentionalUnload = true;
+        location.href = this.SIGNUP;
         return;
       }
       try { await Hosted.checkout('pro', from); }
