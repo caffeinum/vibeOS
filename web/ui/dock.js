@@ -275,7 +275,7 @@ function startBootCard() {
   if (window.__vibeosBootCardDecided) return () => {};
   window.__vibeosBootCardDecided = true;
   if (!bootArmB() || !VM.onProgress) return () => {};
-  let el = null, line = null, bar = null, go = null, ended = false;
+  let el = null, line = null, bar = null, ended = false;
   const end = () => {
     if (ended) return;
     ended = true;
@@ -288,7 +288,6 @@ function startBootCard() {
     line.textContent = 'Starting Linux…' + (p.percent === null ? '' : ` ${p.percent}%`) + (typical ? `, usually about ${typical} s` : '');
     bar.parentNode.hidden = p.percent === null;
     bar.style.width = (p.percent || 0) + '%';
-    if (go) go.textContent = Gen.available || RemoteBridge.state === 'connected' ? 'Open the chat' : 'Connect a model while Linux boots';
   };
   const show = () => {
     el = document.createElement('div');
@@ -319,18 +318,17 @@ function startBootCard() {
     const say = document.createElement('p');
     say.className = 'ask-note';
     say.textContent = 'You can start now: ask the agent for an app while Linux boots.';
-    go = document.createElement('button');
+    const go = document.createElement('button');
     go.type = 'button';
     go.className = 'btn p boot-go';
-    // tavc.42: the words only. Either way the click opens the chat, never the
-    // key modal: a modal before 'ready' is what cut boots in tavc.13, and the
-    // chat's own intro carries the Add a key offer.
-    // Re-read on every progress tick, so a key pasted mid-boot changes it.
+    // tavc.48: back to one line. tavc.42's 'Connect a model while Linux
+    // boots' failed its read (clickers left mid-boot 44%, connected 1.8%).
+    go.textContent = 'Open the chat';
     go.onclick = () => {
       track('boot_start_now_click');
       // From here it is a progress line over a desktop in use: clicks go
       // through it, so it never takes a window's title bar on a narrow screen.
-      now.remove(); x.remove(); go = null;
+      now.remove(); x.remove();
       el.style.pointerEvents = 'none';
       const ui = UI.live();
       ui.focusOrOpen(ui.SHELL.chat);
