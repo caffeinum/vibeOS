@@ -626,6 +626,11 @@
   }
   .btn:hover { border-color: var(--focus); }
   .btn.p { background: var(--pbtn); color: var(--pbtntext); border-color: var(--pbtn); font-weight: 600; }
+  /* win95 (the default): --pbtn is the panel grey, so a border in --pbtn left
+     a primary button as bare bold text on its dialog (the credit-out
+     paywall's Subscribe, tavc.16.28). Win95's default button: a black frame
+     around the raised bevel. */
+  :root:not([data-theme]) .btn.p { border-color: #000000; box-shadow: inset 1px 1px #ffffff, inset -1px -1px #808080; }
   .btn.sm { padding: 4px 9px; font-size: 12px; }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
   input[type=text], textarea {
