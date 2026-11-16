@@ -254,6 +254,7 @@ export function ChatApp(body, win) {
     // Out of credits, or bring-your-own locked at 0 (needs-pro): the paywall
     // has the price and the terms; this line only points at it. Paused (the
     // month's budget) keeps "your own key or agent" as the way on.
+    const trial = last && Hosted.trial === 'add-card' && (t.hosted === 'out-of-credits' || t.hosted === 'needs-pro');
     const billing = last && Hosted.purchases && (t.hosted === 'out-of-credits' || t.hosted === 'needs-pro');
     const ownKey = last && (t.hosted === 'out-of-credits' || t.hosted === 'paused');
     const b = bubble('vibeos', '<span class="no" id="failure"></span>'
@@ -263,8 +264,9 @@ export function ChatApp(body, win) {
         + '<button class="btn sm" id="connectOther"></button></div><div class="failure-options-slot"></div>' : '')
       + (badKey ? '<div class="tiny" id="failureWhy"></div><div class="row chat-failure-actions"><button class="btn sm" id="newKey">Use a different key</button></div>' : '')
       + (last && to ? '<div class="row chat-failure-actions"><button class="btn sm" id="resetModel"></button></div>' : '')
-      + (billing || ownKey ? '<div class="row chat-failure-actions">'
-        + (billing ? '<button class="btn sm p" id="hostedPro">Subscribe</button>' : '')
+      + (trial || billing || ownKey ? '<div class="row chat-failure-actions">'
+        + (trial ? '<button class="btn sm p" id="hostedTrial"></button>' : '')
+        + (billing ? '<button class="btn sm' + (trial ? '' : ' p') + '" id="hostedPro">Subscribe</button>' : '')
         + (ownKey ? '<button class="btn sm" id="hostedOwnKey">Use my own key or agent</button>' : '') + '</div>' : ''), null, 'chat-failure');
     b.querySelector('#failure').textContent = t.failure;
     if (credits) {
@@ -296,6 +298,12 @@ export function ChatApp(body, win) {
     if (badKey) {
       b.querySelector('#failureWhy').textContent = Chat.BAD_KEY_LINE;
       b.querySelector('#newKey').onclick = () => Chat.useDifferentKey();
+    }
+    const trialBtn = b.querySelector('#hostedTrial');
+    if (trialBtn) {
+      trialBtn.textContent = Hosted.TRIAL_BUTTON;
+      trialBtn.title = Hosted.TRIAL_LINE;
+      trialBtn.onclick = () => { trialBtn.disabled = true; Hosted.checkout('trial', 'failure').catch(e => { trialBtn.disabled = false; Chat.line(e.message, true); }); };
     }
     const pro = b.querySelector('#hostedPro');
     if (pro) pro.onclick = () => Paywall.open('zero_credits');
@@ -553,10 +561,18 @@ export function ChatApp(body, win) {
       if (!hosted || Connect.expanded) expandOptions();
     }
     const zeroOn = Hosted.active && Gen.provider === 'hosted' && !Hosted.pro && Hosted.credits <= 0 || Hosted.byoLocked;
-    if (zeroOn && zero.hidden) {
-      zero.innerHTML = '<span class="small"></span><button type="button" class="btn sm p" id="zeroSubscribe">Subscribe</button>';
-      zero.firstChild.textContent = "You've used all your free credits. Pro adds 3,000 credits every month.";
-      zero.querySelector('#zeroSubscribe').onclick = () => Paywall.open('zero_credits');
+    // The card trial (16.35): a new account at 0 is owed its free credits,
+    // not out of them, so the strip offers the card, not Pro.
+    const zeroTrial = zeroOn && Hosted.trial === 'add-card';
+    if (zeroOn && (zero.hidden || zero.dataset.trial !== String(zeroTrial))) {
+      zero.dataset.trial = String(zeroTrial);
+      zero.innerHTML = '<span class="small"></span><button type="button" class="btn sm p" id="zeroSubscribe"></button>';
+      zero.firstChild.textContent = zeroTrial ? Hosted.TRIAL_LINE : "You've used all your free credits. Pro adds 3,000 credits every month.";
+      const go = zero.querySelector('#zeroSubscribe');
+      go.textContent = zeroTrial ? Hosted.TRIAL_BUTTON : 'Subscribe';
+      go.onclick = zeroTrial
+        ? () => { go.disabled = true; Hosted.checkout('trial', 'zero').catch(e => { go.disabled = false; Chat.line(e.message, true); }); }
+        : () => Paywall.open('zero_credits');
     }
     zero.hidden = !zeroOn;
   };

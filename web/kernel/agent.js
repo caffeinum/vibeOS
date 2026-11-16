@@ -165,6 +165,15 @@ const Hosted = {
   // PURCHASES_ENABLED on the server: Subscribe / Top up are offered only
   // then (Hexclave's test-mode checkout grants with no card).
   purchases: false,
+  // The card trial (beads-tavc.16.35): a new account's free credits come from
+  // adding a card in Stripe (setup mode, never charged). 'add-card' while
+  // owed them, 'card-used' when the card it added already had a trial, null
+  // otherwise (older accounts keep the no-card grant). Not gated on purchases.
+  trial: null,
+  TRIAL_LINE: "Add a card to get $5 free. We won't charge it.",
+  TRIAL_BUTTON: 'Add a card',
+  TRIAL_USED_LINE: 'This card was already used for a free trial.',
+  TRIAL_BACK_LINE: 'Card saved. Your $5 in credits will show up in a moment.',
   // One per hosted chat turn (beads-tavc.16.7): ok, the account's first,
   // and whether the cap or the free pause refused it.
   // `vm` is the machine's state when the turn STARTED (off | unavailable |
@@ -179,8 +188,11 @@ const Hosted = {
   },
   // The chat's paywall card, said once where the refusal is recorded (the
   // chat repaints the card on every event, so the paint is not the place).
-  paywall(code) {
-    if (code === 'out-of-credits' || code === 'needs-pro') Paywall.open('zero_credits');
+  // The reason is the true one (beads-tavc.16.31): 'headroom' when credits
+  // were left but fewer than the step's worst case, 'zero_credits' at 0.
+  paywall(code, spendable) {
+    if (code === 'needs-pro') Paywall.open('zero_credits');
+    if (code === 'out-of-credits') Paywall.open(spendable > 0 ? 'headroom' : 'zero_credits');
   },
   PRO_LINE: "You've used your free credits. Pro ($20/mo, 3000 credits a month, they roll over) keeps the AI going, with ours or your own key or agent.",
   FINAL_LINE: 'Purchases are final. Pro renews monthly until you cancel; cancelling stops the next renewal and you keep your credits.',
@@ -194,6 +206,7 @@ const Hosted = {
     const j = await r.json().catch(() => null);
     if (!r.ok || !j || typeof j.enabled !== 'boolean') { console.error('hosted AI status answered ' + r.status + ':', j); return; }
     Object.assign(this, { enabled: j.enabled, signedIn: !!j.signedIn, balance: j.balance || null, grantPaused: !!j.grantPaused, paused: !!j.paused, pro: !!j.pro, model: '', byoLocked: !!j.byoLocked, firstTurn: !!j.firstTurn, purchases: !!j.purchases,
+      trial: j.trial === 'add-card' || j.trial === 'card-used' ? j.trial : null,
       models: Array.isArray(j.models) ? j.models : [], defaultProvider: typeof j.defaultProvider === 'string' ? j.defaultProvider : 'openai' });
     // This read landed the sign-up grant: once per account (the server grants once).
     if (j.granted === true) track('credits_granted', Account.withVia({ plan: 'grant' }));
@@ -244,15 +257,18 @@ const Hosted = {
     if (typeof j.spendable === 'number') { this.balance = Object.assign({}, this.balance, { spendable: j.spendable }); Gen.emit(); }
     if (r.ok && typeof j.credits === 'number') track('credits_spent', { model: j.provider || this.choice });
     if (!r.ok) {
-      track('hosted_refused', { code: String(j.code || r.status).slice(0, 40) });
-      throw Object.assign(new Error(j.error || ('hosted AI answered ' + r.status)), { hostedCode: j.code || 'failed' });
+      // needed/spendable from the 402 (beads-tavc.16.31), integers or nothing.
+      const n = Number.isInteger(j.needed) ? { needed: j.needed } : {};
+      const sp = Number.isInteger(j.spendable) ? { spendable: j.spendable } : {};
+      track('hosted_refused', { code: String(j.code || r.status).slice(0, 40), ...n, ...sp });
+      throw Object.assign(new Error(j.error || ('hosted AI answered ' + r.status)), { hostedCode: j.code || 'failed', hostedSpendable: sp.spendable });
     }
     return j;
   },
   // Hexclave's hosted checkout for 'pro' or 'topup', back to /app after.
   // `from`: where the button was (card | settings), for subscribe_click / topup_click.
   async checkout(product, from) {
-    track(product === 'pro' ? 'subscribe_click' : 'topup_click', { from });
+    track(product === 'pro' ? 'subscribe_click' : product === 'trial' ? 'trial_card_click' : 'topup_click', { from });
     const r = await fetch('/api/billing/checkout', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'content-type': 'application/json' },
@@ -479,16 +495,34 @@ const Connect = {
    reduced motion). The held text is back in the box, not sent. Once. */
 const Welcome = {
   shown: false,
+  trialBack: false,
   maybe() {
+    this.maybeTrialBack();
     if (this.shown || !Account.returned || !Hosted.signedIn) return;
     // The ui is not up yet: boot.js calls this again once the chat can open.
     if (typeof window.__vibeosOpenChat !== 'function') return;
     this.shown = true;
     const fresh = Account.returned === 'new';
     window.__vibeosOpenChat();
-    Chat.line(fresh ? "You're in! You have 500 free credits. Try asking for an app." : `Welcome back! You have ${Hosted.credits} credits.`);
-    if (fresh) track('credits_welcome_shown');
+    const trial = fresh && Hosted.trial === 'add-card';
+    Chat.line(trial ? "You're in! " + Hosted.TRIAL_LINE : fresh ? "You're in! You have 500 free credits. Try asking for an app." : `Welcome back! You have ${Hosted.credits} credits.`);
+    if (fresh) track('credits_welcome_shown', trial ? { trial: 'add-card' } : {});
+    if (trial) Paywall.open('trial');
     Connect.emit(fresh ? 'welcome' : 'welcome-back');
+  },
+  // Back from the card trial's Stripe page (/app?billing=trial, 16.35): the
+  // credits land by webhook a moment later, so say so and read again in 5 s.
+  maybeTrialBack() {
+    if (this.trialBack || !/[?&]billing=trial(&|$)/.test(location.search) || !Hosted.signedIn) return;
+    if (typeof window.__vibeosOpenChat !== 'function') return;
+    this.trialBack = true;
+    const url = new URL(location.href);
+    url.searchParams.delete('billing');
+    history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+    track('trial_card_returned', { trial: Hosted.trial || 'none' });
+    window.__vibeosOpenChat();
+    Chat.line(Hosted.trial === 'card-used' ? Hosted.TRIAL_USED_LINE : Hosted.TRIAL_BACK_LINE);
+    setTimeout(() => Hosted.refresh(), 5000);
   },
 };
 
@@ -534,6 +568,24 @@ const Paywall = {
     q('#paywallMcp').textContent = 'Your own MCP servers in vibeOS: coming soon, included in Pro.';
     q('#paywallFree').textContent = 'Connecting Claude Code or Codex without an account stays free.';
     q('#paywallFinal').textContent = Hosted.FINAL_LINE;
+    // The card trial leads when this account is owed its free credits (16.35).
+    if (Hosted.signedIn && Hosted.trial) {
+      const t = document.createElement('div');
+      t.className = 'paywall-trial';
+      t.innerHTML = '<p class="small" id="paywallTrialLine" style="margin:0 0 6px"></p><button type="button" class="btn p" id="paywallTrial"></button>';
+      t.querySelector('#paywallTrialLine').textContent = Hosted.trial === 'add-card' ? Hosted.TRIAL_LINE : Hosted.TRIAL_USED_LINE;
+      const go = t.querySelector('#paywallTrial');
+      if (Hosted.trial === 'add-card') {
+        go.textContent = Hosted.TRIAL_BUTTON;
+        go.onclick = async () => {
+          try { await Hosted.checkout('trial', reason === 'trial' ? 'welcome' : 'paywall'); }
+          catch (e) { q('#paywallErr').textContent = e.message; q('#paywallErr').hidden = false; }
+        };
+        q('#paywallSubscribe').classList.remove('p');
+      } else go.remove();
+      q('#paywallTitle').textContent = Hosted.trial === 'add-card' ? 'Get your free credits' : 'Keep going with Pro';
+      q('#paywallTitle').after(t);
+    }
     // The MCP line leads when the menubar's Unlock MCP opened it.
     if (reason === 'menubar') q('#paywallTitle').after(q('#paywallMcp'));
     if (!Hosted.signedIn) {
@@ -561,7 +613,9 @@ const Paywall = {
     };
     document.body.appendChild(overlay);
     this.el = overlay;
-    q('#paywallSubscribe').hidden || q('#paywallNotNow').focus();
+    const trialBtn = q('#paywallTrial');
+    if (trialBtn) trialBtn.focus();
+    else q('#paywallSubscribe').hidden || q('#paywallNotNow').focus();
   },
   // Back from a sign-up that Subscribe started: straight on to checkout.
   resume() {
@@ -4321,7 +4375,8 @@ const Chat = {
     // gone and you're not Pro — opens the paywall instead.
     if (!Connect.connected) { Connect.hold(text); return null; }
     if ((Gen.provider === 'hosted' && !Hosted.pro && Hosted.credits <= 0) || (Hosted.byoLocked && Gen.provider !== 'hosted' && (Gen.oauth || Gen.key))) {
-      Paywall.open('zero_credits');
+      // A card-trial account at 0 is owed its free credits, not out of them (16.35).
+      Paywall.open(Hosted.trial === 'add-card' ? 'trial' : 'zero_credits');
       return null;
     }
     Connect.keep('');
@@ -4587,7 +4642,7 @@ const Chat = {
         failure = e.message;
         // A hosted refusal (out of credits, paused) gets the way out painted
         // under it: Top up / Subscribe, or your own key or agent.
-        if (e.hostedCode) { reply.hosted = e.hostedCode; Hosted.paywall(e.hostedCode); }
+        if (e.hostedCode) { reply.hosted = e.hostedCode; Hosted.paywall(e.hostedCode, e.hostedSpendable); }
         if (Gen.provider === 'hosted') Hosted.turnDone(e.hostedCode || 'failed', vmAtStart);
         giveBack();
         this.failed(failure, remember, e);
