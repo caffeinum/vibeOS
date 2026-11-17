@@ -1293,6 +1293,18 @@ function paintHosted(body) {
   p(`free ${bal['credits-grant']} · Pro ${bal['credits-pro']} · top-up ${bal['credits-topup']}. A step needs up to about ${Hosted.HEADROOM} credits of headroom.`
     + (Hosted.grantPaused ? ' Free credits are paused for the rest of this month; paid ones still work.' : ''), 'tiny dimmer');
   if (Hosted.byoLocked) p(Hosted.PRO_LINE, 'small no');
+  // The card trial (16.35): owed the free credits until a card is added.
+  if (Hosted.trial === 'card-used') p(Hosted.TRIAL_USED_LINE, 'small no');
+  if (Hosted.trial === 'add-card') {
+    p(Hosted.TRIAL_LINE);
+    const go = document.createElement('button');
+    go.className = 'btn p sm'; go.id = 'hostedTrial'; go.textContent = Hosted.TRIAL_BUTTON;
+    const trialErr = document.createElement('p');
+    trialErr.className = 'no tiny'; trialErr.hidden = true;
+    go.onclick = async () => { try { await Hosted.checkout('trial', 'settings'); } catch (e) { trialErr.textContent = e.message; trialErr.hidden = false; } };
+    box.appendChild(go);
+    box.appendChild(trialErr);
+  }
   // Which model hosted AI runs (beads-tavc.16.10): one per provider, kept in
   // this browser; a turn already running keeps the model it started on.
   if (Hosted.models.length > 1) {
