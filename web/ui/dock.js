@@ -43,7 +43,8 @@ export function paintWorkspace() {
 // How the agent is signed in, in a few words: Codex, an API key, an agent
 // through vibeos-mcp, the local server, or nothing. Never the key, never
 // an account: a model id, a provider name, the MCP client's own name — all
-// textContent. The tooltip says where the credential lives.
+// textContent. The tooltip says where a pasted key lives; a ChatGPT login's
+// tokens go through /api/openai/*, so it makes no such claim for one.
 function mcpPill() {
   const name = RemoteBridge.agentName || RemoteBridge.detail || 'an agent';
   const paired = RemoteBridge.state === 'connected' || (RemoteBridge.token && RemoteBridge.state === 'waiting');
@@ -57,7 +58,7 @@ export function loginLine() {
   const agent = mcp.agent;
   const via = mcp.agent ? (mcp.reconnecting && !Gen.available ? mcp.suffix : mcp.reconnecting ? ' (reconnecting)' : ' + mcp') : '';
   if (Gen.viaServer) return { text: 'Server · ' + (Gen.model || 'local') + via, on: true, warn: mcp.reconnecting, title: 'A local vibeOS server holds the model.' + (agent ? (mcp.reconnecting ? mcp.titleExtra : ' ' + agent + ' also drives this desktop through vibeos-mcp.') : '') };
-  if (Gen.provider === 'openai-codex') return { text: 'Codex · ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'Signed in with ChatGPT. The model is ' + Gen.model + (Gen.codexModel ? ' (set in Settings › Model)' : ' (the default)') + '. Your tokens stay in this browser.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
+  if (Gen.provider === 'openai-codex') return { text: 'Codex · ' + Gen.model + via, on: true, warn: mcp.reconnecting, title: 'Signed in with ChatGPT. The model is ' + Gen.model + (Gen.codexModel ? ' (set in Settings › Model)' : ' (the default)') + '.' + (agent ? ' ' + agent + ' also drives this desktop through vibeos-mcp.' : '') };
   if (Gen.provider === 'hosted' && typeof Hosted !== 'undefined') {
     const low = Hosted.credits < Hosted.HEADROOM;
     return { text: 'Hosted · ' + Hosted.credits + ' credits' + via, on: !low && !Hosted.paused, warn: low || Hosted.paused,
