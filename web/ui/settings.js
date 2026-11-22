@@ -1392,7 +1392,7 @@ export function ModelApp(body) {
       <p class="note" style="margin-top:12px">
         ${Gen.oauth
           ? 'ChatGPT tokens stay in <code>localStorage</code> and are sent to vibeos.sh for proxied Codex inference.'
-          : 'API keys never reach vibeos.sh. They live in <code>localStorage</code> and go directly to Anthropic or OpenAI from your browser.'}
+          : 'API keys live in <code>localStorage</code> and go directly to Anthropic or OpenAI from your browser.'}
       </p>`;
     paintHosted(body);
     // Hosted AI preferred over the person's own key or ChatGPT login
