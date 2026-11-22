@@ -81,8 +81,20 @@ const HexEvents = {
 
 // `hexOnly` props ride the Hexclave row and never reach Vercel: the first
 // prompt's text is the one such prop (FirstPrompt below).
+// No error text in analytics (tavc.3.10): it can echo typed input, a provider's
+// body or terminal output. Dropped here too, for a forked caller that still sends it.
+const ERROR_TEXT = new Map([['gen_failed', 'error'], ['portal_failed', 'reason'], ['vm_restore_failed', 'error']]);
+const SNAPSHOT_REASONS = new Set(['manual', 'first boot', 'apt install']);
+function restoreFailure(message) {
+  return /did not restore within/.test(message) ? 'timeout'
+    : /did not answer on the serial line/.test(message) ? 'no-answer'
+    : /timed out/.test(message) ? 'exec-timeout'
+    : /superseded by a cold boot/.test(message) ? 'superseded'
+    : 'other';
+}
 function track(name, data, hexOnly) {
   try {
+    if (data && ERROR_TEXT.has(name)) { data = { ...data }; delete data[ERROR_TEXT.get(name)]; }
     if (BootArm.EVENTS.has(name) && BootArm.arm) data = { ...data, arm: BootArm.arm };
     if (DeviceStamp.EVENTS.has(name) && DeviceStamp.id) data = { ...data, ds: DeviceStamp.id };
     const evt = { name };
@@ -1397,7 +1409,7 @@ const VM = {
         try { await this.restore(image, snap); }
         catch (e) {
           this.restoreError = e.message;
-          track('vm_restore_failed', { image: image.id, error: String(e.message).slice(0, 80) });
+          track('vm_restore_failed', { image: image.id, code: restoreFailure(String(e.message)) });
           await this.discard();
           this.serial = '';
           try { await Snapshots.forget(image.id, this.store); }
@@ -1552,7 +1564,7 @@ const VM = {
       const info = await Snapshots.write(this.bootedImage, state, store, takenAt);
       this.snapshotInfo = { ...info, reason, ms: Date.now() - t0 };
       this.snapshotError = '';
-      track('vm_snapshot', { image: this.bootedImage, reason, mb: Math.round(info.bytes / 1048576), seconds: Math.round((Date.now() - t0) / 1000) });
+      track('vm_snapshot', { image: this.bootedImage, reason: SNAPSHOT_REASONS.has(reason) ? reason : 'other', mb: Math.round(info.bytes / 1048576), seconds: Math.round((Date.now() - t0) / 1000) });
       this.emit();
       return this.snapshotInfo;
     } catch (e) {

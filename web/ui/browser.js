@@ -190,14 +190,17 @@ export function BrowserApp(body) {
     status.textContent = 'fetching…';
     frame.removeAttribute('srcdoc');
     const guest = isGuestHost(url);
-    const host = (() => { try { return new URL(url).host; } catch { return url; } })();
+    const parsedHost = (() => { try { return new URL(url).host; } catch { return null; } })();
+    const host = parsedHost ?? url;   // shown to the person
+    // A hostname, never what was typed: Chrome takes spaces into a host as %20 (tavc.3.10).
+    const trackedHost = /^[a-z0-9.:[\]_-]+$/i.test(parsedHost ?? '') ? parsedHost : 'invalid';
     // What people do in the Browser, host-level only: a search, a site, or the
     // machine's own dev server — never the path or the query, which is theirs.
     const query = guest ? null : searchQuery(url);
     const kind = guest ? 'localhost' : query !== null ? 'search' : 'site';
     const t0 = Date.now();
     try {
-      track('browser_open', { kind, host: kind === 'search' ? 'search' : host, guest, how: push ? 'nav' : 'history' });
+      track('browser_open', { kind, host: kind === 'search' ? 'search' : trackedHost, guest, how: push ? 'nav' : 'history' });
       if (query !== null && !url.startsWith(SEARCH)) {
         // A google, bing or duckduckgo search (or google's "turn on
         // JavaScript" page) is answered by the engine that answers: the

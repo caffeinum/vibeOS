@@ -231,7 +231,7 @@ export function PortalApp(body, el, opts = {}) {
     if (st.busy) return;
     if (!Gen.forImageGen) {
       setStatus(Gen.imageRefusal(), true);
-      try { track('portal_failed', { reason: 'no_key' }); } catch {}
+      try { track('portal_failed', { code: 'no_key' }); } catch {}
       return;
     }
     hint.textContent = costHint();
@@ -251,7 +251,7 @@ export function PortalApp(body, el, opts = {}) {
       stopProgress();
       const msg = e.message || String(e);
       setStatus(msg, true);
-      try { track('portal_failed', { reason: msg.slice(0, 80) }); } catch {}
+      try { track('portal_failed', { code: failureBucket(msg), ...(Number.isInteger(e.status) ? { status: e.status } : {}) }); } catch {}
       try { track('portal_generate', { reason: reason || 'open', ok: false }); } catch {}
     } finally {
       stopProgress();
@@ -332,7 +332,7 @@ export function PortalApp(body, el, opts = {}) {
       await generateImage({ prompt: String(scenePrompt).trim(), size, inputImage: img.src, reason: 'click' });
     } catch (e) {
       setStatus(e.message || String(e), true);
-      try { track('portal_failed', { reason: 'click' }); } catch {}
+      try { track('portal_failed', { code: 'click' }); } catch {}
     }
   });
 

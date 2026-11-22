@@ -1035,7 +1035,7 @@ async function parseImageResponse(r, label) {
     const msg = j?.error?.message || j?.error?.code || (typeof j?.error === 'string' ? j.error : '')
       || (typeof d === 'string' ? d : d?.message) || j?.message || text.trim().slice(0, 200) || 'request failed';
     if (/moderation|safety system|content policy/i.test(String(msg))) throw new Error('the image was refused by content moderation — try a different topic');
-    throw new Error(label + ' ' + r.status + ': ' + msg);
+    throw Object.assign(new Error(label + ' ' + r.status + ': ' + msg), { status: r.status });
   }
   const b64 = j?.data?.[0]?.b64_json;
   if (!b64) throw new Error(label + ' answered with no image data');
@@ -4178,20 +4178,31 @@ const CONNECT_PROMPTS = [
   { which: 'ui', text: 'Create a custom UI on my vibeOS desktop that helps me develop this project.' },
 ];
 
-// Vercel's analytics API exposes event counts but not event properties, so
-// the error on gen_failed is unreadable from outside the dashboard. A coarse
-// bucket as its own event name is countable: 9 failures in a day could be
-// one expired key or a broken deploy, and those need different fixes.
+// A coarse bucket as its own event name is countable: 9 failures in a day
+// could be one expired key or a broken deploy, and those need different fixes.
+// Never the error's words (tavc.3.10): a listed value, or 'other'.
 // `err` is the thrown error when there is one: a provider's carries provider,
 // status (0 for no answer) and code, so gen_failed says which provider
 // answered what (tavc.26: three "no credits" read as 'other' with no status).
+const FAILURE_PROVIDERS = new Set(['openai', 'anthropic', 'openai-codex', 'hosted']);
+const FAILURE_CODES = new Set([
+  'invalid_api_key', 'invalid_request_error', 'insufficient_quota', 'rate_limit_exceeded', 'model_not_found',
+  'context_length_exceeded', 'unsupported_parameter', 'unsupported_country_region_territory', 'server_error',
+  'authentication_error', 'billing_error', 'permission_error', 'not_found_error', 'request_too_large',
+  'rate_limit_error', 'api_error', 'overloaded_error', 'usage_limit_reached',
+  'out-of-credits', 'paused', 'needs-pro', 'timeout', 'server-timeout', 'network', 'lease-lost', 'bad-request',
+]);
+const listed = (set, value) => set.has(value) ? value : 'other';
 function trackFailure(failure, err) {
-  const props = { error: String(failure).slice(0, 80) };
+  const bucket = failureBucket(failure);
+  const props = { bucket };
   const provider = err?.provider || Gen.provider;
-  if (provider) props.provider = provider;
+  if (provider) props.provider = listed(FAILURE_PROVIDERS, provider);
   if (Number.isInteger(err?.status)) props.status = err.status;
+  const code = err?.code || err?.hostedCode;
+  if (code) props.code = listed(FAILURE_CODES, code);
   track('gen_failed', props);
-  track('gen_failed_' + failureBucket(failure));
+  track('gen_failed_' + bucket);
 }
 // An account out of credits is not a model problem, and Reset model cannot
 // fix it: OpenAI's prepaid "You have no credits remaining…" (and the older
