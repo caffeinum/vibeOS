@@ -308,11 +308,23 @@ export function ChatApp(body, win) {
     const pro = b.querySelector('#hostedPro');
     if (pro) pro.onclick = () => Paywall.open('zero_credits');
     const own = b.querySelector('#hostedOwnKey');
-    if (own) own.onclick = () => { track('hosted_own_key_click', { code: t.hosted }); openSettings('model'); };
+    if (own) own.onclick = () => openOwnKey(t.hosted);
     const btn = b.querySelector('#resetModel');
     if (!btn) return;
     btn.textContent = 'Reset model to ' + to + ' and retry';
     btn.onclick = () => { btn.disabled = true; Chat.resetModelAndRetry(Chat.turns[i - 1].text).catch(e => Chat.line(e.message, true)); };
+  };
+  // The wall's own-key button (tavc.16.40): did the pane open, and what came
+  // of it. The window carries from=wall until it leaves the Model tab.
+  const openOwnKey = code => {
+    track('hosted_own_key_click', { code });
+    let pane;
+    try { pane = openSettings('model'); }
+    catch (e) { track('hosted_own_key_failed', { at: 'open', reason: 'threw' }); throw e; }
+    if (!pane || !pane.querySelector('#setkey')) { track('hosted_own_key_failed', { at: 'open', reason: 'not-painted' }); return; }
+    Windows.rec(pane).spec.opts.from = 'wall';
+    pane.dataset.connectFrom = 'wall';
+    track('hosted_own_key_opened', { code });
   };
   const paintTurn = (t, i) => {
     if (t.role === 'user') {

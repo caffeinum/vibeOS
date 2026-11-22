@@ -1035,7 +1035,12 @@ export function SettingsApp(body, win, opts) {
   // a detached node kept repainting until the window closed.
   const show = (tab) => {
     Windows.dispose(win);
-    if (opts) opts.tab = tab.id;
+    if (opts) {
+      opts.tab = tab.id;
+      // Who sent the person to the Model tab (tavc.16.40): kept across a repaint, gone on leaving it.
+      if (tab.id !== 'model') delete opts.from;
+      if (opts.from) win.dataset.connectFrom = opts.from; else delete win.dataset.connectFrom;
+    }
     [...nav.children].forEach(b => b.style.background = b.dataset.id === tab.id ? 'var(--sel)' : 'transparent');
     pane.innerHTML = '';
     pane.style.padding = '';

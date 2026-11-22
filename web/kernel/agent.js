@@ -382,7 +382,12 @@ const Connect = {
   // the key modal held (connect your agent, ChatGPT, a pasted key), with the
   // same element ids, so a suite or a fork that drives them by id still does.
   buildOptions(root, from = 'card') {
-    const src = { from };
+    // Read when a door is pressed, before it connects: a connect repaints the
+    // pane and detaches root.
+    const source = () => {
+      const marked = root.closest('[data-connect-from]');
+      return { from: marked ? marked.dataset.connectFrom : from };
+    };
     root.innerHTML = `
       <div class="col connect-options">
         <div class="row" style="gap:6px">
@@ -417,16 +422,21 @@ const Connect = {
     let offBridge = null;
     const done = () => { if (offBridge) offBridge(); };
     q('#keyConnectBtn').onclick = async () => {
+      const src = source(), wall = src.from === 'wall';
+      let failed = false;
+      const fail = reason => { if (wall && !failed) { failed = true; track('hosted_own_key_failed', { at: 'agent', reason }); } };
       track('connect_agent_click', src);
       const btn = q('#keyConnectBtn'), panel = q('#keyConnectPanel'), err = q('#keyConnectError'), cmd = q('#keyConnectCmd'), st = q('#keyConnectState');
       err.hidden = true; btn.disabled = true;
       if (!RemoteBridge.token) {
         const ok = await RemoteBridge.pair();
-        if (!ok) { err.textContent = RemoteBridge.detail || 'pairing is not available here'; err.hidden = false; btn.disabled = false; return; }
+        if (!ok) { fail('pair'); err.textContent = RemoteBridge.detail || 'pairing is not available here'; err.hidden = false; btn.disabled = false; return; }
       }
+      if (RemoteBridge.state !== 'connected') RemoteBridge.pairedFrom = wall ? 'wall' : '';
       cmd.textContent = RemoteBridge.command();
       panel.hidden = false;
       const paint = (state, detail) => {
+        if (state === 'error') fail('relay');
         if (RemoteBridge.token) cmd.textContent = RemoteBridge.command();
         st.textContent = state === 'connected' ? (detail || 'an agent') + ' connected'
           : state === 'waiting' ? 'waiting for your agent…'
@@ -454,12 +464,15 @@ const Connect = {
     const save = () => {
       const k = q('#keyInput').value.trim();
       if (!k) return;
+      const src = source();
       Gen.saveKey(k);
       track('key_added', { via: 'paste', ...src }); AgentActivity.connected('key');
     };
     q('#keySaveBtn').onclick = save;
     q('#keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') save(); });
     q('#keyLoginBtn').onclick = async () => {
+      const src = source();
+      let stage = 'start';
       track('login_openai_click', src);
       const slot = q('#keyOAuthSlot'), errEl = q('#keyOAuthError'), loginBtn = q('#keyLoginBtn');
       errEl.hidden = true; errEl.textContent = '';
@@ -468,9 +481,12 @@ const Connect = {
         const flow = await VibeOSOAuth.startOAuthDeviceFlow();
         slot.innerHTML = VibeOSOAuth.renderOAuthPanelHtml({ code: flow.code, url: flow.url, status: 'waiting' });
         VibeOSOAuth.wireOAuthPanel(slot, flow);
+        stage = 'poll';
         const tokens = await VibeOSOAuth.pollOAuthUntilComplete(flow.id, {
           sleep: ms => new Promise(r => setTimeout(r, ms)), intervalMs: 5000, fetchImpl: fetch,
           onPoll: result => {
+            if (result.status === 'denied') stage = 'denied';
+            else if (result.status === 'complete') stage = 'save';
             if (result.status === 'pending') VibeOSOAuth.updateOAuthPanelStatus(slot, flow, 'polling');
             else if (result.status === 'complete') VibeOSOAuth.updateOAuthPanelStatus(slot, flow, 'complete');
           },
@@ -479,6 +495,8 @@ const Connect = {
         track('key_added', { via: 'codex', ...src });
         AgentActivity.connected('key');
       } catch (e) {
+        // A bucket, never the provider's words.
+        if (src.from === 'wall') track('hosted_own_key_failed', { at: 'codex', reason: e && e.message === 'authorization timed out' ? 'timeout' : stage });
         const statusEl = slot.querySelector('#oauthPanel .oauth-status');
         if (statusEl) statusEl.textContent = (e && e.message) || 'authorization failed';
         errEl.textContent = (e && e.message) || 'authorization failed';
@@ -2760,6 +2778,7 @@ const RemoteBridge = {
     setRemoteToken(this.mint());
     this.agentName = '';
     this.pairedHow = 'pane';
+    this.pairedFrom = '';
     this.set('pairing', 'dialing the relay');
     this.dial();
     return true;
@@ -2851,6 +2870,7 @@ const RemoteBridge = {
     this.agentName = '';
     this.fromLink = true;
     this.pairedHow = 'link';
+    this.pairedFrom = '';
     track('mcp_link_accepted', { relay: link.relay ? 'named' : 'default' });
     this.set('pairing', 'dialing the relay');
     this.dial();
@@ -3073,13 +3093,17 @@ const RemoteBridge = {
   // cursor), lowercased, [a-z0-9._-] only, 40 chars; '' when there is none.
   clientName(name) { return String(name || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40); },
   pairedPending: null,
+  // 'wall' from the wall's own-key pane until that pairing connects (tavc.16.40).
+  pairedFrom: '',
+  pendingFrom: '',
   pairedTimer: null,
   flushPaired() {
     clearTimeout(this.pairedTimer); this.pairedTimer = null;
     if (!this.pairedPending) return;
     const agent = this.clientName(this.agentName);
-    track('mcp_paired', agent ? { how: this.pairedPending, agent } : { how: this.pairedPending });
+    track('mcp_paired', { how: this.pairedPending, ...(agent ? { agent } : {}), ...(this.pendingFrom ? { from: this.pendingFrom } : {}) });
     this.pairedPending = null;
+    this.pendingFrom = '';
   },
 
   connected(name = '') {
@@ -3093,7 +3117,7 @@ const RemoteBridge = {
     // and carries which client paired: the HN read could not tell (2.17.1.4).
     // Only a name this call carried ends the wait early: agentName may be the
     // stored name of the LAST client (resume reads it back), not this one.
-    if (this.state !== 'connected') { this.pairedPending = this.pairedHow || 'unknown'; AgentActivity.connected('mcp'); clearTimeout(this.pairedTimer); this.pairedTimer = setTimeout(() => this.flushPaired(), LINK_ANNOUNCE_MS); }
+    if (this.state !== 'connected') { this.pairedPending = this.pairedHow || 'unknown'; this.pendingFrom = this.pairedFrom; this.pairedFrom = ''; AgentActivity.connected('mcp'); clearTimeout(this.pairedTimer); this.pairedTimer = setTimeout(() => this.flushPaired(), LINK_ANNOUNCE_MS); }
     if (name) this.flushPaired();
     this.set('connected', label);
     // A link pairing lands with no pane open: the person accepted a dialog,
