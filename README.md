@@ -6,7 +6,7 @@
 
 ## try it
 
-Open **[vibeos.sh/app](https://vibeos.sh/app)** in a Chromium browser (Chrome, Edge, Arc, …). No install. Sign in with ChatGPT (Codex) or paste your own API key — keys stay in the browser and go straight to the provider.
+Open **[vibeos.sh/app](https://vibeos.sh/app)** in a Chromium browser (Chrome, Edge, Arc, …). No install. Sign in with ChatGPT (Codex) or paste your own API key.
 
 ## what this repo is
 
