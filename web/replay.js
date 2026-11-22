@@ -17,7 +17,12 @@
  *   key's length is kept;
  * - blocked outright (a grey box, no content, no mutations): the machine's
  *   screen, the Terminal, every password input, the key modal's input, and
- *   every iframe;
+ *   iframes as elements. NOT their attributes: rrweb still records a blocked
+ *   element's attribute changes, so the Browser's iframe.srcdoc (the html of
+ *   the page someone browsed) was stored whole (beads-tavc.4.6). Attributes
+ *   are not masked anywhere else either. This must not record again as is:
+ *   srcdoc and every other attribute that can hold content need dropping
+ *   first, with a test that reads the events (beads-tavc.3.11);
  * - no canvas, no fonts, no inlined images.
  * The served file only: never in OS_FILES, so a forked kernel cannot change
  * what is masked. The mirror and the image never load it (HexEvents.hosted()).
