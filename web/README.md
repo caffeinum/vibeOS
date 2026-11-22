@@ -32,7 +32,7 @@ either a **browser window** (an ES module, imported live, no build step) or a
 - **Sync is a diff**, not a mount: push/pull per file, auto every 60s, plus a
   live push whenever the VM writes. Conflicts are never resolved automatically.
 - **Bring your own key.** It is stored in `localStorage` and sent straight to
-  Anthropic or OpenAI. No key ships with the app and none reaches vibeos.sh.
+  Anthropic or OpenAI. No key ships with the app.
 
 ## What a tab cannot do
 
