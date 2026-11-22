@@ -16,6 +16,25 @@
      events. Never keys. Half of browsers also send a session replay (replay.js,
      loaded by kernel/boot.js): layout, windows and clicks, with every word and
      every input masked and the machine's screen and Terminal left out. -->
+<script>
+  // The only address analytics is told: origin, path, campaign tags with a plain
+  // value, and the referrer's origin (beads-tavc.3.16). An allowlist. Registered
+  // before the script's tag, so before its first send; on a throw, nothing is sent.
+  (function () {
+    var TAG = /^(utm_(source|medium|campaign|term|content)|ref)$/, VALUE = /^[\w .-]{1,64}$/;
+    (window.vaq = window.vaq || []).push(['beforeSend', function (event) {
+      try {
+        var from = new URL(event.url), kept = new URLSearchParams();
+        from.searchParams.forEach(function (value, key) { if (TAG.test(key) && VALUE.test(value)) kept.append(key, value); });
+        var query = kept.toString();
+        return Object.assign({}, event, { url: from.origin + from.pathname + (query ? '?' + query : '') });
+      } catch (e) { return null; }
+    }]);
+    var referrer = '';
+    try { if (document.referrer) referrer = new URL(document.referrer).origin + '/'; } catch (e) { referrer = ''; }
+    Object.defineProperty(document, 'referrer', { configurable: true, get: function () { return referrer; } });
+  })();
+</script>
 <script defer src="/_vercel/insights/script.js"></script>
 <link rel="stylesheet" id="osStyle" href="">
 
