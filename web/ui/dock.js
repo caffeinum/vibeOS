@@ -662,8 +662,7 @@ function startTray() {
    splash or card, or the research ask. When both are due the keep card goes
    first; the ask waits until it is closed (window.__vibeosKeepDue).
 
-   Behind KEEP_CARD_ON (off) until the strings from vibeos-writer land
-   (beads-tavc.58.1): KEEP_COPY holds placeholder keys, not copy.
+   Behind KEEP_CARD_ON (off) until the review of the copy (beads-tavc.58.1).
    window.__vibeosKeepCard = true turns it on for a page (the e2e);
    window.__vibeosKeepTiming overrides KEEP_TIMING.
 
@@ -674,16 +673,18 @@ export const KEEP_CARD_ON = false;
 const KEEP_KEY = 'vibeos-keep-card', KEEP_APP_KEY = 'vibeos-keep-app';
 const KEEP_TIMING = { quietMs: 15000, pollMs: 1000 };
 const KEEP_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash, #bootCard, #researchAsk';
-// Placeholder keys until beads-tavc.58.1's strings land. {title} is the
-// made app's dock title (a data/ write has none: it reads as '').
+// vibeos-writer's strings (beads-tavc.58.1). Safari gets bookmark hints, not
+// Add to Dock / Add to Home Screen: a Safari web app keeps its own website
+// data, so it would open without the person's apps. Chromium's install shares
+// the profile's storage, so the Install button stays there.
 const KEEP_COPY = {
-  title: 'keep.title {title}',
-  body: 'keep.body',
-  install: 'keep.install',
-  gotIt: 'keep.got_it',
-  safari_mac: 'keep.hint.safari_mac',
-  safari_ios: 'keep.hint.safari_ios',
-  bookmark: 'keep.hint.bookmark',
+  title: 'Come back to what you made',
+  body: 'What you made lives in this browser on this computer, so open vibeOS here again to find it.',
+  install: 'Install as an app',
+  gotIt: 'Got it',
+  safari_mac: 'Bookmark this page with ⌘D so you can open it in Safari again.',
+  safari_ios: 'In Safari, tap Share › Add Bookmark so you can open this page again.',
+  bookmark: 'Press ⌘D (Ctrl+D on Windows and Linux) to bookmark this page.',
 };
 
 // Which way back this browser has: 'prompt' (Chromium offered install),
@@ -721,7 +722,7 @@ function startKeepCard() {
   const booted = () => VM.state === 'ready' || VM.state === 'unavailable' || VM.state === 'failed';
   const due = () => {
     // From the moment show() starts until the card is closed, the slot is
-    // the keep card's: show() awaits the app list before it paints.
+    // the keep card's.
     if (holding) return true;
     if (ended || card || document.readyState !== 'complete') return false;
     if (!booted() || Chat.running || Chat.starting) return false;
@@ -742,27 +743,21 @@ function startKeepCard() {
     ended = true;
     clearInterval(poll);
   }
-  async function show(made) {
+  function show(made) {
     holding = true;
     try { store.setItem(KEEP_KEY, made.made + ' ' + new Date().toISOString()); } catch { holding = false; return end(); }
     end();
-    let title = '';
     if (made.made === 'app') {
       try { store.setItem(KEEP_APP_KEY, made.file); } catch {}
-      try {
-        const name = made.file.slice('apps/'.length);
-        const app = (await Apps.list()).apps.find(a => a.name === name);
-        if (app) title = app.title;
-      } catch (e) { console.warn('keep card: could not read the app list', e); }
     }
     const install = keepInstallKind();
-    card = paintKeep(made.made, install, title, () => { card = null; holding = false; window.__vibeosKeepDue = null; });
+    card = paintKeep(made.made, install, () => { card = null; holding = false; window.__vibeosKeepDue = null; });
     track('keep_card_shown', { made: made.made, install });
   }
   return () => { end(); window.__vibeosKeepDue = null; if (card) card.remove(); };
 }
 
-function paintKeep(made, install, title, closed) {
+function paintKeep(made, install, closed) {
   const el = document.createElement('div');
   el.id = 'keepCard';
   el.className = 'ask-card keep-card';
@@ -774,7 +769,7 @@ function paintKeep(made, install, title, closed) {
   head.className = 'ask-head';
   const line = document.createElement('p');
   line.className = 'ask-line keep-title';
-  line.textContent = KEEP_COPY.title.replace('{title}', title);
+  line.textContent = KEEP_COPY.title;
   const x = document.createElement('button');
   x.type = 'button';
   x.className = 'ask-x';
