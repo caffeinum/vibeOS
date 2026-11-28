@@ -109,6 +109,15 @@ over CDP, terminals and agent chat — lived in `src/` and was removed from
 `main`. It is preserved at the
 [`legacy-nextjs`](https://github.com/caffeinum/vibeOS/tree/legacy-nextjs) tag.
 
+## built on
+
+The experimental unkernel engine (`?engine=unkernel`) is
+[unkernel](https://github.com/pithings/unkernel) by Pooya Parsa: the Linux
+kernel compiled to WebAssembly, running arm64 programs on an emulated CPU. Its
+kernel is GPL-2.0 and we ship it unmodified
+([source for the build we ship](https://github.com/pithings/unkernel/tree/v0.2.0-261121-e69adda));
+its SDK is MIT.
+
 ## license
 
 MIT — see [LICENSE](LICENSE).

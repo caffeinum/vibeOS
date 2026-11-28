@@ -101,6 +101,28 @@ function snapshotBox() {
   return box;
 }
 
+// ?engine=unkernel (beads-tavc.66.2): the machine is unkernel's, and the
+// Machine tab says so, with the exact source of the kernel it runs (GPL-2.0).
+// vibeos-writer's words (tavc.66.2). "ships here unmodified" holds only while
+// the served wasm is byte-equal to UNKERNEL.version's release: a patch or a
+// new tag changes this line and UNKERNEL.source in the same PR.
+const UNKERNEL_COPY = {
+  credit: 'This machine runs on unkernel by Pooya Parsa: the Linux kernel compiled to WebAssembly, running arm64 programs on an emulated CPU. Its kernel is GPL-2.0 and ships here unmodified; its SDK is MIT.',
+  source: 'Source for this build',
+};
+function unkernelCredit() {
+  const el = document.createElement('div');
+  el.className = 'tiny dimmer unkernel-credit';
+  el.style.cssText = 'padding:6px 10px;border-bottom:1px solid var(--barline)';
+  const a = document.createElement('a');
+  a.href = UNKERNEL.source;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.textContent = UNKERNEL_COPY.source;
+  el.append(UNKERNEL_COPY.credit + ' ', a);
+  return el;
+}
+
 export function ConsoleApp(body, win) {
   // Raw machine console: boot and kernel output. A debug surface, kept apart
   // from the Terminal so command output is not buried in boot spam.
@@ -113,8 +135,8 @@ export function ConsoleApp(body, win) {
       hint.style.cssText = 'padding:6px 10px;border-bottom:1px solid var(--barline)';
       hint.textContent = 'Machine console: boot and kernel output. To run commands, use the Terminal.';
       body.appendChild(hint);
-      body.appendChild(imageSwitch());
-      body.appendChild(snapshotBox());
+      if (VM.engine === 'unkernel') body.appendChild(unkernelCredit());
+      else { body.appendChild(imageSwitch()); body.appendChild(snapshotBox()); }
       body.appendChild(VM.screen);
       return;
     }
