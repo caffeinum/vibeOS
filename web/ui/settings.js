@@ -103,10 +103,12 @@ function snapshotBox() {
 
 // ?engine=unkernel (beads-tavc.66.2): the machine is unkernel's, and the
 // Machine tab says so, with the exact source of the kernel it runs (GPL-2.0).
-// Placeholder keys until vibeos-writer's words land.
+// vibeos-writer's words (tavc.66.2). "ships here unmodified" holds only while
+// the served wasm is byte-equal to UNKERNEL.version's release: a patch or a
+// new tag changes this line and UNKERNEL.source in the same PR.
 const UNKERNEL_COPY = {
-  credit: 'unkernel.credit',
-  source: 'unkernel.source_link',
+  credit: 'This machine runs on unkernel by Pooya Parsa: the Linux kernel compiled to WebAssembly, running arm64 programs on an emulated CPU. Its kernel is GPL-2.0 and ships here unmodified; its SDK is MIT.',
+  source: 'Source for this build',
 };
 function unkernelCredit() {
   const el = document.createElement('div');
