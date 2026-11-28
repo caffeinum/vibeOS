@@ -101,6 +101,26 @@ function snapshotBox() {
   return box;
 }
 
+// ?engine=unkernel (beads-tavc.66.2): the machine is unkernel's, and the
+// Machine tab says so, with the exact source of the kernel it runs (GPL-2.0).
+// Placeholder keys until vibeos-writer's words land.
+const UNKERNEL_COPY = {
+  credit: 'unkernel.credit',
+  source: 'unkernel.source_link',
+};
+function unkernelCredit() {
+  const el = document.createElement('div');
+  el.className = 'tiny dimmer unkernel-credit';
+  el.style.cssText = 'padding:6px 10px;border-bottom:1px solid var(--barline)';
+  const a = document.createElement('a');
+  a.href = UNKERNEL.source;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.textContent = UNKERNEL_COPY.source;
+  el.append(UNKERNEL_COPY.credit + ' ', a);
+  return el;
+}
+
 export function ConsoleApp(body, win) {
   // Raw machine console: boot and kernel output. A debug surface, kept apart
   // from the Terminal so command output is not buried in boot spam.
@@ -113,8 +133,8 @@ export function ConsoleApp(body, win) {
       hint.style.cssText = 'padding:6px 10px;border-bottom:1px solid var(--barline)';
       hint.textContent = 'Machine console: boot and kernel output. To run commands, use the Terminal.';
       body.appendChild(hint);
-      body.appendChild(imageSwitch());
-      body.appendChild(snapshotBox());
+      if (VM.engine === 'unkernel') body.appendChild(unkernelCredit());
+      else { body.appendChild(imageSwitch()); body.appendChild(snapshotBox()); }
       body.appendChild(VM.screen);
       return;
     }

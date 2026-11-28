@@ -886,8 +886,221 @@ function overlayWrites(buf, offset, data) {
   }
 }
 
+/* ---- a second engine: unkernel (beads-tavc.66.2) -------------------------
+
+   ?engine=unkernel boots unkernel (github.com/pithings/unkernel, Linux
+   compiled to wasm, aarch64 user space) instead of v86. Off by default: a
+   page without the parameter never imports it and nothing below runs.
+
+   What it covers today: the boot, VM.exec / vm_exec (unkernel's exec on
+   pipes, as root, stderr folded into stdout in order), VM.tty (a pty from
+   unkernel's spawn, so the Terminal pane works), and the guest's network
+   through OUR relay (VM.relay, the same setting v86 dials; never
+   wisp.unkernel.dev). Not yet: the /mnt mirror and Sync (no 9p from this
+   side), snapshots, read_desktop's VGA screen. Those read VM.emu, which
+   stays null here, and fail the way they do with no machine.
+
+   The kernel (GPL-2.0) is served as its own file, unmodified, from
+   UNKERNEL_ASSETS, with the SDK (MIT) beside it, exactly as the npm
+   package and the GitHub release ship them (sha-256 equal, checked).
+   UNKERNEL.source is the corresponding source of that exact build.
+   ------------------------------------------------------------------------ */
+const UNKERNEL_ASSETS = BASE + 'unkernel/';
+const UNKERNEL = {
+  version: '0.2.0-261121-e69adda',
+  source: 'https://github.com/pithings/unkernel/tree/v0.2.0-261121-e69adda',
+  distro: 'alpine.erofs',
+  memoryMiB: 256,
+  routeWaitMs: 10000,
+};
+const Unkernel = {
+  on: (() => { try { return new URLSearchParams(location.search).get('engine') === 'unkernel'; } catch { return false; } })(),
+  mod: null,
+  vm: null,
+  arch: '',
+  console: '',
+  running: new Set(),
+  async available() {
+    try { return (await fetch(UNKERNEL_ASSETS + 'web.mjs', { method: 'HEAD' })).ok; }
+    catch { return false; }
+  },
+  wsUrl(relay) {
+    if (!relay) return '';
+    if (/^wisps:\/\//.test(relay)) return 'wss://' + relay.slice('wisps://'.length);
+    if (/^wisp:\/\//.test(relay)) return 'ws://' + relay.slice('wisp://'.length);
+    if (/^wss?:\/\//.test(relay)) return relay;
+    throw new Error('the relay is not a wisp/wisps/ws/wss url: ' + relay);
+  },
+  async boot(V) {
+    V.bootedImage = 'alpine';
+    V.set('booting');
+    V.bootStarted = Date.now();
+    V.bootHiddenFrom = Hidden.total();
+    V.store = null; V.restored = false; V.restoredFrom = null; V.keptSnapshot = false;
+    V.ttyState = ''; V.ttyError = ''; V.ttyMs = 0; V.ttyRestore = '';
+    V.net = ''; V.ip = ''; V.route = false; V.netError = ''; V._tty = {};
+    const seq = ++V._bootSeq;
+    try {
+      const mod = this.mod || (this.mod = await import(UNKERNEL_ASSETS + 'web.mjs'));
+      const support = await mod.checkSupport();
+      if (!support.ok) throw new Error('this browser cannot run unkernel: ' + (support.problems || []).join('; '));
+      const relay = V.relay;
+      V.bootedRelay = relay;
+      const ws = this.wsUrl(relay);
+      this.console = '';
+      V.screen = document.createElement('pre');
+      V.screen.className = 'vm-screen';
+      V.screen.tabIndex = 0;
+      V.screen.style.cssText = "background:#000;color:var(--titletext);height:100%;overflow:auto;margin:0;padding:6px;font:13px/1.2 'JetBrains Mono',monospace;white-space:pre-wrap;outline:none";
+      if (ws) V.net = 'connecting';
+      const kernel = await mod.createKernel({
+        distro: UNKERNEL_ASSETS + UNKERNEL.distro,
+        memoryMiB: UNKERNEL.memoryMiB,
+        ...(ws ? { net: mod.wispBackend([ws]) } : {}),
+      });
+      if (seq !== V._bootSeq) { try { kernel.stop(); } catch {} return; }
+      this.vm = kernel;
+      const text = new TextDecoder();
+      kernel.onOutput(bytes => {
+        this.console = (this.console + text.decode(bytes, { stream: true })).slice(-65536);
+        if (V.screen) { V.screen.textContent = this.console; V.screen.scrollTop = V.screen.scrollHeight; }
+      });
+      kernel.exited.then(r => {
+        if (this.vm !== kernel) return;
+        this.vm = null;
+        V.set('failed', `the unkernel guest ended (${r.kind}${r.reason ? ': ' + r.reason : ''}, code ${r.code})`);
+      }, e => { if (this.vm === kernel) { this.vm = null; V.set('failed', 'the unkernel guest crashed: ' + e.message); } });
+      // exec waits for the guest's own session server, so its answer is the
+      // machine answering, not the kernel loading.
+      const probe = await kernel.exec('uname', ['-m'], { user: 'root' });
+      if (probe.exitCode !== 0) throw new Error('uname -m in the guest exited ' + probe.exitCode + ': ' + probe.stderr.trim());
+      this.arch = probe.stdout.trim();
+      if (ws) await this.waitRoute(V, kernel);
+      V.ttyState = 'ready';
+      V.ttyMs = 0;
+      V.bootMs = Date.now() - V.bootStarted;
+      V.set('ready');
+    } catch (e) {
+      if (seq !== V._bootSeq) return;
+      console.error('unkernel boot failed:', e);
+      if (V.net === 'connecting') V.net = 'no lease';
+      V.set('failed', e.message);
+    }
+  },
+  // The guest asks for its lease on its own; the default route is what says
+  // it can reach anything. Bounded: a missing route is the pill's 'no lease'
+  // with the reason, never a failed machine.
+  async waitRoute(V, kernel) {
+    const t0 = Date.now();
+    for (;;) {
+      const r = await kernel.exec('sh', ['-c', "ip -4 route show default 2>/dev/null | head -1; ip -4 -o addr show 2>/dev/null | grep -v ' lo ' | head -1"], { user: 'root' });
+      const [route, addr] = r.stdout.split('\n');
+      if (route && route.trim()) {
+        V.route = true;
+        V.ip = ((addr || '').match(/inet ([0-9.]+)/) || [])[1] || '';
+        V.leased = true; V.net = 'connected'; V.link = 'open';
+        return;
+      }
+      if (Date.now() - t0 > UNKERNEL.routeWaitMs) {
+        V.net = 'no lease';
+        V.netError = `no default route in the unkernel guest after ${UNKERNEL.routeWaitMs / 1000}s`;
+        return;
+      }
+      await new Promise(res => setTimeout(res, 500));
+    }
+  },
+  stop() {
+    const kernel = this.vm;
+    this.vm = null;
+    for (const ac of this.running) { try { ac.abort(); } catch {} }
+    this.running.clear();
+    if (kernel) { try { kernel.stop(); } catch {} }
+  },
+  async exec(V, cmd, timeoutMs) {
+    if (V.state !== 'ready' || !this.vm) throw new Error('Linux is not running yet.');
+    const ac = new AbortController();
+    ac.why = 'timeout';
+    this.running.add(ac);
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      // `exec 2>&1` first: one stream in the order the program wrote it, as
+      // the serial line gives v86's exec.
+      const r = await this.vm.exec('sh', ['-c', 'exec 2>&1\n' + cmd], { user: 'root', signal: ac.signal });
+      return r.stdout.replace(/\r?\n$/, '');
+    } catch (e) {
+      if (ac.signal.aborted) {
+        const err = new Error(ac.why === 'interrupt'
+          ? `interrupted: ${cmd} — Ctrl-C on the machine's shell`
+          : `timed out after ${timeoutMs / 1000}s: ${cmd} — the command was killed`);
+        err.interrupted = ac.why === 'interrupt';
+        throw err;
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      this.running.delete(ac);
+    }
+  },
+  interrupt() {
+    for (const ac of this.running) { ac.why = 'interrupt'; ac.abort(); }
+  },
+  // The same handle VM.tty gives on v86, over a pty of unkernel's own: one
+  // holder per port, write/onData/resize/close. The shell is spawned on
+  // attach; bytes typed before it is up are kept and sent in order.
+  tty(V, port, holder) {
+    if (!this.vm) throw new Error('Linux is not running yet.');
+    const t = V._tty[port] || (V._tty[port] = { holder: null });
+    if (t.holder) throw new Error(`ttyS${port} is held by ${t.holder}; close that window first`);
+    t.holder = holder;
+    const listeners = new Set();
+    const queued = [];
+    let pty = null, closed = false, size = { cols: 80, rows: 24 };
+    const open = () => { if (closed) throw new Error(`this tty handle is closed (${holder})`); };
+    const say = s => { const b = new TextEncoder().encode(s); listeners.forEach(fn => { try { fn(b); } catch {} }); };
+    this.vm.spawn(undefined, undefined, { user: 'root', term: 'xterm', cols: size.cols, rows: size.rows }).then(async p => {
+      if (closed) { p.close().catch(() => {}); return; }
+      pty = p;
+      if (size.cols !== 80 || size.rows !== 24) p.resize(size.cols, size.rows);
+      for (const d of queued.splice(0)) await p.write(d);
+      const reader = p.output.getReader();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        listeners.forEach(fn => { try { fn(value); } catch {} });
+      }
+      const end = await p.ended.catch(e => ({ type: 'error', message: e.message }));
+      if (!closed) say(`\r\n[the shell ended: ${end.type}${end.code !== undefined ? ' ' + end.code : ''}${end.message ? ' ' + end.message : ''}; close this window and open it again]\r\n`);
+    }, e => { if (!closed) say(`\r\n[could not start a shell in the unkernel guest: ${e.message}]\r\n`); });
+    return {
+      port, holder,
+      write: data => { open(); if (pty) pty.write(data).catch(() => {}); else queued.push(data); },
+      onData: fn => {
+        open();
+        if (typeof fn !== 'function') throw new Error('tty.onData takes a function');
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+      resize: (cols, rows) => {
+        open();
+        if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 2) throw new Error(`tty.resize: cols and rows must be integers >= 2, got ${cols}x${rows}`);
+        size = { cols, rows };
+        if (pty) pty.resize(cols, rows);
+      },
+      close: () => {
+        if (closed) return;
+        closed = true;
+        listeners.clear();
+        if (pty) pty.close().catch(() => {});
+        if (t.holder === holder) t.holder = null;
+        V.emit();
+      },
+    };
+  },
+};
+
 const VM = {
   state: 'off',
+  engine: Unkernel.on ? 'unkernel' : 'v86',   // ?engine=unkernel, per page (beads-tavc.66.2)
   net: '',                 // '' = no relay, 'connecting' (lease or relay dial pending), 'no lease', then the link: connected | reconnecting | disconnected | unwatched
   ip: '',                  // the guest's lease, once it has one
   route: false,            // the guest has a default route; an address without one reaches nothing
@@ -1003,6 +1216,7 @@ const VM = {
   ensureBoot() { if (this.state === 'off') this.boot().catch(() => {}); },
 
   async available() {
+    if (Unkernel.on) return Unkernel.available();
     try { return (await fetch(V86_ASSETS + 'libv86.js', { method: 'HEAD' })).ok; }
     catch { return false; }
   },
@@ -1119,6 +1333,7 @@ const VM = {
   // destroy() waits for the CPU loop to notice it should stop; a machine that
   // is wedged never gets there, and a restart must not hang on it.
   async discard() {
+    if (Unkernel.on) Unkernel.stop();
     const emu = this.emu;
     this.emu = null;
     if (!emu) return;
@@ -1334,6 +1549,7 @@ const VM = {
   async boot(imageId) {
     if (this.state === 'booting' || this.state === 'ready') return;
     if (!(await this.available())) return this.set('unavailable');
+    if (Unkernel.on) return Unkernel.boot(this);
     const id = imageId || this.image;
     if (!IMAGES[id]) throw new Error('unknown image: ' + id);
     // The image is named BEFORE the state is announced: 'booting' listeners
@@ -1875,6 +2091,7 @@ const VM = {
   tty(port = 1, holder = 'unnamed') {
     if (!TTY_PORTS.includes(port)) throw new Error(`no ttyS${port}: the machine has ttyS${TTY_PORTS.join(', ttyS')}`);
     if (this.state !== 'ready') throw new Error('Linux is not running yet.');
+    if (Unkernel.on) return Unkernel.tty(this, port, holder);
     if (this.ttyState === 'failed') {
       this.retryTty();
       throw new Error(`the tty failed (${this.ttyError}); trying it again now — open it again in a moment`);
@@ -1920,6 +2137,7 @@ const VM = {
   // interleave both outputs and each would claim the other's lines.
   exec(cmd, timeoutMs = 20000) {
     checkTimeout(timeoutMs);
+    if (Unkernel.on) return Unkernel.exec(this, cmd, timeoutMs);
     const run = () => this._exec(cmd, timeoutMs);
     const next = (this._queue || Promise.resolve()).then(run, run);
     this._queue = next.catch(() => {});
@@ -1946,6 +2164,7 @@ const VM = {
   interrupt() {
     if (this.state !== 'ready') throw new Error('Linux is not running yet.');
     this.interruptedAt = Date.now();
+    if (Unkernel.on) return Unkernel.interrupt();
     this.emu.serial0_send('\x03');
   },
 
