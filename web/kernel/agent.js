@@ -3296,6 +3296,49 @@ const AgentActivity = {
   },
 };
 
+/* The keep card's trigger (ui/dock.js startKeepCard, beads-tavc.58.3): the
+   first doing call on this device that MADE something — create_app, or a
+   write_file / edit_file under apps/ or data/ (system/ is a restyle, not a
+   thing to come back to). Stamped once in vibeos-keep-made: {at, made:
+   'app'|'data', file} — file is the apps/ path for an app (what the card
+   names and the next visit opens), empty for data. Fed by executeTool beside
+   agent_did, the same doors (guest is not an agent here). Storage that
+   throws stamps nothing: no card. */
+const KeepMade = {
+  KEY: 'vibeos-keep-made',
+  note(call, out, via) {
+    if (via === 'guest' || this.get()) return;
+    let made = '', file = '';
+    if (call.toolName === 'create_app') {
+      if (!out || out.kind !== 'window' || typeof out.file !== 'string') return;
+      made = 'app'; file = out.file;
+    } else if (call.toolName === 'write_file' || call.toolName === 'edit_file') {
+      const path = String((call.input && call.input.path) || '').replace(/^\/+/, '');
+      if (path.startsWith('apps/')) { made = 'app'; file = path; }
+      else if (path.startsWith('data/')) made = 'data';
+      else return;
+    } else return;
+    try { localStorage.setItem(this.KEY, JSON.stringify({ at: Date.now(), made, file })); } catch {}
+  },
+  get() {
+    let raw = null;
+    try { raw = localStorage.getItem(this.KEY); } catch { return null; }
+    if (raw === null) return null;
+    try {
+      const v = JSON.parse(raw);
+      if (v && Number.isFinite(v.at) && (v.made === 'app' || v.made === 'data') && typeof v.file === 'string') return v;
+    } catch {}
+    console.warn('KeepMade: ' + this.KEY + ' is not {at, made, file} (' + raw.slice(0, 60) + '); ignored');
+    return null;
+  },
+};
+
+/* Chromium's install offer, kept for the keep card's Install button. Not
+   preventDefault'ed: nothing changes for a browser the card never reaches. */
+const KeepInstall = { event: null };
+addEventListener('beforeinstallprompt', e => { KeepInstall.event = e; });
+addEventListener('appinstalled', () => { KeepInstall.event = null; });
+
 /* The pairing-link consent gate.
 
    Every string that can come from the link is textContent — the relay host
@@ -3758,6 +3801,7 @@ const Agent = {
       const agent = via === 'mcp' ? RemoteBridge.clientName(RemoteBridge.agentName) : '';
       track('agent_did', agent ? { tool: call.toolName, via, agent } : { tool: call.toolName, via });
       AgentActivity.did(via);
+      KeepMade.note(call, out, via);
     }
     return out;
   },

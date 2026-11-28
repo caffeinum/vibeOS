@@ -171,9 +171,10 @@ export function start() {
   const offBanner = startCreditsBanner();
   const offPro = startProButton();
   const offTray = startTray();
+  const offKeep = startKeepCard();
   const offAsk = startAsk();
   const offPortal = (UI.live().startPortalMenu || (() => () => {}))();
-  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offProgress(); offSplash(); offBootCard(); offBanner(); offPro(); offTray(); offAsk(); offPortal(); };
+  return () => { offVM(); offWs(); offGen(); offBridge(); clearInterval(clock); offProgress(); offSplash(); offBootCard(); offBanner(); offPro(); offTray(); offKeep(); offAsk(); offPortal(); };
 }
 
 const winxp = () => document.documentElement.dataset.theme === 'winxp';
@@ -642,12 +643,206 @@ function startTray() {
    ASK_TIMING field by field (scripts/e2e/research-ask.mjs shortens them).
    One decision per page (__vibeosAskDecided, like the splash): a reload_ui
    retires a card on screen and the new ui does not ask again. */
+/* ---------- the keep card (beads-tavc.58.3) -------------------------------
+
+   After the first doing call on this device that made something (kernel
+   KeepMade: create_app, or a write under apps/ or data/), one non-modal card
+   in the research ask's slot offers a way back: install as an app where
+   Chromium offered it (KeepInstall.event → prompt()), else a per-browser hint
+   (Safari on macOS, Safari on iOS, a bookmark) and a Got it button. The press
+   also asks navigator.storage.persist() — only on the press, since Firefox
+   prompts for it. For an app, vibeos-keep-app = its apps/ path, and the next
+   page load opens it once (openKeptApp) and clears the key.
+
+   Who: hosted only (HexEvents.hosted()), never ?safe=1 / ?stock=1 / a
+   recovery boot, never in an installed window (display-mode: standalone),
+   once per browser (vibeos-keep-card; storage that throws: never). When:
+   not during the boot (the machine must be ready, unavailable or failed), not while Chat.running, not until quietMs (15 s) after the last
+   agent call, and never over the key modal, the recovery/fork bar, the boot
+   splash or card, or the research ask. When both are due the keep card goes
+   first; the ask waits until it is closed (window.__vibeosKeepDue).
+
+   Behind KEEP_CARD_ON (off) until the review of the copy (beads-tavc.58.1).
+   window.__vibeosKeepCard = true turns it on for a page (the e2e);
+   window.__vibeosKeepTiming overrides KEEP_TIMING.
+
+   Tracked, fixed words only, never a title or a file:
+   keep_card_shown {made, install}, keep_card_install {outcome, persisted},
+   keep_card_dismissed {}, keep_app_reopened {}. Every string is textContent. */
+export const KEEP_CARD_ON = false;
+const KEEP_KEY = 'vibeos-keep-card', KEEP_APP_KEY = 'vibeos-keep-app';
+const KEEP_TIMING = { quietMs: 15000, pollMs: 1000 };
+const KEEP_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash, #bootCard, #researchAsk';
+// vibeos-writer's strings (beads-tavc.58.1). Safari gets bookmark hints, not
+// Add to Dock / Add to Home Screen: a Safari web app keeps its own website
+// data, so it would open without the person's apps. Chromium's install shares
+// the profile's storage, so the Install button stays there.
+const KEEP_COPY = {
+  title: 'Come back to what you made',
+  body: 'What you made lives in this browser on this computer, so open vibeOS here again to find it.',
+  install: 'Install as an app',
+  gotIt: 'Got it',
+  safari_mac: 'Bookmark this page with ⌘D so you can open it in Safari again.',
+  safari_ios: 'In Safari, tap Share › Add Bookmark so you can open this page again.',
+  bookmark: 'Press ⌘D (Ctrl+D on Windows and Linux) to bookmark this page.',
+};
+
+// Which way back this browser has: 'prompt' (Chromium offered install),
+// 'safari_ios', 'safari_mac', else 'bookmark'.
+function keepInstallKind() {
+  if (typeof KeepInstall !== 'undefined' && KeepInstall.event) return 'prompt';
+  const ua = navigator.userAgent;
+  const safari = /Safari\//.test(ua) && !/(Chrome|Chromium|CriOS|FxiOS|EdgiOS|Edg|OPR|Android)\//.test(ua);
+  if (!safari) return 'bookmark';
+  if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'safari_ios';
+  return 'safari_mac';
+}
+
+const keepStandalone = () => {
+  try { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; } catch { return false; }
+};
+
+function startKeepCard() {
+  if (window.__vibeosKeepDecided) return () => {};
+  window.__vibeosKeepDecided = true;
+  const boot = window.__vibeosBoot || {};
+  if (boot.safe || boot.stock || boot.recovering) return () => {};
+  if (typeof KeepMade === 'undefined' || typeof HexEvents === 'undefined' || typeof Chat === 'undefined' || typeof AgentActivity === 'undefined') {
+    console.warn('keep card: the kernel has no KeepMade (an older fork), so it is not shown');
+    return () => {};
+  }
+  const on = window.__vibeosKeepCard === true || (KEEP_CARD_ON && window.__vibeosKeepCard !== false);
+  const store = askStorage();
+  if (!store) return () => {};
+  openKeptApp(store);
+  if (!on || store.getItem(KEEP_KEY) !== null || keepStandalone()) return () => {};
+  const t = { ...KEEP_TIMING, ...(window.__vibeosKeepTiming || {}) };
+  let card = null, ended = false, holding = false;
+  // Never during the boot: the machine has answered one way or the other.
+  const booted = () => VM.state === 'ready' || VM.state === 'unavailable' || VM.state === 'failed';
+  const due = () => {
+    // From the moment show() starts until the card is closed, the slot is
+    // the keep card's.
+    if (holding) return true;
+    if (ended || card || document.readyState !== 'complete') return false;
+    if (!booted() || Chat.running || Chat.starting) return false;
+    if (Date.now() - AgentActivity.lastAt < t.quietMs) return false;
+    return !!KeepMade.get();
+  };
+  const consider = () => {
+    if (ended || card) return;
+    if (document.readyState !== 'complete') return;
+    if (!HexEvents.hosted()) return end();
+    if (!due() || document.querySelector(KEEP_BLOCKERS)) return;
+    show(KeepMade.get());
+  };
+  window.__vibeosKeepDue = due;
+  const poll = setInterval(consider, t.pollMs);
+  function end() {
+    if (ended) return;
+    ended = true;
+    clearInterval(poll);
+  }
+  function show(made) {
+    holding = true;
+    try { store.setItem(KEEP_KEY, made.made + ' ' + new Date().toISOString()); } catch { holding = false; return end(); }
+    end();
+    if (made.made === 'app') {
+      try { store.setItem(KEEP_APP_KEY, made.file); } catch {}
+    }
+    const install = keepInstallKind();
+    card = paintKeep(made.made, install, () => { card = null; holding = false; window.__vibeosKeepDue = null; });
+    track('keep_card_shown', { made: made.made, install });
+  }
+  return () => { end(); window.__vibeosKeepDue = null; if (card) card.remove(); };
+}
+
+function paintKeep(made, install, closed) {
+  const el = document.createElement('div');
+  el.id = 'keepCard';
+  el.className = 'ask-card keep-card';
+  el.setAttribute('role', 'dialog');
+  el.dataset.made = made;
+  el.dataset.install = install;
+  el.style.cssText = 'position:fixed;left:14px;z-index:8000';
+  const head = document.createElement('div');
+  head.className = 'ask-head';
+  const line = document.createElement('p');
+  line.className = 'ask-line keep-title';
+  line.textContent = KEEP_COPY.title;
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'ask-x';
+  x.title = 'Close';
+  x.setAttribute('aria-label', 'Dismiss');
+  x.textContent = '×';
+  head.append(line, x);
+  const body = document.createElement('p');
+  body.className = 'ask-notice keep-body';
+  body.textContent = KEEP_COPY.body;
+  const row = document.createElement('div');
+  row.className = 'ask-form keep-row';
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'btn p keep-go';
+  go.textContent = install === 'prompt' ? KEEP_COPY.install : KEEP_COPY.gotIt;
+  row.append(go);
+  el.append(head, body);
+  if (install !== 'prompt') {
+    const hint = document.createElement('p');
+    hint.className = 'ask-notice keep-hint';
+    hint.textContent = KEEP_COPY[install];
+    el.append(hint);
+  }
+  el.append(row);
+  el.setAttribute('aria-label', line.textContent);
+  document.body.appendChild(el);
+  placeAsk(el);
+  const close = () => { el.remove(); closed(); };
+  x.onclick = () => { track('keep_card_dismissed', {}); close(); };
+  go.onclick = async () => {
+    go.disabled = true;
+    // Asked first, in the press's own gesture: Firefox prompts for it.
+    const asking = navigator.storage && navigator.storage.persist
+      ? navigator.storage.persist().then(v => v === true, () => false) : Promise.resolve(false);
+    let outcome = 'hint';
+    if (install === 'prompt' && KeepInstall.event) {
+      const ev = KeepInstall.event;
+      KeepInstall.event = null;
+      try {
+        await ev.prompt();
+        const choice = await ev.userChoice;
+        outcome = choice && choice.outcome === 'accepted' ? 'accepted' : 'dismissed';
+      } catch (e) { console.warn('keep card: install prompt failed', e); outcome = 'dismissed'; }
+    }
+    track('keep_card_install', { outcome, persisted: await asking });
+    close();
+  };
+  return el;
+}
+
+// The next visit after the card: open the made app once, then forget it.
+// An app that needs shell/tty/ai shows its own waiting state; nothing waits.
+function openKeptApp(store) {
+  const file = store.getItem(KEEP_APP_KEY);
+  if (file === null) return;
+  try { store.removeItem(KEEP_APP_KEY); } catch { return; }
+  const name = file.startsWith('apps/') ? file.slice(5) : '';
+  Promise.resolve().then(() => Apps.list()).then(({ apps }) => {
+    const app = apps.find(a => a.name === name);
+    if (!app) return;
+    const ui = UI.live();
+    (ui.focusOrLaunch || ui.launchApp)(app);
+    track('keep_app_reopened', {});
+  }).catch(e => console.warn('keep card: could not reopen the app', e));
+}
+
 // A calendar link for the thank-you state; empty, so no link (2026-10-03:
 // the operator chose not to share a calendar).
 export const RESEARCH_BOOKING_URL = '';
 const ASK_KEY = 'vibeos-research-ask', AGENT_ASK_KEY = 'vibeos-research-ask-agent', FIRST_SEEN_KEY = 'vibeos-first-seen';
 const ASK_TIMING = { deskMs: 5000, silentMs: 60000, returnGapMs: 3600000, pollMs: 1000, agentMs: 120000, quietMs: 15000, readyMs: 60000 };
-const ASK_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash, #bootCard';
+const ASK_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash, #bootCard, #keepCard';
 const ASK_COPY = {
   returner: "What brought you back to vibeOS? Leave your email and we'll ask you a couple of questions.",
   agent: 'What did you have your agent do here? (one line)',
@@ -739,6 +934,8 @@ function startAsk() {
     if (document.readyState !== 'complete') return;
     if (!HexEvents.hosted()) return end();
     if (document.querySelector(ASK_BLOCKERS)) return;
+    // The keep card goes first when both are due (beads-tavc.58.3).
+    if (window.__vibeosKeepDue && window.__vibeosKeepDue()) return;
     const choice = pick();
     if (choice) return show(choice);
     if (settled()) end();
