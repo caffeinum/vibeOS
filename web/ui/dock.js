@@ -662,14 +662,13 @@ function startTray() {
    splash or card, or the research ask. When both are due the keep card goes
    first; the ask waits until it is closed (window.__vibeosKeepDue).
 
-   Behind KEEP_CARD_ON (off) until the review of the copy (beads-tavc.58.1).
-   window.__vibeosKeepCard = true turns it on for a page (the e2e);
+   On since tavc.58.3 (KEEP_CARD_ON). window.__vibeosKeepCard = false turns it off for a page.
    window.__vibeosKeepTiming overrides KEEP_TIMING.
 
    Tracked, fixed words only, never a title or a file:
    keep_card_shown {made, install}, keep_card_install {outcome, persisted},
    keep_card_dismissed {}, keep_app_reopened {}. Every string is textContent. */
-export const KEEP_CARD_ON = false;
+export const KEEP_CARD_ON = true;
 const KEEP_KEY = 'vibeos-keep-card', KEEP_APP_KEY = 'vibeos-keep-app';
 const KEEP_TIMING = { quietMs: 15000, pollMs: 1000 };
 const KEEP_BLOCKERS = '.key-modal-overlay, #recoveryBar, #forkBar, #bootSplash, #bootCard, #researchAsk';
