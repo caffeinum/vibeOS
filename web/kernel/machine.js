@@ -896,9 +896,11 @@ function overlayWrites(buf, offset, data) {
    pipes, as root, stderr folded into stdout in order), VM.tty (a pty from
    unkernel's spawn, so the Terminal pane works), and the guest's network
    through OUR relay (VM.relay, the same setting v86 dials; never
-   wisp.unkernel.dev). Not yet: the /mnt mirror and Sync (no 9p from this
-   side), snapshots, read_desktop's VGA screen. Those read VM.emu, which
-   stays null here, and fail the way they do with no machine.
+   wisp.unkernel.dev). /mnt is a MemoryFs of the SDK's, mounted over 9p on
+   vsock (beads-tavc.66.3): VM.readFile/writeFile/listFiles/onWrite read and
+   write it host-side, and the guest's own writes come back through its
+   onChange, so Sync, the guest CLI and SystemMirror run as on v86. Not yet:
+   snapshots, read_desktop's VGA screen (they read VM.emu, null here).
 
    The kernel (GPL-2.0) is served as its own file, unmodified, from
    UNKERNEL_ASSETS, with the SDK (MIT) beside it, exactly as the npm
@@ -920,6 +922,8 @@ const Unkernel = {
   arch: '',
   console: '',
   running: new Set(),
+  fs: null,            // the MemoryFs at the guest's /mnt
+  _mntOff: null,
   async available() {
     try { return (await fetch(UNKERNEL_ASSETS + 'web.mjs', { method: 'HEAD' })).ok; }
     catch { return false; }
@@ -953,9 +957,11 @@ const Unkernel = {
       V.screen.tabIndex = 0;
       V.screen.style.cssText = "background:#000;color:var(--titletext);height:100%;overflow:auto;margin:0;padding:6px;font:13px/1.2 'JetBrains Mono',monospace;white-space:pre-wrap;outline:none";
       if (ws) V.net = 'connecting';
+      this.fs = new mod.MemoryFs();
       const kernel = await mod.createKernel({
         distro: UNKERNEL_ASSETS + UNKERNEL.distro,
         memoryMiB: UNKERNEL.memoryMiB,
+        mounts: { '/mnt': this.fs },
         ...(ws ? { net: mod.wispBackend([ws]) } : {}),
       });
       if (seq !== V._bootSeq) { try { kernel.stop(); } catch {} return; }
@@ -976,6 +982,7 @@ const Unkernel = {
       if (probe.exitCode !== 0) throw new Error('uname -m in the guest exited ' + probe.exitCode + ': ' + probe.stderr.trim());
       this.arch = probe.stdout.trim();
       if (ws) await this.waitRoute(V, kernel);
+      V.hookWrites();
       V.ttyState = 'ready';
       V.ttyMs = 0;
       V.bootMs = Date.now() - V.bootStarted;
@@ -1012,6 +1019,8 @@ const Unkernel = {
   stop() {
     const kernel = this.vm;
     this.vm = null;
+    if (this._mntOff) { this._mntOff(); this._mntOff = null; }
+    this.fs = null;
     for (const ac of this.running) { try { ac.abort(); } catch {} }
     this.running.clear();
     if (kernel) { try { kernel.stop(); } catch {} }
@@ -1043,6 +1052,51 @@ const Unkernel = {
   },
   interrupt() {
     for (const ac of this.running) { ac.why = 'interrupt'; ac.abort(); }
+  },
+  // /mnt, host side. Paths are relative to the mount, as v86's 9p takes them.
+  mntPath(path) {
+    const p = '/' + String(path).replace(/^\/+/, '');
+    if (p.split('/').some(seg => seg === '..')) throw new Error('not a /mnt path: ' + path);
+    return p;
+  },
+  readFile(path) {
+    if (!this.fs) throw new Error('the VM is not running');
+    const p = this.mntPath(path);
+    const st = this.fs.stat(p);
+    if (!st || st.type !== 'file') throw new Error('File not found: ' + path);
+    return this.fs.readFile(p);
+  },
+  writeFile(path, bytes) {
+    if (!this.fs) throw new Error('the VM is not running');
+    this.fs.writeFile(this.mntPath(path), bytes);
+  },
+  // The same shape as v86's GetRecursiveList: {parentid, name, type}, where
+  // parentid 0 is the mount root. Dotfiles are left out there too.
+  listFiles() {
+    if (!this.fs) return null;
+    const out = [];
+    let next = 1;
+    const walk = (dir, parentid) => {
+      for (const name of this.fs.list(dir)) {
+        if (/^\./.test(name)) continue;
+        const path = (dir === '/' ? '' : dir) + '/' + name;
+        const st = this.fs.stat(path);
+        if (!st) continue;
+        const type = st.type;   // 'file' | 'dir' | 'symlink', the names inodeType gives
+        out.push({ parentid, name, type });
+        if (type === 'dir') walk(path, next++);
+      }
+    };
+    walk('/', 0);
+    return out;
+  },
+  hookWrites(V) {
+    if (!this.fs || this._mntOff) return;
+    // Only the guest's changes arrive here; the host's own writes do not.
+    this._mntOff = this.fs.onChange(c => {
+      const rootName = p => { const m = /^\/([^/]+)$/.exec(p || ''); return m ? m[1] : null; };
+      V._guestWrote(rootName(c.type === 'rename' ? c.to : c.path));
+    });
   },
   // The same handle VM.tty gives on v86, over a pty of unkernel's own: one
   // holder per port, write/onData/resize/close. The shell is spawned on
@@ -1816,7 +1870,19 @@ const VM = {
   // half (folder -> VM on change) has no browser equivalent: there is no
   // directory-watch API, so that direction still polls.
   // Kept for the boot path to call; the listeners decide what a write means.
+  // A write the guest made under /mnt, by root name (null: not at the root).
+  _guestWrote(name) {
+    if (this.suppress) return;          // don't echo our own folder -> VM pushes
+    if (name) this._written.add(name);
+    // Listeners first and unconditionally: a subscriber that wants to react
+    // to a specific file cannot afford the 800ms debounce meant for syncing.
+    this._writeListeners.forEach(f => { try { f(); } catch {} });
+    clearTimeout(this._flush);
+    this._flush = setTimeout(() => this._writeSettled.forEach(f => { try { f(); } catch {} }), 800);
+  },
+
   hookWrites() {
+    if (Unkernel.on) return Unkernel.hookWrites(this);
     const fs = this.emu && this.emu.fs9p;
     if (!fs || fs.__hooked) return;
     fs.__hooked = true;
@@ -1824,15 +1890,7 @@ const VM = {
     // guest setattr do), so which files this machine has written is kept
     // here, by name, for staleSinceRestore. /mnt is flat: root is inode 0.
     const nameOf = id => { for (const [n, i] of fs.inodes[0].direntries) if (i === id && n !== '.' && n !== '..') return n; return null; };
-    const schedule = (name) => {
-      if (this.suppress) return;          // don't echo our own folder -> VM pushes
-      if (name) this._written.add(name);
-      // Listeners first and unconditionally: a subscriber that wants to react
-      // to a specific file cannot afford the 800ms debounce meant for syncing.
-      this._writeListeners.forEach(f => { try { f(); } catch {} });
-      clearTimeout(this._flush);
-      this._flush = setTimeout(() => this._writeSettled.forEach(f => { try { f(); } catch {} }), 800);
-    };
+    const schedule = name => this._guestWrote(name);
     for (const name of ['Write', 'Unlink', 'ChangeSize']) {
       const orig = fs[name];
       if (typeof orig !== 'function') continue;
@@ -1860,9 +1918,10 @@ const VM = {
   _writeListeners: [],   // fire on every write, undebounced
   _writeSettled: [],     // fire once writes stop, for sync-shaped work
 
-  ready() { return this.state === 'ready' && !!this.emu; },
+  ready() { return this.state === 'ready' && (!!this.emu || (Unkernel.on && !!Unkernel.vm)); },
 
   async readFile(path) {
+    if (Unkernel.on) return Unkernel.readFile(path);
     if (!this.emu) throw new Error('the VM is not running');
     return this.emu.read_file(path);
   },
@@ -1872,6 +1931,11 @@ const VM = {
   // empty and Sync.auto pushed the disk copy over it after a restore. A
   // quiet write (Sync.push, the guest CLI) IS the disk copy and stays out.
   async writeFile(path, bytes) {
+    if (Unkernel.on) {
+      Unkernel.writeFile(path, bytes);
+      if (!this.suppress) this._written.add(path.replace(/^.*\//, ''));
+      return;
+    }
     if (!this.emu) throw new Error('the VM is not running');
     const r = await this.emu.create_file(path, bytes);
     if (!this.suppress) this._written.add(path.replace(/^.*\//, ''));   // by root name, as the write hook keys it
@@ -1894,6 +1958,7 @@ const VM = {
   // readable file — 9p does not follow it), a broken symlink and a FIFO all
   // throw 'File not found' (measured on busybox).
   listFiles() {
+    if (Unkernel.on) return Unkernel.listFiles();
     const fs = this.emu && this.emu.fs9p;
     if (!fs) return null;
     const list = [];
